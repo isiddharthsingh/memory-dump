@@ -37,3 +37,39 @@ class ItemDetail(ItemSummary):
 
 class IngestResponse(BaseModel):
     item: ItemSummary
+
+
+class SearchRequest(BaseModel):
+    q: str
+    limit: int = 10
+
+
+class SearchHit(BaseModel):
+    kind: str  # "item" | "topic_page"
+    id: uuid.UUID
+    title: str | None
+    url: str | None = None
+    slug: str | None = None
+    snippet: str
+    score: float
+
+
+class SearchResponse(BaseModel):
+    hits: list[SearchHit]
+
+
+class AskRequest(BaseModel):
+    question: str
+
+
+class CitationOut(BaseModel):
+    kind: str
+    id: uuid.UUID
+    title: str | None
+    url: str | None = None
+    slug: str | None = None
+
+
+class AskResponse(BaseModel):
+    answer: str
+    citations: list[CitationOut]

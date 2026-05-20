@@ -3,7 +3,7 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 
-from app.api import ingest, items
+from app.api import ask, ingest, items, search
 from app.queue import close_arq_pool
 
 
@@ -28,3 +28,5 @@ async def healthz() -> dict[str, str]:
 
 app.include_router(ingest.router)
 app.include_router(items.router)
+app.include_router(search.router)
+app.include_router(ask.router)
