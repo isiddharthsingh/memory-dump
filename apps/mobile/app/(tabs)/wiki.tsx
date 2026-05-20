@@ -1,0 +1,101 @@
+import { useQuery } from "@tanstack/react-query";
+import { Link, useFocusEffect } from "expo-router";
+import { useCallback } from "react";
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+
+import { EmptyState } from "../../components/EmptyState";
+import { api } from "../../lib/api";
+import { theme } from "../../lib/theme";
+
+export default function WikiScreen() {
+  const pages = useQuery({
+    queryKey: ["wiki"],
+    queryFn: () => api.listWiki(),
+  });
+
+  useFocusEffect(
+    useCallback(() => {
+      pages.refetch();
+    }, [pages]),
+  );
+
+  if (pages.isPending) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator color={theme.accent} />
+      </View>
+    );
+  }
+
+  if (pages.error) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.errText}>Couldn't load wiki.</Text>
+      </View>
+    );
+  }
+
+  if (pages.data && pages.data.length === 0) {
+    return (
+      <EmptyState
+        emoji="📚"
+        title="Wiki is empty"
+        message="As you save items, topic pages appear here. Each page is maintained automatically and links to the source items."
+      />
+    );
+  }
+
+  return (
+    <FlatList
+      data={pages.data ?? []}
+      keyExtractor={(p) => p.id}
+      contentContainerStyle={styles.list}
+      refreshControl={
+        <RefreshControl
+          refreshing={pages.isFetching && !pages.isPending}
+          onRefresh={() => pages.refetch()}
+          tintColor={theme.accent}
+        />
+      }
+      renderItem={({ item }) => (
+        <Link
+          href={{ pathname: "/wiki/[slug]", params: { slug: item.slug } }}
+          asChild
+        >
+          <Pressable style={styles.row}>
+            <Text style={styles.title}>{item.title}</Text>
+            <Text style={styles.slug}>{item.slug}</Text>
+            <Text style={styles.meta}>
+              {item.source_item_ids?.length ?? 0} item(s) · v{item.version}
+            </Text>
+          </Pressable>
+        </Link>
+      )}
+    />
+  );
+}
+
+const styles = StyleSheet.create({
+  list: { padding: 12 },
+  row: {
+    backgroundColor: theme.bgElev,
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+  },
+  title: { color: theme.text, fontSize: 16, fontWeight: "600" },
+  slug: { color: theme.accent, marginTop: 2, fontSize: 12 },
+  meta: { color: theme.textMuted, fontSize: 12, marginTop: 4 },
+  center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  errText: { color: theme.danger },
+});

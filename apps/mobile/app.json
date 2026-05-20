@@ -1,0 +1,53 @@
+{
+  "expo": {
+    "name": "memory-dump",
+    "slug": "memory-dump",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "memorydump",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#0b0b0d"
+    },
+    "ios": {
+      "bundleIdentifier": "com.siddharthsingh.memorydump",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Not used.",
+        "NSPhotoLibraryUsageDescription": "Not used.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.siddharthsingh.memorydump",
+      "intentFilters": [
+        {
+          "action": "SEND",
+          "category": ["DEFAULT"],
+          "data": [
+            { "mimeType": "text/plain" },
+            { "mimeType": "text/*" }
+          ]
+        }
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-share-intent",
+        {
+          "iosActivationRules": {
+            "NSExtensionActivationSupportsWebURLWithMaxCount": 1,
+            "NSExtensionActivationSupportsText": true
+          },
+          "androidIntentFilters": ["text/*"]
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
