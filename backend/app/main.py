@@ -3,6 +3,7 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 
+import app.logging_setup  # noqa: F401  — configures stdlib + structlog
 from app.api import ask, ingest, items, search, wiki
 from app.queue import close_arq_pool
 
