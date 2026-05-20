@@ -1,30 +1,22 @@
 """arq worker entry point.
 
-Phase 1: skeleton only. Concrete tasks land in Phase 2 (ingest pipeline) and
-Phase 5 (wiki synthesis).
+Exposes `WorkerSettings` per the arq convention. Run with:
+
+    arq app.workers.worker.WorkerSettings
 """
 
+from arq.connections import RedisSettings
+
 from app.config import get_settings
+from app.workers.ingest import ingest_item
+from app.workers.synthesize import synthesize_topics
 
-settings = get_settings()
-
-
-async def noop(ctx: dict) -> str:
-    return "ok"
+_settings = get_settings()
 
 
 class WorkerSettings:
-    redis_settings = None  # populated from settings below
-    functions = [noop]
+    redis_settings = RedisSettings.from_dsn(_settings.redis_url)
+    functions = [ingest_item, synthesize_topics]
     keep_result_forever = False
     max_jobs = 4
-
-
-# Late import so we don't pull arq's dependency tree at module import in tests.
-def _redis_settings():
-    from arq.connections import RedisSettings
-
-    return RedisSettings.from_dsn(settings.redis_url)
-
-
-WorkerSettings.redis_settings = _redis_settings()
+    job_timeout = 600  # 10 minutes — yt-dlp + Claude can be slow
