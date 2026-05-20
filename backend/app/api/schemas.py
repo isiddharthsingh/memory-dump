@@ -73,3 +73,19 @@ class CitationOut(BaseModel):
 class AskResponse(BaseModel):
     answer: str
     citations: list[CitationOut]
+
+
+class TopicPageSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    slug: str
+    title: str
+    backlinks: list[str] | None
+    source_item_ids: list[uuid.UUID] | None
+    version: int
+    updated_at: datetime
+
+
+class TopicPageDetail(TopicPageSummary):
+    body_md: str
