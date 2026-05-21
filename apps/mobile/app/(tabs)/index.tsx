@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   Pressable,
   ScrollView,
@@ -13,6 +12,7 @@ import {
 
 import { EmptyState } from "../../components/EmptyState";
 import { ItemCard } from "../../components/ItemCard";
+import { InboxSkeletonList } from "../../components/Skeleton";
 import { api } from "../../lib/api";
 import { theme } from "../../lib/theme";
 
@@ -64,9 +64,7 @@ export default function InboxScreen() {
       )}
 
       {items.isPending ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={theme.accent} />
-        </View>
+        <InboxSkeletonList />
       ) : items.error ? (
         <View style={styles.center}>
           <Text style={styles.errText}>

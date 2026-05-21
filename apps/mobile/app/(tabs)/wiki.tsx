@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   StyleSheet,
   Text,
@@ -11,6 +10,7 @@ import {
 } from "react-native";
 
 import { EmptyState } from "../../components/EmptyState";
+import { WikiSkeletonList } from "../../components/Skeleton";
 import { api } from "../../lib/api";
 import { theme } from "../../lib/theme";
 
@@ -28,11 +28,7 @@ export default function WikiScreen() {
   );
 
   if (pages.isPending) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator color={theme.accent} />
-      </View>
-    );
+    return <WikiSkeletonList />;
   }
 
   if (pages.error) {
