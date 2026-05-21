@@ -3,8 +3,11 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
-import { useState } from "react";
-import { Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useRef, useState } from "react";
+import { Alert, Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import ReanimatedSwipeable, {
+  type SwipeableMethods,
+} from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import { api, type ItemSummary } from "../lib/api";
 import { TOUCH_TARGET, cardShadow, theme } from "../lib/theme";
@@ -88,8 +91,57 @@ export function ItemCard({
   onLongPress?: (item: ItemSummary) => void;
 }) {
   const router = useRouter();
+  const qc = useQueryClient();
   const [expanded, setExpanded] = useState(false);
+  const swipeRef = useRef<SwipeableMethods | null>(null);
+
+  const remove = useMutation({
+    mutationFn: () => api.deleteItem(item.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["items"] });
+      qc.invalidateQueries({ queryKey: ["tags"] });
+    },
+  });
+
+  const confirmDelete = () => {
+    Alert.alert("Delete?", "This removes the item permanently.", [
+      {
+        text: "Cancel",
+        style: "cancel",
+        onPress: () => swipeRef.current?.close(),
+      },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => {
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          remove.mutate();
+        },
+      },
+    ]);
+  };
+
+  const renderRightActions = () => (
+    <Pressable
+      onPress={confirmDelete}
+      style={styles.deleteAction}
+      accessibilityRole="button"
+      accessibilityLabel="Delete item"
+    >
+      <Ionicons name="trash" size={22} color={theme.text} />
+      <Text style={styles.deleteText}>Delete</Text>
+    </Pressable>
+  );
+
   return (
+    <ReanimatedSwipeable
+      ref={swipeRef}
+      renderRightActions={renderRightActions}
+      friction={2}
+      rightThreshold={40}
+      overshootRight={false}
+      containerStyle={styles.swipeContainer}
+    >
     <TouchableOpacity
       activeOpacity={0.7}
       style={styles.card}
@@ -109,7 +161,9 @@ export function ItemCard({
       accessibilityRole="button"
       accessibilityLabel={`Open ${item.title ?? item.url}`}
       accessibilityHint={
-        onLongPress ? "Long-press to add a note" : undefined
+        onLongPress
+          ? "Long-press to add a note. Swipe left to delete."
+          : "Swipe left to delete."
       }
     >
       {item.thumbnail_url ? (
@@ -164,20 +218,38 @@ export function ItemCard({
         </View>
       </View>
     </TouchableOpacity>
+    </ReanimatedSwipeable>
   );
 }
 
 const styles = StyleSheet.create({
+  swipeContainer: {
+    marginBottom: 12,
+    borderRadius: 12,
+  },
   card: {
     flexDirection: "row",
     backgroundColor: theme.bgElev,
     borderRadius: 12,
-    marginBottom: 12,
     overflow: "hidden",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
     minHeight: TOUCH_TARGET * 2,
     ...cardShadow("sm"),
+  },
+  deleteAction: {
+    backgroundColor: theme.danger,
+    justifyContent: "center",
+    alignItems: "center",
+    width: 88,
+    borderTopRightRadius: 12,
+    borderBottomRightRadius: 12,
+    gap: 4,
+  },
+  deleteText: {
+    color: theme.text,
+    fontSize: 12,
+    fontWeight: "700",
   },
   thumb: {
     width: 96,
