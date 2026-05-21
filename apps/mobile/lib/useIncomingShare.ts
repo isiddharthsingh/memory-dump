@@ -20,10 +20,10 @@ export function useIncomingShare(onResult: IncomingShareCallback): void {
   useEffect(() => {
     if (!hasShareIntent || !shareIntent) return;
 
-    const text =
+    const text: string =
       shareIntent.text ??
       shareIntent.webUrl ??
-      (Array.isArray(shareIntent.files) && shareIntent.files[0]?.path) ??
+      (Array.isArray(shareIntent.files) ? shareIntent.files[0]?.path : undefined) ??
       "";
 
     const urlMatch = text.match(URL_RE);
