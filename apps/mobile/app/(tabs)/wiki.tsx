@@ -13,7 +13,7 @@ import {
 import { EmptyState } from "../../components/EmptyState";
 import { WikiSkeletonList } from "../../components/Skeleton";
 import { api } from "../../lib/api";
-import { cardShadow, theme } from "../../lib/theme";
+import { cardShadow, radii, theme } from "../../lib/theme";
 
 export default function WikiScreen() {
   const router = useRouter();
@@ -74,7 +74,7 @@ export default function WikiScreen() {
       }
       renderItem={({ item }) => (
         <TouchableOpacity
-          activeOpacity={0.7}
+          activeOpacity={0.85}
           style={styles.row}
           onPress={() =>
             router.push({ pathname: "/wiki/[slug]", params: { slug: item.slug } })
@@ -96,17 +96,17 @@ export default function WikiScreen() {
 const styles = StyleSheet.create({
   list: { padding: 12 },
   row: {
-    backgroundColor: theme.bgElev,
+    backgroundColor: theme.surface,
     padding: 16,
-    borderRadius: 12,
+    borderRadius: radii.lg,
     marginBottom: 10,
     minHeight: 72,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
     ...cardShadow("sm"),
   },
-  title: { color: theme.text, fontSize: 16, fontWeight: "600" },
-  slug: { color: theme.accent, marginTop: 2, fontSize: 12 },
+  title: { color: theme.text, fontSize: 16, fontWeight: "600", letterSpacing: -0.2 },
+  slug: { color: theme.accent, marginTop: 2, fontSize: 12, fontWeight: "500" },
   meta: { color: theme.textMuted, fontSize: 12, marginTop: 4 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   errText: { color: theme.danger },

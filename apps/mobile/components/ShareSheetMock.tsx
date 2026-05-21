@@ -1,14 +1,14 @@
 import { Ionicons } from "@expo/vector-icons";
 import { StyleSheet, Text, View } from "react-native";
 
-import { theme } from "../lib/theme";
+import { cardShadow, radii, theme } from "../lib/theme";
 
 type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
 
 const APPS: { name: string; icon: IoniconName; color: string; highlight?: boolean }[] = [
-  { name: "Messages", icon: "chatbubble", color: "#34C759" },
-  { name: "Mail", icon: "mail", color: "#0A84FF" },
-  { name: "Notes", icon: "document-text", color: "#FFCC00" },
+  { name: "Messages", icon: "chatbubble", color: theme.textMuted },
+  { name: "Mail", icon: "mail", color: theme.textMuted },
+  { name: "Notes", icon: "document-text", color: theme.textMuted },
   { name: "memory-dump", icon: "sparkles", color: theme.accent, highlight: true },
 ];
 
@@ -54,30 +54,27 @@ export function ShareSheetMock() {
 const styles = StyleSheet.create({
   sheet: {
     width: 280,
-    backgroundColor: theme.bgElev,
-    borderRadius: 18,
-    padding: 14,
+    backgroundColor: theme.surface,
+    borderRadius: radii.xl,
+    padding: 16,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
-    shadowColor: "#000",
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
+    ...cardShadow("md"),
   },
   handle: {
     alignSelf: "center",
     width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: theme.border,
+    backgroundColor: theme.borderStrong,
     marginBottom: 12,
   },
   linkBar: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: theme.bg,
-    borderRadius: 8,
+    backgroundColor: theme.surfaceSunken,
+    borderRadius: radii.sm,
     paddingHorizontal: 10,
     paddingVertical: 8,
     marginBottom: 14,
@@ -88,7 +85,7 @@ const styles = StyleSheet.create({
   appIcon: {
     width: 48,
     height: 48,
-    borderRadius: 12,
+    borderRadius: radii.md,
     alignItems: "center",
     justifyContent: "center",
   },

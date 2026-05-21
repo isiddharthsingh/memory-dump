@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
+import { ColorValue } from "react-native";
 
 import { theme } from "../../lib/theme";
 
@@ -8,9 +9,9 @@ type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
 function makeIcon(
   filled: IoniconName,
   outline: IoniconName,
-): (props: { focused: boolean; color: string; size: number }) => React.ReactNode {
-  const Icon = ({ focused, color, size }: { focused: boolean; color: string; size: number }) => (
-    <Ionicons name={focused ? filled : outline} size={size} color={color} />
+): (props: { focused: boolean; color: ColorValue; size: number }) => React.ReactNode {
+  const Icon = ({ focused, color, size }: { focused: boolean; color: ColorValue; size: number }) => (
+    <Ionicons name={focused ? filled : outline} size={size} color={color as string} />
   );
   return Icon;
 }
@@ -20,14 +21,16 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={{
         tabBarStyle: {
-          backgroundColor: theme.bgElev,
+          backgroundColor: theme.surface,
           borderTopColor: theme.border,
         },
         tabBarActiveTintColor: theme.accent,
         tabBarInactiveTintColor: theme.textMuted,
         tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
-        headerStyle: { backgroundColor: theme.bg },
-        headerTintColor: theme.text,
+        headerStyle: { backgroundColor: theme.surface },
+        headerTitleStyle: { color: theme.text, fontWeight: "700" },
+        headerShadowVisible: false,
+        headerTintColor: theme.accent,
         sceneStyle: { backgroundColor: theme.bg },
       }}
     >

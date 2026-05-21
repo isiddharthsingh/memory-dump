@@ -20,7 +20,7 @@ import {
 } from "react-native";
 
 import { api, type Citation } from "../../lib/api";
-import { TOUCH_TARGET, cardShadow, theme } from "../../lib/theme";
+import { TOUCH_TARGET, cardShadow, radii, theme } from "../../lib/theme";
 
 export default function AskScreen() {
   const headerHeight = useHeaderHeight();
@@ -134,13 +134,13 @@ export default function AskScreen() {
           <Ionicons
             name={listening ? "stop" : "mic"}
             size={20}
-            color={listening ? theme.bg : theme.accent}
+            color={listening ? "#FFFFFF" : theme.accent}
           />
         </Pressable>
         <TextInput
           style={styles.input}
           placeholder="Ask anything…"
-          placeholderTextColor={theme.textMuted}
+          placeholderTextColor={theme.textFaint}
           value={question}
           onChangeText={setQuestion}
           onSubmitEditing={() => submit(question.trim())}
@@ -151,7 +151,7 @@ export default function AskScreen() {
           onPress={() => submit(question.trim())}
           style={({ pressed }) => [
             styles.sendBtn,
-            (streaming || !question.trim()) && { opacity: 0.6 },
+            (streaming || !question.trim()) && { opacity: 0.5 },
             pressed && styles.sendBtnPressed,
           ]}
           disabled={streaming || !question.trim()}
@@ -160,7 +160,7 @@ export default function AskScreen() {
           accessibilityState={{ disabled: streaming || !question.trim() }}
         >
           {streaming ? (
-            <ActivityIndicator color={theme.text} />
+            <ActivityIndicator color="#FFFFFF" />
           ) : (
             <Text style={styles.sendText}>Ask</Text>
           )}
@@ -204,17 +204,22 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.bg },
   scroll: { padding: 16, flexGrow: 1 },
   intro: { flex: 1, justifyContent: "center", gap: 8 },
-  introTitle: { color: theme.text, fontSize: 20, fontWeight: "700" },
-  introText: { color: theme.textMuted, fontSize: 14 },
+  introTitle: {
+    color: theme.text,
+    fontSize: 24,
+    fontWeight: "700",
+    letterSpacing: -0.3,
+  },
+  introText: { color: theme.textMuted, fontSize: 15, lineHeight: 21 },
   answerBox: {
-    backgroundColor: theme.bgElev,
-    borderRadius: 12,
-    padding: 16,
+    backgroundColor: theme.surface,
+    borderRadius: radii.lg,
+    padding: 18,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
     ...cardShadow("sm"),
   },
-  answerText: { color: theme.text, fontSize: 16, lineHeight: 22 },
+  answerText: { color: theme.text, fontSize: 16, lineHeight: 23 },
   caret: { color: theme.accent, fontSize: 16 },
   citations: { marginTop: 16, gap: 6 },
   sectionLabel: {
@@ -229,7 +234,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    paddingVertical: 6,
+    paddingVertical: 8,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.border,
   },
@@ -239,45 +244,50 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     width: 44,
     textTransform: "uppercase",
+    letterSpacing: 0.3,
   },
   citationTitle: { color: theme.text, fontSize: 14, flex: 1 },
   inputBar: {
     flexDirection: "row",
     padding: 12,
     gap: 8,
-    backgroundColor: theme.bgElev,
+    alignItems: "center",
+    backgroundColor: theme.surface,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.border,
   },
   input: {
     flex: 1,
-    backgroundColor: theme.bg,
+    backgroundColor: theme.surfaceSunken,
     color: theme.text,
-    borderRadius: 999,
+    borderRadius: radii.pill,
     paddingHorizontal: 16,
     paddingVertical: 10,
     fontSize: 15,
+    minHeight: TOUCH_TARGET,
   },
   sendBtn: {
     backgroundColor: theme.accent,
-    borderRadius: 999,
+    borderRadius: radii.pill,
     paddingHorizontal: 20,
     justifyContent: "center",
     minWidth: 72,
     minHeight: TOUCH_TARGET,
     alignItems: "center",
+    ...cardShadow("sm"),
   },
   sendBtnPressed: { backgroundColor: theme.accentPressed },
-  sendText: { color: theme.text, fontWeight: "700" },
+  sendText: { color: "#FFFFFF", fontWeight: "700", letterSpacing: -0.2 },
   micBtn: {
     width: TOUCH_TARGET,
     height: TOUCH_TARGET,
-    borderRadius: 999,
+    borderRadius: radii.pill,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
     borderColor: theme.accent,
+    backgroundColor: theme.surface,
   },
-  micBtnActive: { backgroundColor: theme.accent },
+  micBtnActive: { backgroundColor: theme.accent, borderColor: theme.accent },
   micBtnPressed: { opacity: 0.7 },
 });

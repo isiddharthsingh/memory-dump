@@ -9,7 +9,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { queryClient } from "../lib/queryClient";
-import { TOUCH_TARGET, cardShadow, theme } from "../lib/theme";
+import { TOUCH_TARGET, cardShadow, radii, theme } from "../lib/theme";
 import { useIncomingShare } from "../lib/useIncomingShare";
 import { usePushRegistration } from "../lib/usePushRegistration";
 
@@ -114,11 +114,13 @@ function RootLayoutInner() {
       }}
     >
       <ShareHandler>
-        <StatusBar style="light" />
+        <StatusBar style="dark" />
         <Stack
           screenOptions={{
-            headerStyle: { backgroundColor: theme.bg },
-            headerTintColor: theme.text,
+            headerStyle: { backgroundColor: theme.surface },
+            headerTintColor: theme.accent,
+            headerTitleStyle: { color: theme.text, fontWeight: "700" },
+            headerShadowVisible: false,
             contentStyle: { backgroundColor: theme.bg },
           }}
         >
@@ -147,7 +149,7 @@ function RootLayoutInner() {
 
 export default function RootLayout() {
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: theme.bg }}>
       <SafeAreaProvider>
         <QueryClientProvider client={queryClient}>
           <RootLayoutInner />
@@ -163,9 +165,9 @@ const styles = StyleSheet.create({
     bottom: 90,
     left: 16,
     right: 16,
-    backgroundColor: theme.bgElev,
+    backgroundColor: theme.surface,
     borderWidth: 1,
-    borderRadius: 12,
+    borderRadius: radii.lg,
     padding: 14,
     flexDirection: "row",
     alignItems: "center",
@@ -176,6 +178,7 @@ const styles = StyleSheet.create({
     color: theme.text,
     flex: 1,
     marginRight: 12,
+    fontWeight: "500",
   },
   toastDismissBtn: {
     minHeight: TOUCH_TARGET,

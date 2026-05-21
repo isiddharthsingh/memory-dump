@@ -15,7 +15,7 @@ import {
 } from "react-native";
 
 import { api } from "../../lib/api";
-import { TOUCH_TARGET, cardShadow, theme } from "../../lib/theme";
+import { TOUCH_TARGET, cardShadow, radii, theme } from "../../lib/theme";
 
 export default function ItemDetail() {
   const params = useLocalSearchParams<{ id: string }>();
@@ -75,7 +75,10 @@ export default function ItemDetail() {
   const it = item.data;
 
   return (
-    <ScrollView contentContainerStyle={styles.scroll}>
+    <ScrollView
+      contentContainerStyle={styles.scroll}
+      contentInsetAdjustmentBehavior="automatic"
+    >
       {it.thumbnail_url ? (
         <Image
           source={{ uri: it.thumbnail_url }}
@@ -260,31 +263,35 @@ function EntityRow({ label, items }: { label: string; items: string[] | null }) 
 }
 
 function statusColor(status: string) {
-  if (status === "failed") return { borderColor: theme.danger };
-  if (status === "processing") return { borderColor: theme.accent };
-  return { borderColor: theme.textMuted };
+  if (status === "failed") return { borderColor: theme.danger, backgroundColor: theme.dangerSoft };
+  if (status === "processing") return { borderColor: theme.accent, backgroundColor: theme.accentSoft };
+  return { borderColor: theme.border, backgroundColor: theme.surface };
 }
 
 const styles = StyleSheet.create({
-  scroll: { padding: 16 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  scroll: { padding: 16, paddingBottom: 48 },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: theme.bg },
   errText: { color: theme.danger },
   thumb: {
     width: "100%",
     aspectRatio: 16 / 9,
-    borderRadius: 12,
-    marginBottom: 12,
-    backgroundColor: theme.bgElev,
+    borderRadius: radii.lg,
+    marginBottom: 14,
+    backgroundColor: theme.surfaceSunken,
   },
-  title: { color: theme.text, fontSize: 22, fontWeight: "700" },
-  url: { color: theme.accent, marginTop: 4, fontSize: 12 },
+  title: {
+    color: theme.text,
+    fontSize: 24,
+    fontWeight: "700",
+    letterSpacing: -0.5,
+  },
+  url: { color: theme.accent, marginTop: 4, fontSize: 13, fontWeight: "500" },
   banner: {
     borderWidth: 1,
-    borderRadius: 10,
+    borderRadius: radii.md,
     padding: 12,
     marginTop: 16,
     gap: 8,
-    backgroundColor: theme.bgElev,
   },
   bannerText: { color: theme.text, fontWeight: "600" },
   bannerError: { color: theme.danger, fontSize: 12 },
@@ -294,14 +301,14 @@ const styles = StyleSheet.create({
     minHeight: TOUCH_TARGET,
     justifyContent: "center",
     backgroundColor: theme.accent,
-    borderRadius: 10,
+    borderRadius: radii.md,
   },
-  retryText: { color: theme.text, fontWeight: "600", fontSize: 15 },
+  retryText: { color: "#FFFFFF", fontWeight: "600", fontSize: 15 },
   section: {
-    marginTop: 20,
-    padding: 14,
-    backgroundColor: theme.bgElev,
-    borderRadius: 12,
+    marginTop: 18,
+    padding: 16,
+    backgroundColor: theme.surface,
+    borderRadius: radii.lg,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
     ...cardShadow("sm"),
@@ -312,11 +319,11 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     textTransform: "uppercase",
     letterSpacing: 0.5,
-    marginBottom: 6,
+    marginBottom: 8,
   },
-  body: { color: theme.text, fontSize: 15, lineHeight: 21 },
+  body: { color: theme.text, fontSize: 15, lineHeight: 22 },
   entityRow: { flexDirection: "row", flexWrap: "wrap", marginTop: 4 },
-  entityLabel: { color: theme.textMuted, marginRight: 4, fontSize: 13 },
+  entityLabel: { color: theme.textMuted, marginRight: 4, fontSize: 13, fontWeight: "600" },
   entityValues: { color: theme.text, fontSize: 13, flex: 1 },
   raw: {
     color: theme.textMuted,
@@ -329,18 +336,19 @@ const styles = StyleSheet.create({
   openBtn: {
     flex: 1,
     backgroundColor: theme.accent,
-    borderRadius: 10,
+    borderRadius: radii.md,
     paddingVertical: 14,
     minHeight: TOUCH_TARGET,
     alignItems: "center",
     justifyContent: "center",
+    ...cardShadow("sm"),
   },
-  openBtnText: { color: theme.text, fontWeight: "700", fontSize: 16 },
+  openBtnText: { color: "#FFFFFF", fontWeight: "700", fontSize: 16 },
   shareBtn: {
-    backgroundColor: "transparent",
+    backgroundColor: theme.surface,
     borderWidth: 1,
     borderColor: theme.accent,
-    borderRadius: 10,
+    borderRadius: radii.md,
     paddingVertical: 14,
     paddingHorizontal: 16,
     minHeight: TOUCH_TARGET,
@@ -349,10 +357,10 @@ const styles = StyleSheet.create({
   },
   shareBtnText: { color: theme.accent, fontWeight: "700", fontSize: 16 },
   dangerBtn: {
-    backgroundColor: "transparent",
+    backgroundColor: theme.surface,
     borderWidth: 1,
     borderColor: theme.danger,
-    borderRadius: 10,
+    borderRadius: radii.md,
     paddingVertical: 14,
     paddingHorizontal: 16,
     minHeight: TOUCH_TARGET,
@@ -375,6 +383,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     width: 48,
     textTransform: "uppercase",
+    letterSpacing: 0.3,
   },
   refTitle: { color: theme.text, fontSize: 14, flex: 1 },
 });

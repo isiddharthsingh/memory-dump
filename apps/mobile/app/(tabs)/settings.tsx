@@ -11,7 +11,7 @@ import {
 
 import { api } from "../../lib/api";
 import { useConfig } from "../../lib/settings";
-import { TOUCH_TARGET, theme } from "../../lib/theme";
+import { TOUCH_TARGET, cardShadow, radii, theme } from "../../lib/theme";
 
 export default function SettingsScreen() {
   const { config, save } = useConfig();
@@ -45,29 +45,31 @@ export default function SettingsScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.label}>Server URL</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="https://memory.example.com"
-        placeholderTextColor={theme.textMuted}
-        value={serverUrl}
-        onChangeText={setServerUrl}
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="url"
-      />
+      <View style={styles.card}>
+        <Text style={styles.label}>Server URL</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="https://memory.example.com"
+          placeholderTextColor={theme.textFaint}
+          value={serverUrl}
+          onChangeText={setServerUrl}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+        />
 
-      <Text style={styles.label}>API Token</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="Bearer token from MEMORY_DUMP_API_TOKEN"
-        placeholderTextColor={theme.textMuted}
-        value={apiToken}
-        onChangeText={setApiToken}
-        autoCapitalize="none"
-        autoCorrect={false}
-        secureTextEntry
-      />
+        <Text style={[styles.label, { marginTop: 16 }]}>API Token</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Bearer token from MEMORY_DUMP_API_TOKEN"
+          placeholderTextColor={theme.textFaint}
+          value={apiToken}
+          onChangeText={setApiToken}
+          autoCapitalize="none"
+          autoCorrect={false}
+          secureTextEntry
+        />
+      </View>
 
       <View style={styles.btnRow}>
         <Pressable
@@ -85,7 +87,7 @@ export default function SettingsScreen() {
           style={({ pressed }) => [
             styles.secondary,
             checking && { opacity: 0.6 },
-            pressed && { backgroundColor: theme.border },
+            pressed && { backgroundColor: theme.surfaceSunken },
           ]}
           onPress={onTest}
           disabled={checking}
@@ -112,43 +114,51 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   container: { padding: 16, gap: 8 },
+  card: {
+    backgroundColor: theme.surface,
+    borderRadius: radii.lg,
+    padding: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    ...cardShadow("sm"),
+  },
   label: {
     color: theme.textMuted,
     fontSize: 12,
     fontWeight: "700",
     textTransform: "uppercase",
-    marginTop: 12,
-    marginBottom: 4,
+    marginBottom: 6,
     letterSpacing: 0.5,
   },
   input: {
-    backgroundColor: theme.bgElev,
+    backgroundColor: theme.surfaceSunken,
     color: theme.text,
-    borderRadius: 10,
+    borderRadius: radii.md,
     paddingHorizontal: 14,
-    paddingVertical: 14,
-    fontSize: 17,
+    paddingVertical: 12,
+    fontSize: 16,
     minHeight: TOUCH_TARGET,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
   },
-  btnRow: { flexDirection: "row", gap: 8, marginTop: 20 },
+  btnRow: { flexDirection: "row", gap: 10, marginTop: 16 },
   primary: {
     flex: 1,
     backgroundColor: theme.accent,
-    borderRadius: 10,
+    borderRadius: radii.md,
     paddingVertical: 14,
     minHeight: TOUCH_TARGET,
     alignItems: "center",
     justifyContent: "center",
+    ...cardShadow("sm"),
   },
-  primaryText: { color: theme.text, fontWeight: "700", fontSize: 17 },
+  primaryText: { color: "#FFFFFF", fontWeight: "700", fontSize: 17 },
   secondary: {
     flex: 1,
-    backgroundColor: theme.bgElev,
+    backgroundColor: theme.surface,
     borderWidth: 1,
-    borderColor: theme.border,
-    borderRadius: 10,
+    borderColor: theme.borderStrong,
+    borderRadius: radii.md,
     paddingVertical: 14,
     minHeight: TOUCH_TARGET,
     alignItems: "center",
@@ -156,13 +166,21 @@ const styles = StyleSheet.create({
   },
   secondaryText: { color: theme.text, fontWeight: "600", fontSize: 17 },
   about: {
-    marginTop: 32,
-    padding: 14,
-    backgroundColor: theme.bgElev,
-    borderRadius: 12,
+    marginTop: 24,
+    padding: 16,
+    backgroundColor: theme.surface,
+    borderRadius: radii.lg,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
+    ...cardShadow("sm"),
   },
-  aboutTitle: { color: theme.textMuted, fontWeight: "700", marginBottom: 4 },
-  aboutText: { color: theme.text, fontSize: 13, lineHeight: 18 },
+  aboutTitle: {
+    color: theme.textMuted,
+    fontWeight: "700",
+    marginBottom: 6,
+    fontSize: 12,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  aboutText: { color: theme.text, fontSize: 14, lineHeight: 20 },
 });

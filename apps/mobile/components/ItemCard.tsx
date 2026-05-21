@@ -7,14 +7,14 @@ import { useState } from "react";
 import { Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 import { api, type ItemSummary } from "../lib/api";
-import { TOUCH_TARGET, cardShadow, theme } from "../lib/theme";
+import { TOUCH_TARGET, cardShadow, radii, theme } from "../lib/theme";
 
 type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
 
 const SOURCE_ICON: Record<string, { name: IoniconName; color: string }> = {
-  youtube: { name: "logo-youtube", color: "#FF0033" },
-  twitter: { name: "logo-twitter", color: "#1DA1F2" },
-  instagram: { name: "logo-instagram", color: "#E4405F" },
+  youtube: { name: "logo-youtube", color: theme.text },
+  twitter: { name: "logo-twitter", color: theme.text },
+  instagram: { name: "logo-instagram", color: theme.text },
   web: { name: "link", color: theme.textMuted },
 };
 
@@ -45,6 +45,12 @@ function StatusPill({ status, itemId }: { status: string; itemId: string }) {
       : status === "processing"
         ? theme.accent
         : theme.textMuted;
+  const bg =
+    status === "failed"
+      ? theme.dangerSoft
+      : status === "processing"
+        ? theme.accentSoft
+        : theme.surfaceSunken;
 
   if (status === "failed") {
     return (
@@ -56,7 +62,7 @@ function StatusPill({ status, itemId }: { status: string; itemId: string }) {
         style={({ pressed }) => [
           styles.pill,
           styles.pillFailed,
-          { borderColor: color },
+          { borderColor: color, backgroundColor: bg },
           pressed && { opacity: 0.6 },
         ]}
         hitSlop={{ top: 14, bottom: 14, left: 10, right: 10 }}
@@ -74,7 +80,7 @@ function StatusPill({ status, itemId }: { status: string; itemId: string }) {
   }
 
   return (
-    <View style={[styles.pill, { borderColor: color }]}>
+    <View style={[styles.pill, { borderColor: color, backgroundColor: bg }]}>
       <Text style={[styles.pillText, { color }]}>{status}</Text>
     </View>
   );
@@ -91,7 +97,7 @@ export function ItemCard({
   const [expanded, setExpanded] = useState(false);
   return (
     <TouchableOpacity
-      activeOpacity={0.7}
+      activeOpacity={0.85}
       style={styles.card}
       onPress={() => {
         void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -170,8 +176,8 @@ export function ItemCard({
 const styles = StyleSheet.create({
   card: {
     flexDirection: "row",
-    backgroundColor: theme.bgElev,
-    borderRadius: 12,
+    backgroundColor: theme.surface,
+    borderRadius: radii.lg,
     marginBottom: 12,
     overflow: "hidden",
     borderWidth: StyleSheet.hairlineWidth,
@@ -182,7 +188,7 @@ const styles = StyleSheet.create({
   thumb: {
     width: 96,
     aspectRatio: 1,
-    backgroundColor: theme.bg,
+    backgroundColor: theme.surfaceSunken,
   },
   thumbPlaceholder: {
     alignItems: "center",
@@ -206,10 +212,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
     flex: 1,
+    letterSpacing: -0.2,
   },
   summary: {
     color: theme.textMuted,
     fontSize: 13,
+    lineHeight: 18,
   },
   expandHint: {
     color: theme.accent,
@@ -222,22 +230,24 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 6,
     marginTop: 2,
+    alignItems: "center",
   },
   tag: {
     paddingHorizontal: 8,
     paddingVertical: 2,
-    backgroundColor: theme.bg,
-    borderRadius: 6,
+    backgroundColor: theme.surfaceSunken,
+    borderRadius: radii.sm,
   },
   tagText: {
     color: theme.textMuted,
     fontSize: 11,
+    fontWeight: "500",
   },
   pill: {
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderWidth: 1,
-    borderRadius: 6,
+    borderRadius: radii.sm,
   },
   pillFailed: {
     flexDirection: "row",
@@ -246,7 +256,8 @@ const styles = StyleSheet.create({
   },
   pillText: {
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "700",
     textTransform: "uppercase",
+    letterSpacing: 0.3,
   },
 });

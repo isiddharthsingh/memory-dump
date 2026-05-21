@@ -5,11 +5,11 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "scheme": "memorydump",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "icon": "./assets/icon.png",
     "splash": {
-      "backgroundColor": "#0b0b0d"
+      "backgroundColor": "#FFFFFF"
     },
     "ios": {
       "bundleIdentifier": "com.siddharthsingh.memorydump",

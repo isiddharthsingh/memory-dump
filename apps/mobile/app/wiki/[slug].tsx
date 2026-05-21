@@ -12,7 +12,7 @@ import {
 import Markdown from "react-native-markdown-display";
 
 import { api } from "../../lib/api";
-import { theme } from "../../lib/theme";
+import { radii, theme } from "../../lib/theme";
 
 /**
  * The body_md content has two custom token types:
@@ -76,7 +76,10 @@ export default function WikiDetail() {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.scroll}>
+    <ScrollView
+      contentContainerStyle={styles.scroll}
+      contentInsetAdjustmentBehavior="automatic"
+    >
       <Text style={styles.title}>{page.data.title}</Text>
       <Text style={styles.meta}>
         {page.data.slug} · v{page.data.version} ·{" "}
@@ -111,23 +114,25 @@ export default function WikiDetail() {
 const rules = {};
 
 const markdownStyles = {
-  body: { color: theme.text, fontSize: 15, lineHeight: 22 },
-  heading1: { color: theme.text, fontSize: 22, fontWeight: "700", marginTop: 16 },
-  heading2: { color: theme.text, fontSize: 19, fontWeight: "700", marginTop: 14 },
+  body: { color: theme.text, fontSize: 16, lineHeight: 24 },
+  heading1: { color: theme.text, fontSize: 24, fontWeight: "700", marginTop: 16, letterSpacing: -0.4 },
+  heading2: { color: theme.text, fontSize: 20, fontWeight: "700", marginTop: 14, letterSpacing: -0.3 },
   heading3: { color: theme.text, fontSize: 17, fontWeight: "600", marginTop: 12 },
-  link: { color: theme.accent },
+  link: { color: theme.accent, fontWeight: "500" },
   code_inline: {
-    backgroundColor: theme.bgElev,
+    backgroundColor: theme.surfaceSunken,
     color: theme.accent,
-    padding: 2,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
     borderRadius: 4,
     fontFamily: "Menlo",
+    fontSize: 14,
   },
   code_block: {
-    backgroundColor: theme.bgElev,
+    backgroundColor: theme.surfaceSunken,
     color: theme.text,
-    padding: 10,
-    borderRadius: 8,
+    padding: 12,
+    borderRadius: radii.md,
     fontFamily: "Menlo",
     fontSize: 13,
   },
@@ -137,10 +142,10 @@ const markdownStyles = {
 
 const styles = StyleSheet.create({
   scroll: { padding: 16, paddingBottom: 48 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  title: { color: theme.text, fontSize: 24, fontWeight: "700" },
-  meta: { color: theme.textMuted, fontSize: 12, marginTop: 4 },
-  divider: { height: 1, backgroundColor: theme.border, marginVertical: 16 },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: theme.bg },
+  title: { color: theme.text, fontSize: 28, fontWeight: "700", letterSpacing: -0.5 },
+  meta: { color: theme.textMuted, fontSize: 12, marginTop: 6 },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: theme.border, marginVertical: 16 },
   errText: { color: theme.danger },
   backlinks: { marginTop: 24 },
   sectionLabel: {
@@ -153,12 +158,13 @@ const styles = StyleSheet.create({
   },
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: {
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     paddingVertical: 6,
-    backgroundColor: theme.bgElev,
+    backgroundColor: theme.accentSoft,
     color: theme.accent,
-    borderRadius: 8,
+    borderRadius: radii.sm,
     fontSize: 13,
+    fontWeight: "500",
     overflow: "hidden",
   },
 });

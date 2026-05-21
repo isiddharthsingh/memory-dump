@@ -13,7 +13,7 @@ import {
 } from "react-native";
 
 import { api } from "../lib/api";
-import { TOUCH_TARGET, theme } from "../lib/theme";
+import { TOUCH_TARGET, cardShadow, radii, theme } from "../lib/theme";
 
 export function NoteEditor({
   visible,
@@ -65,7 +65,7 @@ export function NoteEditor({
               value={text}
               onChangeText={setText}
               placeholder="Why you saved this, key idea, follow-up…"
-              placeholderTextColor={theme.textMuted}
+              placeholderTextColor={theme.textFaint}
               multiline
               style={styles.input}
               autoFocus
@@ -98,7 +98,7 @@ export function NoteEditor({
                 accessibilityState={{ disabled: save.isPending || !itemId }}
               >
                 {save.isPending ? (
-                  <ActivityIndicator color={theme.text} />
+                  <ActivityIndicator color="#FFFFFF" />
                 ) : (
                   <Text style={styles.btnPrimaryText}>Save & re-embed</Text>
                 )}
@@ -114,36 +114,38 @@ export function NoteEditor({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: "#000a",
+    backgroundColor: theme.scrim,
     justifyContent: "flex-end",
   },
   kavWrap: { justifyContent: "flex-end" },
   sheet: {
-    backgroundColor: theme.bgElev,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    backgroundColor: theme.surface,
+    borderTopLeftRadius: radii.xl,
+    borderTopRightRadius: radii.xl,
     padding: 20,
     gap: 10,
     paddingBottom: 32,
+    ...cardShadow("lg"),
   },
   handle: {
     alignSelf: "center",
     width: 40,
     height: 4,
     borderRadius: 2,
-    backgroundColor: theme.border,
+    backgroundColor: theme.borderStrong,
     marginBottom: 6,
   },
-  title: { color: theme.text, fontSize: 18, fontWeight: "700" },
-  hint: { color: theme.textMuted, fontSize: 12 },
+  title: { color: theme.text, fontSize: 20, fontWeight: "700", letterSpacing: -0.3 },
+  hint: { color: theme.textMuted, fontSize: 13, lineHeight: 18 },
   input: {
-    backgroundColor: theme.bg,
+    backgroundColor: theme.surfaceSunken,
     color: theme.text,
-    borderRadius: 12,
-    padding: 12,
+    borderRadius: radii.md,
+    padding: 14,
     minHeight: 120,
     textAlignVertical: "top",
     fontSize: 15,
+    lineHeight: 21,
   },
   err: { color: theme.danger, fontSize: 12 },
   actions: { flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 6 },
@@ -156,11 +158,12 @@ const styles = StyleSheet.create({
   btnGhostText: { color: theme.textMuted, fontWeight: "600", fontSize: 16 },
   btnPrimary: {
     backgroundColor: theme.accent,
-    borderRadius: 999,
+    borderRadius: radii.pill,
     paddingHorizontal: 20,
     minHeight: TOUCH_TARGET,
     alignItems: "center",
     justifyContent: "center",
+    ...cardShadow("sm"),
   },
-  btnPrimaryText: { color: theme.text, fontWeight: "700", fontSize: 16 },
+  btnPrimaryText: { color: "#FFFFFF", fontWeight: "700", fontSize: 16 },
 });

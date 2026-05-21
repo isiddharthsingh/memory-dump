@@ -1,15 +1,45 @@
 import { Platform, ViewStyle } from "react-native";
 
+/**
+ * Monochrome palette — pure grayscale, no warm tints.
+ * White surfaces, black text, neutral gray borders. Accent is true black.
+ */
 export const theme = {
-  bg: "#0b0b0d",
-  bgElev: "#15151a",
-  border: "#26262d",
-  text: "#f5f5f7",
-  textMuted: "#a0a0a8",
-  accent: "#7c5cff",
-  accentPressed: "#6a4ce6",
-  danger: "#ff5c7c",
-  success: "#39c87a",
+  // Page / scene background.
+  bg: "#FFFFFF",
+  // Elevated surfaces (cards, sheets, headers).
+  surface: "#FFFFFF",
+  // Sunken / inset surfaces (input fills, code blocks, tag chips).
+  surfaceSunken: "#F2F2F4",
+  // Hairline dividers and unselected borders.
+  border: "rgba(0, 0, 0, 0.08)",
+  borderStrong: "rgba(0, 0, 0, 0.18)",
+
+  // Primary text.
+  text: "#000000",
+  // Secondary text.
+  textMuted: "#6B6B70",
+  // Tertiary text.
+  textFaint: "#A1A1A6",
+
+  // Accent (links, primary buttons, focus rings). Pure black for monochrome.
+  accent: "#000000",
+  accentPressed: "#2B2B2E",
+  // Tinted background for selected chips / pills.
+  accentSoft: "rgba(0, 0, 0, 0.06)",
+
+  // Status — kept in grayscale. Danger is darker so it reads as "heavy".
+  danger: "#1C1C1E",
+  dangerSoft: "rgba(0, 0, 0, 0.08)",
+  success: "#000000",
+  warning: "#6B6B70",
+
+  // Tints for legacy glass material tokens — kept so any stray import still works.
+  glassTint: "rgba(255, 255, 255, 0.72)",
+  glassTintStrong: "rgba(255, 255, 255, 0.88)",
+
+  // Backdrop scrim for modals.
+  scrim: "rgba(0, 0, 0, 0.45)",
 } as const;
 
 /** 4px-base spacing grid per ui-mobile skill. */
@@ -20,6 +50,15 @@ export const spacing = {
   lg: 24,
   xl: 32,
   xxl: 48,
+} as const;
+
+/** iOS-standard corner radii. */
+export const radii = {
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 20,
+  pill: 999,
 } as const;
 
 /** Minimum interactive touch target (iOS HIG + Android a11y). */
@@ -36,15 +75,28 @@ export const type = {
   caption: { fontSize: 12, fontWeight: "400" as const },
 } as const;
 
-/** Platform-aware shadow helper. iOS uses shadow*, Android uses elevation. */
-export const cardShadow = (intensity: "sm" | "md" = "sm"): ViewStyle =>
+/**
+ * Platform-aware shadow helper. iOS uses shadow*, Android uses elevation.
+ */
+export const cardShadow = (intensity: "sm" | "md" | "lg" = "sm"): ViewStyle =>
   Platform.select<ViewStyle>({
     ios: {
-      shadowColor: "#000",
-      shadowOffset: { width: 0, height: intensity === "md" ? 4 : 2 },
-      shadowOpacity: intensity === "md" ? 0.18 : 0.1,
-      shadowRadius: intensity === "md" ? 12 : 6,
+      shadowColor: "#000000",
+      shadowOffset: {
+        width: 0,
+        height: intensity === "lg" ? 12 : intensity === "md" ? 6 : 2,
+      },
+      shadowOpacity: intensity === "lg" ? 0.10 : intensity === "md" ? 0.08 : 0.04,
+      shadowRadius: intensity === "lg" ? 24 : intensity === "md" ? 14 : 6,
     },
-    android: { elevation: intensity === "md" ? 6 : 2 },
+    android: {
+      elevation: intensity === "lg" ? 10 : intensity === "md" ? 6 : 2,
+    },
     default: {},
   })!;
+
+/** Legacy glass token kept for any unmigrated imports. */
+export const glassBlur = {
+  tint: "systemUltraThinMaterialLight" as const,
+  intensity: 60,
+};
