@@ -1,4 +1,10 @@
+import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import { Link } from "expo-router";
+import {
+  ExpoSpeechRecognitionModule,
+  useSpeechRecognitionEvent,
+} from "expo-speech-recognition";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -20,13 +26,39 @@ export default function AskScreen() {
   const [answer, setAnswer] = useState<string | null>(null);
   const [citations, setCitations] = useState<Citation[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const [listening, setListening] = useState(false);
   const streamRef = useRef<{ abort: () => void } | null>(null);
 
   useEffect(() => {
     return () => {
       streamRef.current?.abort();
+      ExpoSpeechRecognitionModule.stop();
     };
   }, []);
+
+  useSpeechRecognitionEvent("result", (e) => {
+    const t = e.results?.[0]?.transcript;
+    if (t) setQuestion(t);
+  });
+  useSpeechRecognitionEvent("end", () => setListening(false));
+  useSpeechRecognitionEvent("error", () => setListening(false));
+
+  const toggleVoice = async () => {
+    if (listening) {
+      ExpoSpeechRecognitionModule.stop();
+      setListening(false);
+      return;
+    }
+    const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (!perm.granted) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setListening(true);
+    ExpoSpeechRecognitionModule.start({
+      lang: "en-US",
+      interimResults: true,
+      continuous: false,
+    });
+  };
 
   const submit = (q: string) => {
     if (!q || streaming) return;
@@ -84,6 +116,18 @@ export default function AskScreen() {
       </ScrollView>
 
       <View style={styles.inputBar}>
+        <Pressable
+          onPress={toggleVoice}
+          style={[styles.micBtn, listening && styles.micBtnActive]}
+          disabled={streaming}
+          accessibilityLabel={listening ? "Stop listening" : "Start voice input"}
+        >
+          <Ionicons
+            name={listening ? "stop" : "mic"}
+            size={20}
+            color={listening ? theme.bg : theme.accent}
+          />
+        </Pressable>
         <TextInput
           style={styles.input}
           placeholder="Ask anything…"
@@ -206,4 +250,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   sendText: { color: theme.text, fontWeight: "700" },
+  micBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: theme.accent,
+  },
+  micBtnActive: { backgroundColor: theme.accent },
 });
