@@ -33,4 +33,5 @@ class WorkerSettings:
     ]
     keep_result_forever = False
     max_jobs = 4
+    max_tries = 8  # rate-limit backoff: ~60s + 120s + ... up to ~30m cap
     job_timeout = 600  # 10 minutes

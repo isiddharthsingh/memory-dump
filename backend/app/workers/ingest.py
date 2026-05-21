@@ -4,6 +4,7 @@ import logging
 import uuid
 from typing import Any
 
+from arq import Retry
 from sqlalchemy import delete
 
 from app.ai.analyze import analyze
@@ -12,6 +13,31 @@ from app.db.models import Item, ItemChunk
 from app.db.session import get_sessionmaker
 from app.extractors.base import get_extractor
 from app.notifications import send_to_all
+
+# Transient error types from upstream APIs that should be retried with backoff
+# rather than marked failed. Imported lazily so the worker boots without them.
+try:
+    from voyageai.error import RateLimitError as VoyageRateLimit
+    from voyageai.error import ServiceUnavailableError as VoyageUnavailable
+except ImportError:  # pragma: no cover
+    VoyageRateLimit = VoyageUnavailable = ()  # type: ignore[assignment,misc]
+
+try:
+    from anthropic import APIStatusError as AnthropicAPIError
+    from anthropic import RateLimitError as AnthropicRateLimit
+except ImportError:  # pragma: no cover
+    AnthropicRateLimit = AnthropicAPIError = ()  # type: ignore[assignment,misc]
+
+
+def _is_anthropic_overloaded(exc: Exception) -> bool:
+    return isinstance(exc, AnthropicAPIError) and getattr(exc, "status_code", None) in (
+        429,
+        503,
+        529,
+    )
+
+
+TRANSIENT = (VoyageRateLimit, VoyageUnavailable, AnthropicRateLimit)
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +89,26 @@ async def ingest_item(ctx: dict[str, Any], item_id: str) -> str:
         chunks = chunk_text(text_for_embed)
         embeddings = await embed_texts(chunks, input_type="document") if chunks else []
     except Exception as exc:
+        # Transient upstream rate-limits / outages: keep status=pending and
+        # let arq retry with exponential backoff. job_try is 1-indexed.
+        if isinstance(exc, TRANSIENT) or _is_anthropic_overloaded(exc):
+            job_try = ctx.get("job_try", 1)
+            delay = min(60 * 2 ** (job_try - 1), 30 * 60)  # 60s, 120s, ... cap 30m
+            log.warning(
+                "ingest transient error for %s (try %d, retry in %ds): %s",
+                item_id,
+                job_try,
+                delay,
+                exc,
+            )
+            async with Session() as session:
+                item = await session.get(Item, item_uuid)
+                if item is not None:
+                    item.status = "pending"
+                    item.error = f"retrying: {type(exc).__name__}"[:1000]
+                    await session.commit()
+            raise Retry(defer=delay) from exc
+
         log.exception("ingest failed for %s", item_id)
         async with Session() as session:
             item = await session.get(Item, item_uuid)
