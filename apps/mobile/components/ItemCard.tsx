@@ -4,13 +4,29 @@ import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { useRef, useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import {
+  Alert,
+  Dimensions,
+  Pressable,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import ReanimatedSwipeable, {
   type SwipeableMethods,
 } from "react-native-gesture-handler/ReanimatedSwipeable";
+import {
+  runOnJS,
+  type SharedValue,
+  useAnimatedReaction,
+  useSharedValue,
+} from "react-native-reanimated";
 
 import { api, type ItemSummary } from "../lib/api";
 import { TOUCH_TARGET, cardShadow, theme } from "../lib/theme";
+
+const FULL_SWIPE_THRESHOLD = Dimensions.get("window").width * 0.6;
 
 type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
 
@@ -83,6 +99,45 @@ function StatusPill({ status, itemId }: { status: string; itemId: string }) {
   );
 }
 
+/** Renders the swipe action pill, and triggers an immediate delete when the
+ * user keeps swiping past FULL_SWIPE_THRESHOLD (iOS Mail pattern). */
+function DeleteAction({
+  drag,
+  onFullSwipe,
+  onPress,
+}: {
+  drag: SharedValue<number>;
+  onFullSwipe: () => void;
+  onPress: () => void;
+}) {
+  const fired = useSharedValue(false);
+
+  useAnimatedReaction(
+    () => drag.value,
+    (cur) => {
+      if (cur < -FULL_SWIPE_THRESHOLD && !fired.value) {
+        fired.value = true;
+        runOnJS(onFullSwipe)();
+      } else if (cur > -FULL_SWIPE_THRESHOLD * 0.8 && fired.value) {
+        // user pulled back below threshold — re-arm
+        fired.value = false;
+      }
+    },
+  );
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={styles.deleteAction}
+      accessibilityRole="button"
+      accessibilityLabel="Delete item"
+    >
+      <Ionicons name="trash" size={22} color={theme.text} />
+      <Text style={styles.deleteText}>Delete</Text>
+    </Pressable>
+  );
+}
+
 export function ItemCard({
   item,
   onLongPress,
@@ -121,16 +176,21 @@ export function ItemCard({
     ]);
   };
 
-  const renderRightActions = () => (
-    <Pressable
+  const fullSwipeDelete = () => {
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    swipeRef.current?.close();
+    remove.mutate();
+  };
+
+  const renderRightActions = (
+    _progress: SharedValue<number>,
+    drag: SharedValue<number>,
+  ) => (
+    <DeleteAction
+      drag={drag}
+      onFullSwipe={fullSwipeDelete}
       onPress={confirmDelete}
-      style={styles.deleteAction}
-      accessibilityRole="button"
-      accessibilityLabel="Delete item"
-    >
-      <Ionicons name="trash" size={22} color={theme.text} />
-      <Text style={styles.deleteText}>Delete</Text>
-    </Pressable>
+    />
   );
 
   return (
