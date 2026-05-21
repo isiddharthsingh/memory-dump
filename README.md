@@ -38,7 +38,7 @@ cd backend
 docker compose up --build
 ```
 
-Smoke test:
+Migrations run automatically at api startup. Smoke test:
 
 ```bash
 curl http://localhost:8000/healthz                                       # {"status":"ok"}
@@ -58,19 +58,27 @@ curl -X POST http://localhost:8000/ask \
   -d '{"question":"what music video did I save?"}'
 ```
 
-## Mobile — quickstart
+Voyage's free tier caps you at 3 requests/min — add a payment method on
+the Voyage dashboard if you plan to ingest more than a couple of items
+back-to-back. The 200M free tokens still apply.
 
-See [`apps/mobile/README.md`](apps/mobile/README.md). TL;DR:
+## Mobile — quickstart
 
 ```bash
 cd apps/mobile
-npm install
-npx expo prebuild
-npx eas build --profile development --platform ios     # or android
-npx expo start --dev-client
+npm install --legacy-peer-deps   # SDK 54 has a transitive react peer-dep conflict
+npx expo prebuild                # regenerates ios/ + android/ (both gitignored)
+npx expo run:ios                 # local simulator build (needs Xcode + iOS SDK)
+# or:
+npx eas build --profile development --platform ios   # cloud build, gives .ipa
 ```
 
-Set the server URL + bearer token in the in-app Settings tab.
+After the dev build launches, set the **Server URL** and **API Token** in
+the in-app Settings tab. The share-sheet flow only works on a real device
+(or via EAS dev builds); the iOS simulator can't host a Share Extension.
+
+See [`apps/mobile/README.md`](apps/mobile/README.md) for detailed setup,
+Xcode platform requirements, and troubleshooting.
 
 ## API
 
@@ -119,13 +127,21 @@ See [`docs/architecture.md`](docs/architecture.md).
 
 Retrieval is **hybrid**: dense (Voyage `voyage-3-large` over `pgvector`
 HNSW) ∪ BM25 (`tsvector`) → Reciprocal Rank Fusion → Voyage `rerank-2.5`
-→ Claude Opus 4.7 for the answer.
+→ Claude Opus for the answer.
 
-## Roadmap
+## Stack
 
-- [x] Phase 1 — Backend skeleton (FastAPI, Postgres, Alembic, auth)
-- [x] Phase 2 — Extractors (YouTube, web, Twitter, Instagram) + Claude analyze + Voyage embed
-- [x] Phase 3 — Mobile MVP (Inbox + Item detail + Share Sheet + Settings)
-- [x] Phase 4 — `/ask` hybrid RAG endpoint + Ask tab
-- [x] Phase 5 — Wiki synthesis layer + Wiki tab
-- [x] Phase 6 — Polish: retry, tag filter, nightly compaction, structured logs
+- **Backend**: Python 3.12, FastAPI, async SQLAlchemy 2 (`asyncpg`),
+  Postgres 16 + pgvector (HNSW), Redis + arq workers, Alembic. Anthropic
+  SDK (Claude Haiku for analyze, Sonnet for synthesis, Opus for /ask),
+  Voyage AI (`voyage-3-large` embed, `rerank-2.5`). `yt-dlp` +
+  `youtube-transcript-api` for video extraction, `trafilatura` for web.
+- **Mobile**: Expo SDK 54, React 19, React Native 0.81, `expo-router` v6
+  (file-based, typed routes), `expo-share-intent` v5,
+  `expo-secure-store` for the token, `@tanstack/react-query` for
+  data fetching, `zod`-validated API client.
+
+## License
+
+Personal project, no license currently granted. Contact the author for
+reuse.
