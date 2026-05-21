@@ -1,10 +1,11 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
-import type { ItemSummary } from "../lib/api";
+import { api, type ItemSummary } from "../lib/api";
 import { theme } from "../lib/theme";
 
 type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
@@ -26,7 +27,16 @@ function SourceIcon({ source, size }: { source: string; size: number }) {
   return <Ionicons name={def.name} size={size} color={def.color} />;
 }
 
-function StatusPill({ status }: { status: string }) {
+function StatusPill({ status, itemId }: { status: string; itemId: string }) {
+  const qc = useQueryClient();
+  const retry = useMutation({
+    mutationFn: () => api.retryItem(itemId),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["items"] });
+      qc.invalidateQueries({ queryKey: ["item", itemId] });
+    },
+  });
+
   if (status === "ready") return null;
   const color =
     status === "failed"
@@ -34,6 +44,27 @@ function StatusPill({ status }: { status: string }) {
       : status === "processing"
         ? theme.accent
         : theme.textMuted;
+
+  if (status === "failed") {
+    return (
+      <Pressable
+        onPress={(e) => {
+          e.stopPropagation();
+          if (!retry.isPending) retry.mutate();
+        }}
+        style={[styles.pill, styles.pillFailed, { borderColor: color }]}
+        hitSlop={6}
+      >
+        <Text style={[styles.pillText, { color }]}>
+          {retry.isPending ? "retrying" : "failed"}
+        </Text>
+        {!retry.isPending ? (
+          <Ionicons name="refresh" size={12} color={color} />
+        ) : null}
+      </Pressable>
+    );
+  }
+
   return (
     <View style={[styles.pill, { borderColor: color }]}>
       <Text style={[styles.pillText, { color }]}>{status}</Text>
@@ -93,7 +124,7 @@ export function ItemCard({ item }: { item: ItemSummary }) {
           </Pressable>
         ) : null}
         <View style={styles.tagRow}>
-          <StatusPill status={item.status} />
+          <StatusPill status={item.status} itemId={item.id} />
           {(item.tags ?? []).slice(0, 3).map((t) => (
             <View key={t} style={styles.tag}>
               <Text style={styles.tagText}>#{t}</Text>
@@ -174,6 +205,11 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderWidth: 1,
     borderRadius: 6,
+  },
+  pillFailed: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
   },
   pillText: {
     fontSize: 11,
