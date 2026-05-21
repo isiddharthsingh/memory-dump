@@ -93,3 +93,8 @@ class TopicPageSummary(BaseModel):
 
 class TopicPageDetail(TopicPageSummary):
     body_md: str
+
+
+class RelatedResponse(BaseModel):
+    in_wiki: list[TopicPageSummary]
+    related: list[ItemSummary]

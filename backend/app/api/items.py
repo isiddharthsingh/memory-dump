@@ -5,8 +5,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.schemas import ItemDetail, ItemPatch, ItemSummary
-from app.db.models import Item
+from app.api.schemas import (
+    ItemDetail,
+    ItemPatch,
+    ItemSummary,
+    RelatedResponse,
+    TopicPageSummary,
+)
+from app.db.models import Item, ItemChunk, TopicPage
 from app.db.session import get_session
 from app.deps import require_token
 from app.queue import get_arq_pool
@@ -103,6 +109,52 @@ async def retry_item(
     pool = await get_arq_pool()
     await pool.enqueue_job("ingest_item", str(item.id))
     return item
+
+
+@router.get("/{item_id}/related", response_model=RelatedResponse)
+async def related_items(
+    item_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    limit: int = Query(6, ge=1, le=20),
+) -> RelatedResponse:
+    """Wiki pages that cite this item + items closest to it by embedding."""
+    item = await session.get(Item, item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+
+    wiki_stmt = (
+        select(TopicPage)
+        .where(TopicPage.source_item_ids.any(item_id))
+        .order_by(TopicPage.updated_at.desc())
+    )
+    wiki_rows = (await session.execute(wiki_stmt)).scalars().all()
+
+    centroid_subq = (
+        select(func.avg(ItemChunk.embedding))
+        .where(ItemChunk.item_id == item_id)
+        .where(ItemChunk.embedding.is_not(None))
+        .scalar_subquery()
+    )
+    neighbor_stmt = (
+        select(
+            Item,
+            func.min(ItemChunk.embedding.cosine_distance(centroid_subq)).label("d"),
+        )
+        .join(ItemChunk, ItemChunk.item_id == Item.id)
+        .where(Item.id != item_id)
+        .where(Item.status == "ready")
+        .where(ItemChunk.embedding.is_not(None))
+        .group_by(Item.id)
+        .order_by("d")
+        .limit(limit)
+    )
+    rows = (await session.execute(neighbor_stmt)).all()
+    related_items = [row[0] for row in rows if row[1] is not None]
+
+    return RelatedResponse(
+        in_wiki=[TopicPageSummary.model_validate(tp) for tp in wiki_rows],
+        related=[ItemSummary.model_validate(it) for it in related_items],
+    )
 
 
 @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { Link, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import {
   ActivityIndicator,
@@ -31,6 +31,12 @@ export default function ItemDetail() {
       q.state.data && ["pending", "processing"].includes(q.state.data.status)
         ? 2000
         : false,
+  });
+
+  const related = useQuery({
+    queryKey: ["item", id, "related"],
+    queryFn: () => api.related(id!),
+    enabled: !!id && item.data?.status === "ready",
   });
 
   const retry = useMutation({
@@ -118,6 +124,46 @@ export default function ItemDetail() {
           <EntityRow label="handles" items={it.handles} />
           <EntityRow label="brands" items={it.brands_products} />
           <EntityRow label="topics" items={it.topics} />
+        </View>
+      ) : null}
+
+      {related.data && related.data.in_wiki.length > 0 ? (
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>Appears in wiki</Text>
+          {related.data.in_wiki.map((tp) => (
+            <Link
+              key={tp.id}
+              href={{ pathname: "/wiki/[slug]", params: { slug: tp.slug } }}
+              asChild
+            >
+              <Pressable style={styles.refRow}>
+                <Text style={styles.refKind}>wiki</Text>
+                <Text style={styles.refTitle} numberOfLines={2}>
+                  {tp.title}
+                </Text>
+              </Pressable>
+            </Link>
+          ))}
+        </View>
+      ) : null}
+
+      {related.data && related.data.related.length > 0 ? (
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>Related items</Text>
+          {related.data.related.map((r) => (
+            <Link
+              key={r.id}
+              href={{ pathname: "/item/[id]", params: { id: r.id } }}
+              asChild
+            >
+              <Pressable style={styles.refRow}>
+                <Text style={styles.refKind}>{r.source}</Text>
+                <Text style={styles.refTitle} numberOfLines={2}>
+                  {r.title ?? r.url}
+                </Text>
+              </Pressable>
+            </Link>
+          ))}
         </View>
       ) : null}
 
@@ -253,4 +299,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   dangerBtnText: { color: theme.danger, fontWeight: "700" },
+  refRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.border,
+  },
+  refKind: {
+    color: theme.accent,
+    fontSize: 11,
+    fontWeight: "700",
+    width: 48,
+    textTransform: "uppercase",
+  },
+  refTitle: { color: theme.text, fontSize: 14, flex: 1 },
 });

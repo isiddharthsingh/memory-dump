@@ -276,6 +276,19 @@ export const api = {
     return request(`/wiki/${slug}`, { method: "GET" }, TopicPageDetail);
   },
 
+  related(
+    id: string,
+  ): Promise<{ in_wiki: TopicPageSummary[]; related: ItemSummary[] }> {
+    return request(
+      `/items/${id}/related`,
+      { method: "GET" },
+      z.object({
+        in_wiki: z.array(TopicPageSummary),
+        related: z.array(ItemSummary),
+      }),
+    );
+  },
+
   health(): Promise<{ status: string }> {
     return request(`/healthz`, { method: "GET" }, z.object({ status: z.string() }));
   },
