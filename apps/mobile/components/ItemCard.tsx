@@ -16,10 +16,11 @@ import {
 import ReanimatedSwipeable, {
   type SwipeableMethods,
 } from "react-native-gesture-handler/ReanimatedSwipeable";
-import {
+import Animated, {
   runOnJS,
   type SharedValue,
   useAnimatedReaction,
+  useAnimatedStyle,
   useSharedValue,
 } from "react-native-reanimated";
 
@@ -100,8 +101,9 @@ function StatusPill({ status, itemId }: { status: string; itemId: string }) {
   );
 }
 
-/** Renders the swipe action pill, and triggers an immediate delete when the
- * user keeps swiping past FULL_SWIPE_THRESHOLD (iOS Mail pattern). */
+/** Stretches with the swipe to fill the gap behind the card, and triggers
+ * an immediate delete when the user keeps swiping past FULL_SWIPE_THRESHOLD
+ * (iOS Mail pattern). */
 function DeleteAction({
   drag,
   onFullSwipe,
@@ -120,22 +122,34 @@ function DeleteAction({
         fired.value = true;
         runOnJS(onFullSwipe)();
       } else if (cur > -FULL_SWIPE_THRESHOLD * 0.8 && fired.value) {
-        // user pulled back below threshold — re-arm
         fired.value = false;
       }
     },
   );
 
+  // Width = how far the card has been dragged left, with an 88pt minimum so
+  // the pill is always visible. Background brightens past the threshold.
+  const animatedContainer = useAnimatedStyle(() => {
+    const width = Math.max(88, -drag.value);
+    const past = drag.value < -FULL_SWIPE_THRESHOLD;
+    return {
+      width,
+      backgroundColor: past ? "#ff2244" : theme.danger,
+    };
+  });
+
   return (
-    <Pressable
-      onPress={onPress}
-      style={styles.deleteAction}
-      accessibilityRole="button"
-      accessibilityLabel="Delete item"
-    >
-      <Ionicons name="trash" size={22} color={theme.text} />
-      <Text style={styles.deleteText}>Delete</Text>
-    </Pressable>
+    <Animated.View style={[styles.deleteActionWrap, animatedContainer]}>
+      <Pressable
+        onPress={onPress}
+        style={styles.deleteHit}
+        accessibilityRole="button"
+        accessibilityLabel="Delete item"
+      >
+        <Ionicons name="trash" size={22} color={theme.text} />
+        <Text style={styles.deleteText}>Delete</Text>
+      </Pressable>
+    </Animated.View>
   );
 }
 
@@ -156,6 +170,10 @@ export function ItemCard({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["items"] });
       qc.invalidateQueries({ queryKey: ["tags"] });
+    },
+    onError: (err) => {
+      Alert.alert("Delete failed", (err as Error).message);
+      swipeRef.current?.close();
     },
   });
 
@@ -298,13 +316,18 @@ const styles = StyleSheet.create({
     minHeight: TOUCH_TARGET * 2,
     ...cardShadow("sm"),
   },
-  deleteAction: {
-    backgroundColor: theme.danger,
+  deleteActionWrap: {
     justifyContent: "center",
-    alignItems: "center",
-    width: 88,
+    alignItems: "flex-end",
     borderTopRightRadius: 12,
     borderBottomRightRadius: 12,
+    overflow: "hidden",
+  },
+  deleteHit: {
+    width: 88,
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
     gap: 4,
   },
   deleteText: {
