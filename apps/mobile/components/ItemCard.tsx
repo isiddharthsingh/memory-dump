@@ -26,7 +26,8 @@ import {
 import { api, type ItemSummary } from "../lib/api";
 import { TOUCH_TARGET, cardShadow, theme } from "../lib/theme";
 
-const FULL_SWIPE_THRESHOLD = Dimensions.get("window").width * 0.6;
+const SCREEN_W = Dimensions.get("window").width;
+const FULL_SWIPE_THRESHOLD = SCREEN_W * 0.5;
 
 type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
 
@@ -197,9 +198,9 @@ export function ItemCard({
     <ReanimatedSwipeable
       ref={swipeRef}
       renderRightActions={renderRightActions}
-      friction={2}
+      friction={1}
       rightThreshold={40}
-      overshootRight={false}
+      overshootFriction={8}
       containerStyle={styles.swipeContainer}
     >
     <TouchableOpacity
