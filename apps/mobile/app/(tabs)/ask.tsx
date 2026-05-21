@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useHeaderHeight } from "@react-navigation/elements";
 import * as Haptics from "expo-haptics";
 import { Link } from "expo-router";
 import {
@@ -22,6 +23,7 @@ import { api, type Citation } from "../../lib/api";
 import { theme } from "../../lib/theme";
 
 export default function AskScreen() {
+  const headerHeight = useHeaderHeight();
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState<string | null>(null);
   const [citations, setCitations] = useState<Citation[]>([]);
@@ -83,7 +85,8 @@ export default function AskScreen() {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      keyboardVerticalOffset={Platform.OS === "ios" ? headerHeight : 0}
     >
       <ScrollView
         contentContainerStyle={styles.scroll}
