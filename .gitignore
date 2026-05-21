@@ -45,6 +45,10 @@ ios/build/
 android/app/build/
 android/build/
 android/.gradle/
+
+# Expo prebuild output (regenerate with `expo prebuild`)
+apps/mobile/ios/
+apps/mobile/android/
 *.ipa
 *.apk
 *.aab
