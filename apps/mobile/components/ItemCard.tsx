@@ -1,6 +1,6 @@
 import { Image } from "expo-image";
-import { Link } from "expo-router";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useRouter } from "expo-router";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 import type { ItemSummary } from "../lib/api";
 import { theme } from "../lib/theme";
@@ -28,44 +28,50 @@ function StatusPill({ status }: { status: string }) {
 }
 
 export function ItemCard({ item }: { item: ItemSummary }) {
+  const router = useRouter();
   return (
-    <Link href={{ pathname: "/item/[id]", params: { id: item.id } }} asChild>
-      <Pressable style={styles.card}>
-        {item.thumbnail_url ? (
-          <Image
-            source={{ uri: item.thumbnail_url }}
-            style={styles.thumb}
-            contentFit="cover"
-            transition={150}
-          />
-        ) : (
-          <View style={[styles.thumb, styles.thumbPlaceholder]}>
-            <Text style={styles.sourceIcon}>{SOURCE_ICON[item.source] ?? "🔗"}</Text>
-          </View>
-        )}
-        <View style={styles.body}>
-          <View style={styles.titleRow}>
-            <Text style={styles.sourceIcon}>{SOURCE_ICON[item.source] ?? "🔗"}</Text>
-            <Text style={styles.title} numberOfLines={2}>
-              {item.title || item.url}
-            </Text>
-          </View>
-          {item.summary ? (
-            <Text style={styles.summary} numberOfLines={2}>
-              {item.summary}
-            </Text>
-          ) : null}
-          <View style={styles.tagRow}>
-            <StatusPill status={item.status} />
-            {(item.tags ?? []).slice(0, 3).map((t) => (
-              <View key={t} style={styles.tag}>
-                <Text style={styles.tagText}>#{t}</Text>
-              </View>
-            ))}
-          </View>
+    <TouchableOpacity
+      activeOpacity={0.7}
+      style={styles.card}
+      onPress={() => {
+        console.log("[ItemCard] tap", item.id);
+        router.push({ pathname: "/item/[id]", params: { id: item.id } });
+      }}
+    >
+      {item.thumbnail_url ? (
+        <Image
+          source={{ uri: item.thumbnail_url }}
+          style={styles.thumb}
+          contentFit="cover"
+          transition={150}
+        />
+      ) : (
+        <View style={[styles.thumb, styles.thumbPlaceholder]}>
+          <Text style={styles.sourceIcon}>{SOURCE_ICON[item.source] ?? "🔗"}</Text>
         </View>
-      </Pressable>
-    </Link>
+      )}
+      <View style={styles.body}>
+        <View style={styles.titleRow}>
+          <Text style={styles.sourceIcon}>{SOURCE_ICON[item.source] ?? "🔗"}</Text>
+          <Text style={styles.title} numberOfLines={2}>
+            {item.title || item.url}
+          </Text>
+        </View>
+        {item.summary ? (
+          <Text style={styles.summary} numberOfLines={2}>
+            {item.summary}
+          </Text>
+        ) : null}
+        <View style={styles.tagRow}>
+          <StatusPill status={item.status} />
+          {(item.tags ?? []).slice(0, 3).map((t) => (
+            <View key={t} style={styles.tag}>
+              <Text style={styles.tagText}>#{t}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+    </TouchableOpacity>
   );
 }
 
