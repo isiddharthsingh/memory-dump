@@ -135,6 +135,9 @@ async def related_items(
         .where(ItemChunk.embedding.is_not(None))
         .scalar_subquery()
     )
+    # voyage-3-large cosine distance: ~0.0 identical, ~0.35 strongly related,
+    # ~0.6+ basically unrelated. 0.45 is a permissive but meaningful floor.
+    RELATED_MAX_DISTANCE = 0.45
     neighbor_stmt = (
         select(
             Item,
@@ -145,6 +148,7 @@ async def related_items(
         .where(Item.status == "ready")
         .where(ItemChunk.embedding.is_not(None))
         .group_by(Item.id)
+        .having(func.min(ItemChunk.embedding.cosine_distance(centroid_subq)) < RELATED_MAX_DISTANCE)
         .order_by("d")
         .limit(limit)
     )
