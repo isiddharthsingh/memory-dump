@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { useFocusEffect } from "expo-router";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
-  FlatList,
   Pressable,
   ScrollView,
+  SectionList,
   StyleSheet,
   Text,
   View,
@@ -13,8 +13,51 @@ import {
 import { EmptyState } from "../../components/EmptyState";
 import { ItemCard } from "../../components/ItemCard";
 import { InboxSkeletonList } from "../../components/Skeleton";
-import { api } from "../../lib/api";
+import { api, type ItemSummary } from "../../lib/api";
 import { theme } from "../../lib/theme";
+
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+function startOfDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function sectionLabel(created: Date, now: Date): string {
+  const today = startOfDay(now);
+  const dayDiff = Math.floor(
+    (today.getTime() - startOfDay(created).getTime()) / 86_400_000,
+  );
+  if (dayDiff <= 0) return "Today";
+  if (dayDiff === 1) return "Yesterday";
+  if (dayDiff < 7) return "This week";
+  if (
+    created.getFullYear() === now.getFullYear() &&
+    created.getMonth() === now.getMonth()
+  ) {
+    return "This month";
+  }
+  return `${MONTHS[created.getMonth()]} ${created.getFullYear()}`;
+}
+
+function groupByDate(
+  items: ItemSummary[],
+): { title: string; data: ItemSummary[] }[] {
+  const now = new Date();
+  const order: string[] = [];
+  const buckets: Record<string, ItemSummary[]> = {};
+  for (const item of items) {
+    const label = sectionLabel(new Date(item.created_at), now);
+    if (!buckets[label]) {
+      buckets[label] = [];
+      order.push(label);
+    }
+    buckets[label].push(item);
+  }
+  return order.map((title) => ({ title, data: buckets[title]! }));
+}
 
 export default function InboxScreen() {
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
@@ -34,6 +77,8 @@ export default function InboxScreen() {
       items.refetch();
     }, [items]),
   );
+
+  const sections = useMemo(() => groupByDate(items.data ?? []), [items.data]);
 
   return (
     <View style={styles.container}>
@@ -79,10 +124,16 @@ export default function InboxScreen() {
           message="Share a link from any app via the iOS or Android share sheet to save it here."
         />
       ) : (
-        <FlatList
-          data={items.data ?? []}
+        <SectionList
+          sections={sections}
           keyExtractor={(it) => it.id}
           renderItem={({ item }) => <ItemCard item={item} />}
+          renderSectionHeader={({ section }) => (
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionHeaderText}>{section.title}</Text>
+            </View>
+          )}
+          stickySectionHeadersEnabled={false}
           contentContainerStyle={styles.list}
         />
       )}
@@ -129,6 +180,17 @@ const styles = StyleSheet.create({
   },
   chipText: { fontSize: 13, fontWeight: "500" },
   list: { padding: 12 },
+  sectionHeader: {
+    paddingTop: 4,
+    paddingBottom: 6,
+  },
+  sectionHeaderText: {
+    color: theme.textMuted,
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32 },
   errText: { color: theme.danger, fontWeight: "600" },
   errDetail: { color: theme.textMuted, marginTop: 8, textAlign: "center" },
