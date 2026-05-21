@@ -52,20 +52,37 @@ def upgrade() -> None:
     op.create_index(
         "ix_items_brands_products", "items", ["brands_products"], postgresql_using="gin"
     )
+    # Generated FTS column. Postgres marks `array_to_string(text[], text)` as
+    # STABLE, not IMMUTABLE, so it can't appear directly in a generated-column
+    # or index expression. We wrap the whole document build in an IMMUTABLE
+    # SQL function — the function body only depends on its inputs, so the
+    # IMMUTABLE assertion is correct.
     op.execute(
         """
-        CREATE INDEX ix_items_fts ON items USING gin (
-          to_tsvector('english',
-            coalesce(title,'') || ' ' ||
-            coalesce(summary,'') || ' ' ||
-            coalesce(raw_text,'') || ' ' ||
-            array_to_string(coalesce(people, '{}'), ' ') || ' ' ||
-            array_to_string(coalesce(handles, '{}'), ' ') || ' ' ||
-            array_to_string(coalesce(brands_products, '{}'), ' ')
-          )
-        )
+        CREATE OR REPLACE FUNCTION mdmp_item_fts_text(
+            _title text, _summary text, _raw text,
+            _people text[], _handles text[], _brands text[]
+        ) RETURNS text AS $$
+          SELECT coalesce(_title,'') || ' ' ||
+                 coalesce(_summary,'') || ' ' ||
+                 coalesce(_raw,'') || ' ' ||
+                 coalesce(array_to_string(_people,  ' '), '') || ' ' ||
+                 coalesce(array_to_string(_handles, ' '), '') || ' ' ||
+                 coalesce(array_to_string(_brands,  ' '), '')
+        $$ LANGUAGE SQL IMMUTABLE
         """
     )
+    op.execute(
+        """
+        ALTER TABLE items ADD COLUMN fts_doc tsvector
+        GENERATED ALWAYS AS (
+          to_tsvector('english'::regconfig,
+            mdmp_item_fts_text(title, summary, raw_text, people, handles, brands_products)
+          )
+        ) STORED
+        """
+    )
+    op.execute("CREATE INDEX ix_items_fts ON items USING gin (fts_doc)")
 
     op.create_table(
         "item_chunks",
@@ -98,9 +115,14 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.TIMESTAMP(timezone=True), server_default=sa.func.now(), nullable=False),
     )
     op.execute(
-        "CREATE INDEX ix_topic_pages_fts ON topic_pages USING gin "
-        "(to_tsvector('english', title || ' ' || body_md))"
+        """
+        ALTER TABLE topic_pages ADD COLUMN fts_doc tsvector
+        GENERATED ALWAYS AS (
+          to_tsvector('english'::regconfig, title || ' ' || body_md)
+        ) STORED
+        """
     )
+    op.execute("CREATE INDEX ix_topic_pages_fts ON topic_pages USING gin (fts_doc)")
 
     op.create_table(
         "topic_page_chunks",
@@ -129,4 +151,5 @@ def downgrade() -> None:
     op.drop_table("topic_pages")
     op.drop_table("item_chunks")
     op.drop_table("items")
+    op.execute("DROP FUNCTION IF EXISTS mdmp_item_fts_text(text, text, text, text[], text[], text[])")
     op.execute("DROP EXTENSION IF EXISTS vector")

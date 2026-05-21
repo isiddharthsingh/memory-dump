@@ -105,9 +105,14 @@ async def _dense_search(
 async def _lexical_search(
     session: AsyncSession, query: str, limit: int
 ) -> list[Candidate]:
+    # Use the precomputed `fts_doc` generated columns (created in the
+    # initial migration) — same content as item/topic-page fields, indexed
+    # for fast GIN lookup. For per-chunk ranking we still need a runtime
+    # tsvector over the chunk text, but that's a per-row computation, not
+    # an index expression, so STABLE is fine.
     sql = text(
         """
-        WITH q AS (SELECT websearch_to_tsquery('english', :q) AS tsq),
+        WITH q AS (SELECT websearch_to_tsquery('english'::regconfig, :q) AS tsq),
         ic AS (
             SELECT 'item'::text AS kind,
                    ic.id AS chunk_id,
@@ -116,27 +121,17 @@ async def _lexical_search(
                    i.title, i.url,
                    NULL::text AS slug,
                    ts_rank_cd(
-                     to_tsvector('english',
-                       coalesce(i.title,'') || ' ' ||
-                       coalesce(i.summary,'') || ' ' ||
-                       coalesce(ic.text,'') || ' ' ||
-                       array_to_string(coalesce(i.people, '{}'), ' ') || ' ' ||
-                       array_to_string(coalesce(i.handles, '{}'), ' ') || ' ' ||
-                       array_to_string(coalesce(i.brands_products, '{}'), ' ')
-                     ),
+                     i.fts_doc ||
+                     to_tsvector('english'::regconfig, coalesce(ic.text,'')),
                      q.tsq
                    ) AS score
             FROM item_chunks ic
             JOIN items i ON i.id = ic.item_id, q
             WHERE i.status = 'ready'
-              AND to_tsvector('english',
-                    coalesce(i.title,'') || ' ' ||
-                    coalesce(i.summary,'') || ' ' ||
-                    coalesce(ic.text,'') || ' ' ||
-                    array_to_string(coalesce(i.people, '{}'), ' ') || ' ' ||
-                    array_to_string(coalesce(i.handles, '{}'), ' ') || ' ' ||
-                    array_to_string(coalesce(i.brands_products, '{}'), ' ')
-                  ) @@ q.tsq
+              AND (
+                i.fts_doc @@ q.tsq
+                OR to_tsvector('english'::regconfig, coalesce(ic.text,'')) @@ q.tsq
+              )
             ORDER BY score DESC
             LIMIT :lim
         ),
@@ -149,12 +144,14 @@ async def _lexical_search(
                    NULL::text AS url,
                    tp.slug,
                    ts_rank_cd(
-                     to_tsvector('english', tp.title || ' ' || tc.text),
+                     tp.fts_doc ||
+                     to_tsvector('english'::regconfig, coalesce(tc.text,'')),
                      q.tsq
                    ) AS score
             FROM topic_page_chunks tc
             JOIN topic_pages tp ON tp.id = tc.topic_page_id, q
-            WHERE to_tsvector('english', tp.title || ' ' || tc.text) @@ q.tsq
+            WHERE tp.fts_doc @@ q.tsq
+               OR to_tsvector('english'::regconfig, coalesce(tc.text,'')) @@ q.tsq
             ORDER BY score DESC
             LIMIT :lim
         )
