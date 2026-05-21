@@ -3,6 +3,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback } from "react";
 import {
   FlatList,
+  RefreshControl,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -12,7 +13,7 @@ import {
 import { EmptyState } from "../../components/EmptyState";
 import { WikiSkeletonList } from "../../components/Skeleton";
 import { api } from "../../lib/api";
-import { theme } from "../../lib/theme";
+import { cardShadow, theme } from "../../lib/theme";
 
 export default function WikiScreen() {
   const router = useRouter();
@@ -54,6 +55,13 @@ export default function WikiScreen() {
       data={pages.data ?? []}
       keyExtractor={(p) => p.id}
       contentContainerStyle={styles.list}
+      refreshControl={
+        <RefreshControl
+          refreshing={pages.isRefetching}
+          onRefresh={() => pages.refetch()}
+          tintColor={theme.accent}
+        />
+      }
       renderItem={({ item }) => (
         <TouchableOpacity
           activeOpacity={0.7}
@@ -61,6 +69,8 @@ export default function WikiScreen() {
           onPress={() =>
             router.push({ pathname: "/wiki/[slug]", params: { slug: item.slug } })
           }
+          accessibilityRole="button"
+          accessibilityLabel={`Open wiki page ${item.title}`}
         >
           <Text style={styles.title}>{item.title}</Text>
           <Text style={styles.slug}>{item.slug}</Text>
@@ -77,11 +87,13 @@ const styles = StyleSheet.create({
   list: { padding: 12 },
   row: {
     backgroundColor: theme.bgElev,
-    padding: 14,
+    padding: 16,
     borderRadius: 12,
     marginBottom: 10,
+    minHeight: 72,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
+    ...cardShadow("sm"),
   },
   title: { color: theme.text, fontSize: 16, fontWeight: "600" },
   slug: { color: theme.accent, marginTop: 2, fontSize: 12 },

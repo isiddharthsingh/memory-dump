@@ -15,7 +15,7 @@ import {
 } from "react-native";
 
 import { api } from "../../lib/api";
-import { theme } from "../../lib/theme";
+import { TOUCH_TARGET, cardShadow, theme } from "../../lib/theme";
 
 export default function ItemDetail() {
   const params = useLocalSearchParams<{ id: string }>();
@@ -96,8 +96,13 @@ export default function ItemDetail() {
           {it.status === "failed" && (
             <Pressable
               onPress={() => retry.mutate()}
-              style={styles.retryBtn}
+              style={({ pressed }) => [
+                styles.retryBtn,
+                (retry.isPending || pressed) && { opacity: 0.7 },
+              ]}
               disabled={retry.isPending}
+              accessibilityRole="button"
+              accessibilityLabel="Retry ingest"
             >
               <Text style={styles.retryText}>
                 {retry.isPending ? "Retrying…" : "Retry"}
@@ -137,7 +142,12 @@ export default function ItemDetail() {
               href={{ pathname: "/wiki/[slug]", params: { slug: tp.slug } }}
               asChild
             >
-              <Pressable style={styles.refRow}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.refRow,
+                  pressed && { opacity: 0.6 },
+                ]}
+              >
                 <Text style={styles.refKind}>wiki</Text>
                 <Text style={styles.refTitle} numberOfLines={2}>
                   {tp.title}
@@ -157,7 +167,12 @@ export default function ItemDetail() {
               href={{ pathname: "/item/[id]", params: { id: r.id } }}
               asChild
             >
-              <Pressable style={styles.refRow}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.refRow,
+                  pressed && { opacity: 0.6 },
+                ]}
+              >
                 <Text style={styles.refKind}>{r.source}</Text>
                 <Text style={styles.refTitle} numberOfLines={2}>
                   {r.title ?? r.url}
@@ -181,13 +196,21 @@ export default function ItemDetail() {
 
       <View style={styles.actions}>
         <Pressable
-          style={styles.openBtn}
+          style={({ pressed }) => [
+            styles.openBtn,
+            pressed && { backgroundColor: theme.accentPressed },
+          ]}
           onPress={() => Linking.openURL(it.url)}
+          accessibilityRole="link"
+          accessibilityLabel="Open original URL"
         >
           <Text style={styles.openBtnText}>Open original</Text>
         </Pressable>
         <Pressable
-          style={styles.shareBtn}
+          style={({ pressed }) => [
+            styles.shareBtn,
+            pressed && { opacity: 0.6 },
+          ]}
           onPress={() =>
             Share.share({
               url: it.url,
@@ -195,11 +218,16 @@ export default function ItemDetail() {
               title: it.title ?? undefined,
             })
           }
+          accessibilityRole="button"
+          accessibilityLabel="Share item"
         >
           <Text style={styles.shareBtnText}>Share</Text>
         </Pressable>
         <Pressable
-          style={styles.dangerBtn}
+          style={({ pressed }) => [
+            styles.dangerBtn,
+            pressed && { opacity: 0.6 },
+          ]}
           onPress={() =>
             Alert.alert("Delete?", "This removes the item permanently.", [
               { text: "Cancel" },
@@ -211,6 +239,8 @@ export default function ItemDetail() {
             ])
           }
           disabled={remove.isPending}
+          accessibilityRole="button"
+          accessibilityLabel="Delete item"
         >
           <Text style={styles.dangerBtnText}>Delete</Text>
         </Pressable>
@@ -260,12 +290,13 @@ const styles = StyleSheet.create({
   bannerError: { color: theme.danger, fontSize: 12 },
   retryBtn: {
     alignSelf: "flex-start",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 16,
+    minHeight: TOUCH_TARGET,
+    justifyContent: "center",
     backgroundColor: theme.accent,
-    borderRadius: 8,
+    borderRadius: 10,
   },
-  retryText: { color: theme.text, fontWeight: "600" },
+  retryText: { color: theme.text, fontWeight: "600", fontSize: 15 },
   section: {
     marginTop: 20,
     padding: 14,
@@ -273,6 +304,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
+    ...cardShadow("sm"),
   },
   sectionLabel: {
     color: theme.textMuted,
@@ -298,35 +330,42 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.accent,
     borderRadius: 10,
-    paddingVertical: 12,
+    paddingVertical: 14,
+    minHeight: TOUCH_TARGET,
     alignItems: "center",
+    justifyContent: "center",
   },
-  openBtnText: { color: theme.text, fontWeight: "700" },
+  openBtnText: { color: theme.text, fontWeight: "700", fontSize: 16 },
   shareBtn: {
     backgroundColor: "transparent",
     borderWidth: 1,
     borderColor: theme.accent,
     borderRadius: 10,
-    paddingVertical: 12,
+    paddingVertical: 14,
     paddingHorizontal: 16,
+    minHeight: TOUCH_TARGET,
     alignItems: "center",
+    justifyContent: "center",
   },
-  shareBtnText: { color: theme.accent, fontWeight: "700" },
+  shareBtnText: { color: theme.accent, fontWeight: "700", fontSize: 16 },
   dangerBtn: {
     backgroundColor: "transparent",
     borderWidth: 1,
     borderColor: theme.danger,
     borderRadius: 10,
-    paddingVertical: 12,
+    paddingVertical: 14,
     paddingHorizontal: 16,
+    minHeight: TOUCH_TARGET,
     alignItems: "center",
+    justifyContent: "center",
   },
-  dangerBtnText: { color: theme.danger, fontWeight: "700" },
+  dangerBtnText: { color: theme.danger, fontWeight: "700", fontSize: 16 },
   refRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    paddingVertical: 8,
+    paddingVertical: 12,
+    minHeight: TOUCH_TARGET,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.border,
   },

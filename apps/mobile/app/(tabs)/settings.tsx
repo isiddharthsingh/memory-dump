@@ -11,7 +11,7 @@ import {
 
 import { api } from "../../lib/api";
 import { useConfig } from "../../lib/settings";
-import { theme } from "../../lib/theme";
+import { TOUCH_TARGET, theme } from "../../lib/theme";
 
 export default function SettingsScreen() {
   const { config, save } = useConfig();
@@ -70,13 +70,28 @@ export default function SettingsScreen() {
       />
 
       <View style={styles.btnRow}>
-        <Pressable style={styles.primary} onPress={onSave}>
+        <Pressable
+          style={({ pressed }) => [
+            styles.primary,
+            pressed && { backgroundColor: theme.accentPressed },
+          ]}
+          onPress={onSave}
+          accessibilityRole="button"
+          accessibilityLabel="Save settings"
+        >
           <Text style={styles.primaryText}>Save</Text>
         </Pressable>
         <Pressable
-          style={[styles.secondary, checking && { opacity: 0.6 }]}
+          style={({ pressed }) => [
+            styles.secondary,
+            checking && { opacity: 0.6 },
+            pressed && { backgroundColor: theme.border },
+          ]}
           onPress={onTest}
           disabled={checking}
+          accessibilityRole="button"
+          accessibilityLabel="Test server connection"
+          accessibilityState={{ disabled: checking }}
         >
           <Text style={styles.secondaryText}>
             {checking ? "Testing…" : "Test connection"}
@@ -111,8 +126,9 @@ const styles = StyleSheet.create({
     color: theme.text,
     borderRadius: 10,
     paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
+    paddingVertical: 14,
+    fontSize: 17,
+    minHeight: TOUCH_TARGET,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
   },
@@ -121,20 +137,24 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.accent,
     borderRadius: 10,
-    paddingVertical: 12,
+    paddingVertical: 14,
+    minHeight: TOUCH_TARGET,
     alignItems: "center",
+    justifyContent: "center",
   },
-  primaryText: { color: theme.text, fontWeight: "700" },
+  primaryText: { color: theme.text, fontWeight: "700", fontSize: 17 },
   secondary: {
     flex: 1,
     backgroundColor: theme.bgElev,
     borderWidth: 1,
     borderColor: theme.border,
     borderRadius: 10,
-    paddingVertical: 12,
+    paddingVertical: 14,
+    minHeight: TOUCH_TARGET,
     alignItems: "center",
+    justifyContent: "center",
   },
-  secondaryText: { color: theme.text, fontWeight: "600" },
+  secondaryText: { color: theme.text, fontWeight: "600", fontSize: 17 },
   about: {
     marginTop: 32,
     padding: 14,

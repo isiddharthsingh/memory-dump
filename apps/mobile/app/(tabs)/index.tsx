@@ -3,6 +3,7 @@ import { useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import {
   Pressable,
+  RefreshControl,
   ScrollView,
   SectionList,
   StyleSheet,
@@ -16,7 +17,7 @@ import { NoteEditor } from "../../components/NoteEditor";
 import { ShareSheetMock } from "../../components/ShareSheetMock";
 import { InboxSkeletonList } from "../../components/Skeleton";
 import { api, type ItemSummary } from "../../lib/api";
-import { theme } from "../../lib/theme";
+import { TOUCH_TARGET, theme } from "../../lib/theme";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -153,6 +154,16 @@ export default function InboxScreen() {
           )}
           stickySectionHeadersEnabled={false}
           contentContainerStyle={styles.list}
+          refreshControl={
+            <RefreshControl
+              refreshing={items.isRefetching}
+              onRefresh={() => {
+                items.refetch();
+                tags.refetch();
+              }}
+              tintColor={theme.accent}
+            />
+          }
         />
       )}
       <NoteEditor
@@ -179,10 +190,17 @@ function Chip({
   return (
     <Pressable
       onPress={onPress}
-      style={[
+      style={({ pressed }) => [
         styles.chip,
-        { borderColor: active ? theme.accent : theme.border, backgroundColor: active ? theme.accent + "22" : theme.bgElev },
+        {
+          borderColor: active ? theme.accent : theme.border,
+          backgroundColor: active ? theme.accent + "22" : theme.bgElev,
+        },
+        pressed && { opacity: 0.7 },
       ]}
+      accessibilityRole="button"
+      accessibilityLabel={`Filter by ${label}`}
+      accessibilityState={{ selected: !!active }}
     >
       <Text style={[styles.chipText, { color: active ? theme.accent : theme.text }]}>
         {label}
@@ -194,15 +212,16 @@ function Chip({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.bg },
-  chipScroll: { maxHeight: 52, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border },
-  chipRow: { paddingHorizontal: 12, paddingVertical: 8, gap: 8 },
+  chipScroll: { maxHeight: 60, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border },
+  chipRow: { paddingHorizontal: 12, paddingVertical: 8, gap: 8, alignItems: "center" },
   chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 14,
+    minHeight: 36,
+    justifyContent: "center",
     borderRadius: 999,
     borderWidth: 1,
   },
-  chipText: { fontSize: 13, fontWeight: "500" },
+  chipText: { fontSize: 14, fontWeight: "500" },
   list: { padding: 12 },
   sectionHeader: {
     paddingTop: 4,

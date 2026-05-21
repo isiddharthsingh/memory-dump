@@ -7,7 +7,7 @@ import { useState } from "react";
 import { Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 import { api, type ItemSummary } from "../lib/api";
-import { theme } from "../lib/theme";
+import { TOUCH_TARGET, cardShadow, theme } from "../lib/theme";
 
 type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
 
@@ -53,8 +53,15 @@ function StatusPill({ status, itemId }: { status: string; itemId: string }) {
           e.stopPropagation();
           if (!retry.isPending) retry.mutate();
         }}
-        style={[styles.pill, styles.pillFailed, { borderColor: color }]}
-        hitSlop={6}
+        style={({ pressed }) => [
+          styles.pill,
+          styles.pillFailed,
+          { borderColor: color },
+          pressed && { opacity: 0.6 },
+        ]}
+        hitSlop={{ top: 14, bottom: 14, left: 10, right: 10 }}
+        accessibilityRole="button"
+        accessibilityLabel="Retry failed ingest"
       >
         <Text style={[styles.pillText, { color }]}>
           {retry.isPending ? "retrying" : "failed"}
@@ -99,6 +106,11 @@ export function ItemCard({
           : undefined
       }
       delayLongPress={350}
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${item.title ?? item.url}`}
+      accessibilityHint={
+        onLongPress ? "Long-press to add a note" : undefined
+      }
     >
       {item.thumbnail_url ? (
         <Image
@@ -164,6 +176,8 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
+    minHeight: TOUCH_TARGET * 2,
+    ...cardShadow("sm"),
   },
   thumb: {
     width: 96,

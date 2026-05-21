@@ -13,7 +13,7 @@ import {
 } from "react-native";
 
 import { api } from "../lib/api";
-import { theme } from "../lib/theme";
+import { TOUCH_TARGET, theme } from "../lib/theme";
 
 export function NoteEditor({
   visible,
@@ -74,13 +74,28 @@ export function NoteEditor({
               <Text style={styles.err}>{(save.error as Error).message}</Text>
             ) : null}
             <View style={styles.actions}>
-              <Pressable onPress={onClose} style={styles.btnGhost}>
+              <Pressable
+                onPress={onClose}
+                style={({ pressed }) => [
+                  styles.btnGhost,
+                  pressed && { opacity: 0.6 },
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel"
+              >
                 <Text style={styles.btnGhostText}>Cancel</Text>
               </Pressable>
               <Pressable
                 onPress={() => itemId && save.mutate()}
                 disabled={save.isPending || !itemId}
-                style={[styles.btnPrimary, save.isPending && { opacity: 0.6 }]}
+                style={({ pressed }) => [
+                  styles.btnPrimary,
+                  save.isPending && { opacity: 0.6 },
+                  pressed && { backgroundColor: theme.accentPressed },
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel="Save note and re-embed"
+                accessibilityState={{ disabled: save.isPending || !itemId }}
               >
                 {save.isPending ? (
                   <ActivityIndicator color={theme.text} />
@@ -132,13 +147,20 @@ const styles = StyleSheet.create({
   },
   err: { color: theme.danger, fontSize: 12 },
   actions: { flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 6 },
-  btnGhost: { paddingHorizontal: 14, paddingVertical: 10 },
-  btnGhostText: { color: theme.textMuted, fontWeight: "600" },
+  btnGhost: {
+    paddingHorizontal: 16,
+    minHeight: TOUCH_TARGET,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  btnGhostText: { color: theme.textMuted, fontWeight: "600", fontSize: 16 },
   btnPrimary: {
     backgroundColor: theme.accent,
     borderRadius: 999,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
+    paddingHorizontal: 20,
+    minHeight: TOUCH_TARGET,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  btnPrimaryText: { color: theme.text, fontWeight: "700" },
+  btnPrimaryText: { color: theme.text, fontWeight: "700", fontSize: 16 },
 });

@@ -9,7 +9,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { queryClient } from "../lib/queryClient";
-import { theme } from "../lib/theme";
+import { TOUCH_TARGET, cardShadow, theme } from "../lib/theme";
 import { useIncomingShare } from "../lib/useIncomingShare";
 import { usePushRegistration } from "../lib/usePushRegistration";
 
@@ -30,7 +30,13 @@ function ShareToast({
       ]}
     >
       <Text style={styles.toastText}>{message}</Text>
-      <Pressable onPress={onDismiss}>
+      <Pressable
+        onPress={onDismiss}
+        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        style={({ pressed }) => [styles.toastDismissBtn, pressed && { opacity: 0.6 }]}
+        accessibilityRole="button"
+        accessibilityLabel="Dismiss toast"
+      >
         <Text style={styles.toastDismiss}>Dismiss</Text>
       </Pressable>
     </View>
@@ -164,11 +170,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    ...cardShadow("md"),
   },
   toastText: {
     color: theme.text,
     flex: 1,
     marginRight: 12,
+  },
+  toastDismissBtn: {
+    minHeight: TOUCH_TARGET,
+    paddingHorizontal: 8,
+    justifyContent: "center",
   },
   toastDismiss: {
     color: theme.accent,

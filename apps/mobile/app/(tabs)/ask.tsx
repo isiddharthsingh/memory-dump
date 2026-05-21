@@ -20,7 +20,7 @@ import {
 } from "react-native";
 
 import { api, type Citation } from "../../lib/api";
-import { theme } from "../../lib/theme";
+import { TOUCH_TARGET, cardShadow, theme } from "../../lib/theme";
 
 export default function AskScreen() {
   const headerHeight = useHeaderHeight();
@@ -121,9 +121,15 @@ export default function AskScreen() {
       <View style={styles.inputBar}>
         <Pressable
           onPress={toggleVoice}
-          style={[styles.micBtn, listening && styles.micBtnActive]}
+          style={({ pressed }) => [
+            styles.micBtn,
+            listening && styles.micBtnActive,
+            pressed && styles.micBtnPressed,
+          ]}
           disabled={streaming}
+          accessibilityRole="button"
           accessibilityLabel={listening ? "Stop listening" : "Start voice input"}
+          accessibilityState={{ disabled: streaming, selected: listening }}
         >
           <Ionicons
             name={listening ? "stop" : "mic"}
@@ -143,8 +149,15 @@ export default function AskScreen() {
         />
         <Pressable
           onPress={() => submit(question.trim())}
-          style={[styles.sendBtn, streaming && { opacity: 0.6 }]}
+          style={({ pressed }) => [
+            styles.sendBtn,
+            (streaming || !question.trim()) && { opacity: 0.6 },
+            pressed && styles.sendBtnPressed,
+          ]}
           disabled={streaming || !question.trim()}
+          accessibilityRole="button"
+          accessibilityLabel="Send question"
+          accessibilityState={{ disabled: streaming || !question.trim() }}
         >
           {streaming ? (
             <ActivityIndicator color={theme.text} />
@@ -199,6 +212,7 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
+    ...cardShadow("sm"),
   },
   answerText: { color: theme.text, fontSize: 16, lineHeight: 22 },
   caret: { color: theme.accent, fontSize: 16 },
@@ -249,13 +263,15 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 20,
     justifyContent: "center",
-    minWidth: 64,
+    minWidth: 72,
+    minHeight: TOUCH_TARGET,
     alignItems: "center",
   },
+  sendBtnPressed: { backgroundColor: theme.accentPressed },
   sendText: { color: theme.text, fontWeight: "700" },
   micBtn: {
-    width: 40,
-    height: 40,
+    width: TOUCH_TARGET,
+    height: TOUCH_TARGET,
     borderRadius: 999,
     alignItems: "center",
     justifyContent: "center",
@@ -263,4 +279,5 @@ const styles = StyleSheet.create({
     borderColor: theme.accent,
   },
   micBtnActive: { backgroundColor: theme.accent },
+  micBtnPressed: { opacity: 0.7 },
 });
