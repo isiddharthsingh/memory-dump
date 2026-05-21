@@ -11,6 +11,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { queryClient } from "../lib/queryClient";
 import { theme } from "../lib/theme";
 import { useIncomingShare } from "../lib/useIncomingShare";
+import { usePushRegistration } from "../lib/usePushRegistration";
 
 function ShareToast({
   message,
@@ -59,6 +60,7 @@ function ShareHandler({ children }: { children: React.ReactNode }) {
   );
 
   useIncomingShare(onResult);
+  usePushRegistration();
 
   return (
     <>

@@ -4,7 +4,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 
 import app.logging_setup  # noqa: F401  — configures stdlib + structlog
-from app.api import ask, ingest, items, search, wiki
+from app.api import ask, devices, ingest, items, search, wiki
 from app.queue import close_arq_pool
 
 
@@ -32,3 +32,4 @@ app.include_router(items.router)
 app.include_router(search.router)
 app.include_router(ask.router)
 app.include_router(wiki.router)
+app.include_router(devices.router)

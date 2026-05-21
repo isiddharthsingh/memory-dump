@@ -292,4 +292,15 @@ export const api = {
   health(): Promise<{ status: string }> {
     return request(`/healthz`, { method: "GET" }, z.object({ status: z.string() }));
   },
+
+  registerDevice(token: string, platform?: string): Promise<{ id: string }> {
+    return request(
+      `/devices/register`,
+      {
+        method: "POST",
+        body: JSON.stringify({ expo_push_token: token, platform }),
+      },
+      z.object({ id: z.string() }),
+    );
+  },
 };

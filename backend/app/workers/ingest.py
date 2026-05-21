@@ -11,6 +11,7 @@ from app.ai.embed import chunk_text, embed_texts
 from app.db.models import Item, ItemChunk
 from app.db.session import get_sessionmaker
 from app.extractors.base import get_extractor
+from app.notifications import send_to_all
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +70,13 @@ async def ingest_item(ctx: dict[str, Any], item_id: str) -> str:
                 item.status = "failed"
                 item.error = f"{type(exc).__name__}: {exc}"[:1000]
                 await session.commit()
+                await send_to_all(
+                    session,
+                    title="Save failed",
+                    body=(item.title or item.url or "An item")[:120]
+                    + f" — {type(exc).__name__}",
+                    data={"item_id": str(item.id)},
+                )
         return "failed"
 
     async with Session() as session:
