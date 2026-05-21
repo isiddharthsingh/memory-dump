@@ -95,6 +95,19 @@ export default function InboxScreen() {
     }
   }, []);
 
+  // Manual pull-to-refresh state. Kept separate from `items.isRefetching`
+  // because focus-triggered background refetches would otherwise flip the
+  // spinner whenever the user merely tapped the list.
+  const [pulling, setPulling] = useState(false);
+  const onPullRefresh = useCallback(async () => {
+    setPulling(true);
+    try {
+      await Promise.all([items.refetch(), tags.refetch()]);
+    } finally {
+      setPulling(false);
+    }
+  }, [items, tags]);
+
   return (
     <View style={styles.container}>
       {tags.data && tags.data.length > 0 && (
@@ -156,11 +169,8 @@ export default function InboxScreen() {
           contentContainerStyle={styles.list}
           refreshControl={
             <RefreshControl
-              refreshing={items.isRefetching}
-              onRefresh={() => {
-                items.refetch();
-                tags.refetch();
-              }}
+              refreshing={pulling}
+              onRefresh={onPullRefresh}
               tintColor={theme.accent}
             />
           }

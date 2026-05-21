@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import {
   FlatList,
   RefreshControl,
@@ -27,6 +27,16 @@ export default function WikiScreen() {
       pages.refetch();
     }, [pages]),
   );
+
+  const [pulling, setPulling] = useState(false);
+  const onPullRefresh = useCallback(async () => {
+    setPulling(true);
+    try {
+      await pages.refetch();
+    } finally {
+      setPulling(false);
+    }
+  }, [pages]);
 
   if (pages.isPending) {
     return <WikiSkeletonList />;
@@ -57,8 +67,8 @@ export default function WikiScreen() {
       contentContainerStyle={styles.list}
       refreshControl={
         <RefreshControl
-          refreshing={pages.isRefetching}
-          onRefresh={() => pages.refetch()}
+          refreshing={pulling}
+          onRefresh={onPullRefresh}
           tintColor={theme.accent}
         />
       }
