@@ -200,7 +200,7 @@ export function ItemCard({
       renderRightActions={renderRightActions}
       friction={1}
       rightThreshold={40}
-      overshootFriction={8}
+      overshootFriction={1}
       containerStyle={styles.swipeContainer}
     >
     <TouchableOpacity
