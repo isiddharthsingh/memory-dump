@@ -3,32 +3,11 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
-import { useRef, useState } from "react";
-import {
-  Alert,
-  Dimensions,
-  Pressable,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
-import ReanimatedSwipeable, {
-  type SwipeableMethods,
-} from "react-native-gesture-handler/ReanimatedSwipeable";
-import Animated, {
-  runOnJS,
-  type SharedValue,
-  useAnimatedReaction,
-  useAnimatedStyle,
-  useSharedValue,
-} from "react-native-reanimated";
+import { useState } from "react";
+import { Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 import { api, type ItemSummary } from "../lib/api";
 import { TOUCH_TARGET, cardShadow, theme } from "../lib/theme";
-
-const SCREEN_W = Dimensions.get("window").width;
-const FULL_SWIPE_THRESHOLD = SCREEN_W * 0.5;
 
 type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
 
@@ -101,58 +80,6 @@ function StatusPill({ status, itemId }: { status: string; itemId: string }) {
   );
 }
 
-/** Stretches with the swipe to fill the gap behind the card, and triggers
- * an immediate delete when the user keeps swiping past FULL_SWIPE_THRESHOLD
- * (iOS Mail pattern). */
-function DeleteAction({
-  drag,
-  onFullSwipe,
-  onPress,
-}: {
-  drag: SharedValue<number>;
-  onFullSwipe: () => void;
-  onPress: () => void;
-}) {
-  const fired = useSharedValue(false);
-
-  useAnimatedReaction(
-    () => drag.value,
-    (cur) => {
-      if (cur < -FULL_SWIPE_THRESHOLD && !fired.value) {
-        fired.value = true;
-        runOnJS(onFullSwipe)();
-      } else if (cur > -FULL_SWIPE_THRESHOLD * 0.8 && fired.value) {
-        fired.value = false;
-      }
-    },
-  );
-
-  // Width = how far the card has been dragged left, with an 88pt minimum so
-  // the pill is always visible. Background brightens past the threshold.
-  const animatedContainer = useAnimatedStyle(() => {
-    const width = Math.max(88, -drag.value);
-    const past = drag.value < -FULL_SWIPE_THRESHOLD;
-    return {
-      width,
-      backgroundColor: past ? "#ff2244" : theme.danger,
-    };
-  });
-
-  return (
-    <Animated.View style={[styles.deleteActionWrap, animatedContainer]}>
-      <Pressable
-        onPress={onPress}
-        style={styles.deleteHit}
-        accessibilityRole="button"
-        accessibilityLabel="Delete item"
-      >
-        <Ionicons name="trash" size={22} color={theme.text} />
-        <Text style={styles.deleteText}>Delete</Text>
-      </Pressable>
-    </Animated.View>
-  );
-}
-
 export function ItemCard({
   item,
   onLongPress,
@@ -161,66 +88,8 @@ export function ItemCard({
   onLongPress?: (item: ItemSummary) => void;
 }) {
   const router = useRouter();
-  const qc = useQueryClient();
   const [expanded, setExpanded] = useState(false);
-  const swipeRef = useRef<SwipeableMethods | null>(null);
-
-  const remove = useMutation({
-    mutationFn: () => api.deleteItem(item.id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["items"] });
-      qc.invalidateQueries({ queryKey: ["tags"] });
-    },
-    onError: (err) => {
-      Alert.alert("Delete failed", (err as Error).message);
-      swipeRef.current?.close();
-    },
-  });
-
-  const confirmDelete = () => {
-    Alert.alert("Delete?", "This removes the item permanently.", [
-      {
-        text: "Cancel",
-        style: "cancel",
-        onPress: () => swipeRef.current?.close(),
-      },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => {
-          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          remove.mutate();
-        },
-      },
-    ]);
-  };
-
-  const fullSwipeDelete = () => {
-    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-    swipeRef.current?.close();
-    remove.mutate();
-  };
-
-  const renderRightActions = (
-    _progress: SharedValue<number>,
-    drag: SharedValue<number>,
-  ) => (
-    <DeleteAction
-      drag={drag}
-      onFullSwipe={fullSwipeDelete}
-      onPress={confirmDelete}
-    />
-  );
-
   return (
-    <ReanimatedSwipeable
-      ref={swipeRef}
-      renderRightActions={renderRightActions}
-      friction={1}
-      rightThreshold={40}
-      overshootFriction={1}
-      containerStyle={styles.swipeContainer}
-    >
     <TouchableOpacity
       activeOpacity={0.7}
       style={styles.card}
@@ -240,9 +109,7 @@ export function ItemCard({
       accessibilityRole="button"
       accessibilityLabel={`Open ${item.title ?? item.url}`}
       accessibilityHint={
-        onLongPress
-          ? "Long-press to add a note. Swipe left to delete."
-          : "Swipe left to delete."
+        onLongPress ? "Long-press to add a note" : undefined
       }
     >
       {item.thumbnail_url ? (
@@ -297,43 +164,20 @@ export function ItemCard({
         </View>
       </View>
     </TouchableOpacity>
-    </ReanimatedSwipeable>
   );
 }
 
 const styles = StyleSheet.create({
-  swipeContainer: {
-    marginBottom: 12,
-    borderRadius: 12,
-  },
   card: {
     flexDirection: "row",
     backgroundColor: theme.bgElev,
     borderRadius: 12,
+    marginBottom: 12,
     overflow: "hidden",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
     minHeight: TOUCH_TARGET * 2,
     ...cardShadow("sm"),
-  },
-  deleteActionWrap: {
-    justifyContent: "center",
-    alignItems: "flex-end",
-    borderTopRightRadius: 12,
-    borderBottomRightRadius: 12,
-    overflow: "hidden",
-  },
-  deleteHit: {
-    width: 88,
-    height: "100%",
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 4,
-  },
-  deleteText: {
-    color: theme.text,
-    fontSize: 12,
-    fontWeight: "700",
   },
   thumb: {
     width: 96,
