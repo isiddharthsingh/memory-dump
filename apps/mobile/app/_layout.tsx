@@ -68,6 +68,28 @@ function ShareHandler({ children }: { children: React.ReactNode }) {
   );
 }
 
+function BackButton({ fallback = "/" }: { fallback?: "/" | "/wiki" }) {
+  const router = useRouter();
+  return (
+    <Pressable
+      onPress={() => {
+        if (router.canGoBack()) router.back();
+        else router.replace(fallback);
+      }}
+      hitSlop={12}
+      style={({ pressed }) => ({
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        opacity: pressed ? 0.5 : 1,
+      })}
+      accessibilityRole="button"
+      accessibilityLabel="Back"
+    >
+      <Text style={{ color: theme.accent, fontSize: 17 }}>‹ Back</Text>
+    </Pressable>
+  );
+}
+
 function RootLayoutInner() {
   const router = useRouter();
   return (
@@ -87,8 +109,22 @@ function RootLayoutInner() {
           }}
         >
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="item/[id]" options={{ title: "Item" }} />
-          <Stack.Screen name="wiki/[slug]" options={{ title: "Wiki" }} />
+          <Stack.Screen
+            name="item/[id]"
+            options={{
+              title: "Item",
+              headerBackVisible: false,
+              headerLeft: () => <BackButton fallback="/" />,
+            }}
+          />
+          <Stack.Screen
+            name="wiki/[slug]"
+            options={{
+              title: "Wiki",
+              headerBackVisible: false,
+              headerLeft: () => <BackButton fallback="/wiki" />,
+            }}
+          />
         </Stack>
       </ShareHandler>
     </ShareIntentProvider>
