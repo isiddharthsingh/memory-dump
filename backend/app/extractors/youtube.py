@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from urllib.parse import parse_qs, urlparse
 
 from app.extractors.base import ExtractedContent
+
+log = logging.getLogger(__name__)
 
 
 VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -91,8 +94,25 @@ class YouTubeExtractor:
     def _fetch_transcript(video_id: str) -> str | None:
         try:
             from youtube_transcript_api import YouTubeTranscriptApi
-
-            data = YouTubeTranscriptApi.get_transcript(video_id, languages=["en"])
-            return " ".join(seg["text"] for seg in data).strip() or None
-        except Exception:
+        except ImportError:
+            log.warning("youtube_transcript_api not installed")
             return None
+
+        api = YouTubeTranscriptApi()
+        # Try English first, then fall back to whatever language is available.
+        try:
+            fetched = api.fetch(video_id, languages=["en", "en-US", "en-GB"])
+        except Exception as exc:
+            try:
+                listing = api.list(video_id)
+                first = next(iter(listing), None)
+                if first is None:
+                    log.info("no transcripts available for %s: %s", video_id, exc)
+                    return None
+                fetched = first.fetch()
+            except Exception as inner:
+                log.info("transcript fetch failed for %s: %s", video_id, inner)
+                return None
+
+        text = " ".join(seg.text for seg in fetched.snippets).strip()
+        return text or None
