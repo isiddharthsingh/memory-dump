@@ -136,6 +136,14 @@ export const api = {
     return request(`/items/${id}/retry`, { method: "POST" }, ItemDetail);
   },
 
+  updateItem(id: string, patch: { share_text?: string | null }): Promise<ItemDetail> {
+    return request(
+      `/items/${id}`,
+      { method: "PATCH", body: JSON.stringify(patch) },
+      ItemDetail,
+    );
+  },
+
   deleteItem(id: string): Promise<void> {
     return request(`/items/${id}`, { method: "DELETE" }, z.unknown()).then(
       () => undefined,

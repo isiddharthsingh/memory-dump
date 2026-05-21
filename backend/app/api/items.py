@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.schemas import ItemDetail, ItemSummary
+from app.api.schemas import ItemDetail, ItemPatch, ItemSummary
 from app.db.models import Item
 from app.db.session import get_session
 from app.deps import require_token
@@ -62,6 +62,29 @@ async def get_item(
     item = await session.get(Item, item_id)
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    return item
+
+
+@router.patch("/{item_id}", response_model=ItemDetail)
+async def patch_item(
+    item_id: uuid.UUID,
+    body: ItemPatch,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> Item:
+    """Update mutable item fields (currently just `share_text`/note) and
+    re-run the ingest pipeline so the new note is folded into embeddings.
+    """
+    item = await session.get(Item, item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    if body.share_text is not None:
+        item.share_text = body.share_text or None
+    item.status = "processing"
+    item.error = None
+    await session.commit()
+    await session.refresh(item)
+    pool = await get_arq_pool()
+    await pool.enqueue_job("ingest_item", str(item.id))
     return item
 
 

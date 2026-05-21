@@ -35,6 +35,10 @@ class ItemDetail(ItemSummary):
     error: str | None
 
 
+class ItemPatch(BaseModel):
+    share_text: str | None = None
+
+
 class IngestResponse(BaseModel):
     item: ItemSummary
 

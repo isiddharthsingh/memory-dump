@@ -73,7 +73,13 @@ function StatusPill({ status, itemId }: { status: string; itemId: string }) {
   );
 }
 
-export function ItemCard({ item }: { item: ItemSummary }) {
+export function ItemCard({
+  item,
+  onLongPress,
+}: {
+  item: ItemSummary;
+  onLongPress?: (item: ItemSummary) => void;
+}) {
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
   return (
@@ -84,6 +90,15 @@ export function ItemCard({ item }: { item: ItemSummary }) {
         void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         router.push({ pathname: "/item/[id]", params: { id: item.id } });
       }}
+      onLongPress={
+        onLongPress
+          ? () => {
+              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              onLongPress(item);
+            }
+          : undefined
+      }
+      delayLongPress={350}
     >
       {item.thumbnail_url ? (
         <Image

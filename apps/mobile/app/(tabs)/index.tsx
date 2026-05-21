@@ -12,6 +12,7 @@ import {
 
 import { EmptyState } from "../../components/EmptyState";
 import { ItemCard } from "../../components/ItemCard";
+import { NoteEditor } from "../../components/NoteEditor";
 import { ShareSheetMock } from "../../components/ShareSheetMock";
 import { InboxSkeletonList } from "../../components/Skeleton";
 import { api, type ItemSummary } from "../../lib/api";
@@ -81,6 +82,18 @@ export default function InboxScreen() {
 
   const sections = useMemo(() => groupByDate(items.data ?? []), [items.data]);
 
+  const [editing, setEditing] = useState<{ id: string; initial: string } | null>(
+    null,
+  );
+  const openNoteEditor = useCallback(async (it: ItemSummary) => {
+    try {
+      const detail = await api.getItem(it.id);
+      setEditing({ id: it.id, initial: detail.share_text ?? "" });
+    } catch {
+      setEditing({ id: it.id, initial: "" });
+    }
+  }, []);
+
   return (
     <View style={styles.container}>
       {tags.data && tags.data.length > 0 && (
@@ -130,7 +143,9 @@ export default function InboxScreen() {
         <SectionList
           sections={sections}
           keyExtractor={(it) => it.id}
-          renderItem={({ item }) => <ItemCard item={item} />}
+          renderItem={({ item }) => (
+            <ItemCard item={item} onLongPress={openNoteEditor} />
+          )}
           renderSectionHeader={({ section }) => (
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionHeaderText}>{section.title}</Text>
@@ -140,6 +155,12 @@ export default function InboxScreen() {
           contentContainerStyle={styles.list}
         />
       )}
+      <NoteEditor
+        visible={editing !== null}
+        itemId={editing?.id ?? null}
+        initialText={editing?.initial ?? ""}
+        onClose={() => setEditing(null)}
+      />
     </View>
   );
 }
