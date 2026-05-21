@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { useState } from "react";
@@ -79,7 +80,10 @@ export function ItemCard({ item }: { item: ItemSummary }) {
     <TouchableOpacity
       activeOpacity={0.7}
       style={styles.card}
-      onPress={() => router.push({ pathname: "/item/[id]", params: { id: item.id } })}
+      onPress={() => {
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        router.push({ pathname: "/item/[id]", params: { id: item.id } });
+      }}
     >
       {item.thumbnail_url ? (
         <Image

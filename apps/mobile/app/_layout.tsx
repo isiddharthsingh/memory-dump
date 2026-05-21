@@ -1,4 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
+import * as Haptics from "expo-haptics";
 import { Stack, useRouter } from "expo-router";
 import { ShareIntentProvider } from "expo-share-intent";
 import { StatusBar } from "expo-status-bar";
@@ -43,6 +44,11 @@ function ShareHandler({ children }: { children: React.ReactNode }) {
 
   const onResult = useCallback(
     (r: { ok: boolean; message: string }) => {
+      void Haptics.notificationAsync(
+        r.ok
+          ? Haptics.NotificationFeedbackType.Success
+          : Haptics.NotificationFeedbackType.Error,
+      );
       setToast({ message: r.message, tone: r.ok ? "ok" : "err" });
       if (r.ok) {
         router.replace("/");
