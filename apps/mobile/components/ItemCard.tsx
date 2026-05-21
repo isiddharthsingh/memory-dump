@@ -1,7 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useState } from "react";
+import { Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 import type { ItemSummary } from "../lib/api";
 import { theme } from "../lib/theme";
@@ -42,6 +43,7 @@ function StatusPill({ status }: { status: string }) {
 
 export function ItemCard({ item }: { item: ItemSummary }) {
   const router = useRouter();
+  const [expanded, setExpanded] = useState(false);
   return (
     <TouchableOpacity
       activeOpacity={0.7}
@@ -70,9 +72,25 @@ export function ItemCard({ item }: { item: ItemSummary }) {
           </Text>
         </View>
         {item.summary ? (
-          <Text style={styles.summary} numberOfLines={2}>
-            {item.summary}
-          </Text>
+          <Pressable
+            onPress={(e) => {
+              e.stopPropagation();
+              setExpanded((v) => !v);
+            }}
+            hitSlop={4}
+          >
+            <Text
+              style={styles.summary}
+              numberOfLines={expanded ? undefined : 2}
+            >
+              {item.summary}
+            </Text>
+            {item.summary.length > 120 ? (
+              <Text style={styles.expandHint}>
+                {expanded ? "Show less" : "Show more"}
+              </Text>
+            ) : null}
+          </Pressable>
         ) : null}
         <View style={styles.tagRow}>
           <StatusPill status={item.status} />
@@ -128,6 +146,12 @@ const styles = StyleSheet.create({
   summary: {
     color: theme.textMuted,
     fontSize: 13,
+  },
+  expandHint: {
+    color: theme.accent,
+    fontSize: 11,
+    fontWeight: "600",
+    marginTop: 2,
   },
   tagRow: {
     flexDirection: "row",
