@@ -60,3 +60,4 @@ apps/mobile/android/
 data/
 postgres-data/
 redis-data/
+.claude/
