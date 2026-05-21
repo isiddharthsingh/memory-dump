@@ -8,6 +8,7 @@ import {
   Linking,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   View,
@@ -186,6 +187,18 @@ export default function ItemDetail() {
           <Text style={styles.openBtnText}>Open original</Text>
         </Pressable>
         <Pressable
+          style={styles.shareBtn}
+          onPress={() =>
+            Share.share({
+              url: it.url,
+              message: it.title ? `${it.title}\n${it.url}` : it.url,
+              title: it.title ?? undefined,
+            })
+          }
+        >
+          <Text style={styles.shareBtnText}>Share</Text>
+        </Pressable>
+        <Pressable
           style={styles.dangerBtn}
           onPress={() =>
             Alert.alert("Delete?", "This removes the item permanently.", [
@@ -289,6 +302,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   openBtnText: { color: theme.text, fontWeight: "700" },
+  shareBtn: {
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: theme.accent,
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: "center",
+  },
+  shareBtnText: { color: theme.accent, fontWeight: "700" },
   dangerBtn: {
     backgroundColor: "transparent",
     borderWidth: 1,
