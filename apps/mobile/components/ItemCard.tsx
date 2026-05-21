@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
@@ -5,12 +6,24 @@ import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import type { ItemSummary } from "../lib/api";
 import { theme } from "../lib/theme";
 
-const SOURCE_ICON: Record<string, string> = {
-  youtube: "▶️",
-  twitter: "🐦",
-  instagram: "📸",
-  web: "🔗",
+type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
+
+const SOURCE_ICON: Record<string, { name: IoniconName; color: string }> = {
+  youtube: { name: "logo-youtube", color: "#FF0033" },
+  twitter: { name: "logo-twitter", color: "#1DA1F2" },
+  instagram: { name: "logo-instagram", color: "#E4405F" },
+  web: { name: "link", color: theme.textMuted },
 };
+
+const WEB_ICON: { name: IoniconName; color: string } = {
+  name: "link",
+  color: theme.textMuted,
+};
+
+function SourceIcon({ source, size }: { source: string; size: number }) {
+  const def = SOURCE_ICON[source] ?? WEB_ICON;
+  return <Ionicons name={def.name} size={size} color={def.color} />;
+}
 
 function StatusPill({ status }: { status: string }) {
   if (status === "ready") return null;
@@ -44,12 +57,14 @@ export function ItemCard({ item }: { item: ItemSummary }) {
         />
       ) : (
         <View style={[styles.thumb, styles.thumbPlaceholder]}>
-          <Text style={styles.sourceIcon}>{SOURCE_ICON[item.source] ?? "🔗"}</Text>
+          <SourceIcon source={item.source} size={32} />
         </View>
       )}
       <View style={styles.body}>
         <View style={styles.titleRow}>
-          <Text style={styles.sourceIcon}>{SOURCE_ICON[item.source] ?? "🔗"}</Text>
+          <View style={styles.sourceIconWrap}>
+            <SourceIcon source={item.source} size={14} />
+          </View>
           <Text style={styles.title} numberOfLines={2}>
             {item.title || item.url}
           </Text>
@@ -101,9 +116,8 @@ const styles = StyleSheet.create({
     gap: 6,
     alignItems: "flex-start",
   },
-  sourceIcon: {
-    fontSize: 16,
-    marginTop: 1,
+  sourceIconWrap: {
+    marginTop: 2,
   },
   title: {
     color: theme.text,
