@@ -1,5 +1,5 @@
-import { useShareIntent } from "expo-share-intent";
-import { useEffect } from "react";
+import { useShareIntentContext } from "expo-share-intent";
+import { useEffect, useRef } from "react";
 
 import { api, ApiError } from "./api";
 
@@ -15,10 +15,18 @@ export type IncomingShareCallback = (result: {
  * ACTION_SEND intent and POSTs them to /ingest.
  */
 export function useIncomingShare(onResult: IncomingShareCallback): void {
-  const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntent();
+  const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntentContext();
+  const lastProcessedRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!hasShareIntent || !shareIntent) return;
+    if (!hasShareIntent || !shareIntent) {
+      lastProcessedRef.current = null;
+      return;
+    }
+
+    const intentKey = `${shareIntent.webUrl ?? ""}|${shareIntent.text ?? ""}`;
+    if (lastProcessedRef.current === intentKey) return;
+    lastProcessedRef.current = intentKey;
 
     const text: string =
       shareIntent.text ??

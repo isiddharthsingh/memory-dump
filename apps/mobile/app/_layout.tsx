@@ -1,5 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack, useRouter } from "expo-router";
+import { ShareIntentProvider } from "expo-share-intent";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
@@ -66,24 +67,38 @@ function ShareHandler({ children }: { children: React.ReactNode }) {
   );
 }
 
+function RootLayoutInner() {
+  const router = useRouter();
+  return (
+    <ShareIntentProvider
+      options={{
+        resetOnBackground: true,
+        onResetShareIntent: () => router.replace("/"),
+      }}
+    >
+      <ShareHandler>
+        <StatusBar style="light" />
+        <Stack
+          screenOptions={{
+            headerStyle: { backgroundColor: theme.bg },
+            headerTintColor: theme.text,
+            contentStyle: { backgroundColor: theme.bg },
+          }}
+        >
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="item/[id]" options={{ title: "Item" }} />
+          <Stack.Screen name="wiki/[slug]" options={{ title: "Wiki" }} />
+        </Stack>
+      </ShareHandler>
+    </ShareIntentProvider>
+  );
+}
+
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <QueryClientProvider client={queryClient}>
-        <ShareHandler>
-          <StatusBar style="light" />
-          <Stack
-            screenOptions={{
-              headerStyle: { backgroundColor: theme.bg },
-              headerTintColor: theme.text,
-              contentStyle: { backgroundColor: theme.bg },
-            }}
-          >
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="item/[id]" options={{ title: "Item" }} />
-            <Stack.Screen name="wiki/[slug]" options={{ title: "Wiki" }} />
-          </Stack>
-        </ShareHandler>
+        <RootLayoutInner />
       </QueryClientProvider>
     </SafeAreaProvider>
   );
