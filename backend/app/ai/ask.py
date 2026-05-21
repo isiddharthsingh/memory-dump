@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 from anthropic import AsyncAnthropic
@@ -120,6 +121,50 @@ async def _collect_citations(
                 )
             )
     return citations
+
+
+@dataclass
+class StreamToken:
+    text: str
+
+
+@dataclass
+class StreamDone:
+    citations: list[Citation]
+
+
+async def ask_stream(
+    session: AsyncSession, question: str
+) -> AsyncIterator[StreamToken | StreamDone]:
+    """Stream Claude tokens as they arrive, then emit citations at the end."""
+    chunks = await hybrid_search(session, question, final_limit=6)
+    if not chunks:
+        yield StreamToken(text="I don't have anything saved about that.")
+        yield StreamDone(citations=[])
+        return
+
+    settings = get_settings()
+    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+    context = _format_context(chunks)
+    user = f"Context:\n\n{context}\n\nQuestion: {question}\n\nAnswer with citations:"
+
+    pieces: list[str] = []
+    async with client.messages.stream(
+        model=settings.claude_ask_model,
+        max_tokens=1024,
+        system=[
+            {"type": "text", "text": ASK_SYSTEM, "cache_control": {"type": "ephemeral"}}
+        ],
+        messages=[{"role": "user", "content": user}],
+    ) as stream:
+        async for text in stream.text_stream:
+            pieces.append(text)
+            yield StreamToken(text=text)
+
+    answer = "".join(pieces).strip()
+    citations = await _collect_citations(session, answer, chunks)
+    yield StreamDone(citations=citations)
 
 
 async def ask(session: AsyncSession, question: str) -> AskResult:

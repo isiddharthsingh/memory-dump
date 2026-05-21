@@ -1,6 +1,5 @@
-import { useMutation } from "@tanstack/react-query";
 import { Link } from "expo-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -20,18 +19,34 @@ export default function AskScreen() {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState<string | null>(null);
   const [citations, setCitations] = useState<Citation[]>([]);
+  const [streaming, setStreaming] = useState(false);
+  const streamRef = useRef<{ abort: () => void } | null>(null);
 
-  const ask = useMutation({
-    mutationFn: (q: string) => api.ask(q),
-    onSuccess: (data) => {
-      setAnswer(data.answer);
-      setCitations(data.citations);
-    },
-    onError: (err) => {
-      setAnswer(`Error: ${(err as Error).message}`);
-      setCitations([]);
-    },
-  });
+  useEffect(() => {
+    return () => {
+      streamRef.current?.abort();
+    };
+  }, []);
+
+  const submit = (q: string) => {
+    if (!q || streaming) return;
+    streamRef.current?.abort();
+    setAnswer("");
+    setCitations([]);
+    setStreaming(true);
+    streamRef.current = api.askStream(q, {
+      onToken: (t) => setAnswer((prev) => (prev ?? "") + t),
+      onDone: (c) => {
+        setCitations(c);
+        setStreaming(false);
+      },
+      onError: (err) => {
+        setAnswer(`Error: ${err.message}`);
+        setCitations([]);
+        setStreaming(false);
+      },
+    });
+  };
 
   return (
     <KeyboardAvoidingView
@@ -42,9 +57,12 @@ export default function AskScreen() {
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
       >
-        {answer ? (
+        {answer !== null ? (
           <View style={styles.answerBox}>
-            <Text style={styles.answerText}>{renderAnswer(answer)}</Text>
+            <Text style={styles.answerText}>
+              {renderAnswer(answer)}
+              {streaming ? <Text style={styles.caret}>▍</Text> : null}
+            </Text>
             {citations.length > 0 ? (
               <View style={styles.citations}>
                 <Text style={styles.sectionLabel}>Sources</Text>
@@ -72,16 +90,16 @@ export default function AskScreen() {
           placeholderTextColor={theme.textMuted}
           value={question}
           onChangeText={setQuestion}
-          onSubmitEditing={() => question.trim() && ask.mutate(question.trim())}
+          onSubmitEditing={() => submit(question.trim())}
           returnKeyType="send"
-          editable={!ask.isPending}
+          editable={!streaming}
         />
         <Pressable
-          onPress={() => question.trim() && ask.mutate(question.trim())}
-          style={[styles.sendBtn, ask.isPending && { opacity: 0.6 }]}
-          disabled={ask.isPending || !question.trim()}
+          onPress={() => submit(question.trim())}
+          style={[styles.sendBtn, streaming && { opacity: 0.6 }]}
+          disabled={streaming || !question.trim()}
         >
-          {ask.isPending ? (
+          {streaming ? (
             <ActivityIndicator color={theme.text} />
           ) : (
             <Text style={styles.sendText}>Ask</Text>
@@ -136,6 +154,7 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
   },
   answerText: { color: theme.text, fontSize: 16, lineHeight: 22 },
+  caret: { color: theme.accent, fontSize: 16 },
   citations: { marginTop: 16, gap: 6 },
   sectionLabel: {
     color: theme.textMuted,

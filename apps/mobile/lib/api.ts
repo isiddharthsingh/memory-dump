@@ -169,6 +169,89 @@ export const api = {
     );
   },
 
+  askStream(
+    question: string,
+    handlers: {
+      onToken: (text: string) => void;
+      onDone: (citations: Citation[]) => void;
+      onError: (err: Error) => void;
+    },
+  ): { abort: () => void } {
+    const xhr = new XMLHttpRequest();
+    let consumed = 0;
+    let cancelled = false;
+
+    const processBuffer = (buf: string) => {
+      // SSE frames are separated by a blank line.
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        consumed += frame.length + 2;
+        let event = "message";
+        let data = "";
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          else if (line.startsWith("data:")) data += line.slice(5).trim();
+        }
+        if (!data) continue;
+        try {
+          const parsed = JSON.parse(data);
+          if (event === "token") handlers.onToken(parsed.text ?? "");
+          else if (event === "done") {
+            const c = z.array(Citation).safeParse(parsed.citations ?? []);
+            handlers.onDone(c.success ? c.data : []);
+          } else if (event === "error") {
+            handlers.onError(new Error(parsed.message ?? "stream error"));
+          }
+        } catch (e) {
+          handlers.onError(e as Error);
+        }
+      }
+    };
+
+    loadConfig()
+      .then((cfg) => {
+        if (cancelled) return;
+        if (!cfg.serverUrl || !cfg.apiToken) {
+          handlers.onError(new ApiError(0, "Server URL and API token not configured."));
+          return;
+        }
+        const url = cfg.serverUrl.replace(/\/$/, "") + "/ask/stream";
+        xhr.open("POST", url);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.setRequestHeader("Authorization", `Bearer ${cfg.apiToken}`);
+        xhr.setRequestHeader("Accept", "text/event-stream");
+        xhr.onreadystatechange = () => {
+          if (xhr.readyState >= 3 && xhr.status >= 200 && xhr.status < 300) {
+            const fresh = xhr.responseText.slice(consumed);
+            if (fresh.includes("\n\n")) processBuffer(fresh);
+          }
+          if (xhr.readyState === 4) {
+            if (xhr.status < 200 || xhr.status >= 300) {
+              handlers.onError(new ApiError(xhr.status, xhr.responseText || xhr.statusText));
+            }
+          }
+        };
+        xhr.onerror = () => {
+          if (!cancelled) handlers.onError(new ApiError(0, "Network error"));
+        };
+        xhr.send(JSON.stringify({ question }));
+      })
+      .catch((err) => handlers.onError(err as Error));
+
+    return {
+      abort: () => {
+        cancelled = true;
+        try {
+          xhr.abort();
+        } catch {
+          // ignore
+        }
+      },
+    };
+  },
+
   listTags(): Promise<TagCount[]> {
     return request(
       `/items/tags`,
