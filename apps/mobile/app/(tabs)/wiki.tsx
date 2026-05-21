@@ -1,13 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link, useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback } from "react";
 import {
   ActivityIndicator,
   FlatList,
-  Pressable,
-  RefreshControl,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from "react-native";
 
@@ -16,6 +15,7 @@ import { api } from "../../lib/api";
 import { theme } from "../../lib/theme";
 
 export default function WikiScreen() {
+  const router = useRouter();
   const pages = useQuery({
     queryKey: ["wiki"],
     queryFn: () => api.listWiki(),
@@ -58,26 +58,20 @@ export default function WikiScreen() {
       data={pages.data ?? []}
       keyExtractor={(p) => p.id}
       contentContainerStyle={styles.list}
-      refreshControl={
-        <RefreshControl
-          refreshing={pages.isFetching && !pages.isPending}
-          onRefresh={() => pages.refetch()}
-          tintColor={theme.accent}
-        />
-      }
       renderItem={({ item }) => (
-        <Link
-          href={{ pathname: "/wiki/[slug]", params: { slug: item.slug } }}
-          asChild
+        <TouchableOpacity
+          activeOpacity={0.7}
+          style={styles.row}
+          onPress={() =>
+            router.push({ pathname: "/wiki/[slug]", params: { slug: item.slug } })
+          }
         >
-          <Pressable style={styles.row}>
-            <Text style={styles.title}>{item.title}</Text>
-            <Text style={styles.slug}>{item.slug}</Text>
-            <Text style={styles.meta}>
-              {item.source_item_ids?.length ?? 0} item(s) · v{item.version}
-            </Text>
-          </Pressable>
-        </Link>
+          <Text style={styles.title}>{item.title}</Text>
+          <Text style={styles.slug}>{item.slug}</Text>
+          <Text style={styles.meta}>
+            {item.source_item_ids?.length ?? 0} item(s) · v{item.version}
+          </Text>
+        </TouchableOpacity>
       )}
     />
   );
