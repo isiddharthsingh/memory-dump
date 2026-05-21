@@ -50,6 +50,7 @@ export default function TabsLayout() {
         options={{
           title: "Ask",
           tabBarIcon: makeIcon("sparkles", "sparkles-outline"),
+          tabBarHideOnKeyboard: true,
         }}
       />
       <Tabs.Screen
