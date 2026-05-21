@@ -1,12 +1,18 @@
+import { Ionicons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
-import { Text } from "react-native";
 
 import { theme } from "../../lib/theme";
 
-function TabIcon({ label, focused }: { label: string; focused: boolean }) {
-  return (
-    <Text style={{ fontSize: 22, opacity: focused ? 1 : 0.5 }}>{label}</Text>
+type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
+
+function makeIcon(
+  filled: IoniconName,
+  outline: IoniconName,
+): (props: { focused: boolean; color: string; size: number }) => React.ReactNode {
+  const Icon = ({ focused, color, size }: { focused: boolean; color: string; size: number }) => (
+    <Ionicons name={focused ? filled : outline} size={size} color={color} />
   );
+  return Icon;
 }
 
 export default function TabsLayout() {
@@ -19,6 +25,7 @@ export default function TabsLayout() {
         },
         tabBarActiveTintColor: theme.accent,
         tabBarInactiveTintColor: theme.textMuted,
+        tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
         headerStyle: { backgroundColor: theme.bg },
         headerTintColor: theme.text,
         sceneStyle: { backgroundColor: theme.bg },
@@ -28,28 +35,28 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: "Inbox",
-          tabBarIcon: ({ focused }) => <TabIcon label="📥" focused={focused} />,
+          tabBarIcon: makeIcon("file-tray-full", "file-tray-full-outline"),
         }}
       />
       <Tabs.Screen
         name="wiki"
         options={{
           title: "Wiki",
-          tabBarIcon: ({ focused }) => <TabIcon label="📚" focused={focused} />,
+          tabBarIcon: makeIcon("library", "library-outline"),
         }}
       />
       <Tabs.Screen
         name="ask"
         options={{
           title: "Ask",
-          tabBarIcon: ({ focused }) => <TabIcon label="💬" focused={focused} />,
+          tabBarIcon: makeIcon("sparkles", "sparkles-outline"),
         }}
       />
       <Tabs.Screen
         name="settings"
         options={{
           title: "Settings",
-          tabBarIcon: ({ focused }) => <TabIcon label="⚙️" focused={focused} />,
+          tabBarIcon: makeIcon("settings", "settings-outline"),
         }}
       />
     </Tabs>
