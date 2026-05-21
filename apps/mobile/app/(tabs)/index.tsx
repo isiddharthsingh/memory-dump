@@ -12,6 +12,7 @@ import {
 
 import { EmptyState } from "../../components/EmptyState";
 import { ItemCard } from "../../components/ItemCard";
+import { ShareSheetMock } from "../../components/ShareSheetMock";
 import { InboxSkeletonList } from "../../components/Skeleton";
 import { api, type ItemSummary } from "../../lib/api";
 import { theme } from "../../lib/theme";
@@ -121,8 +122,10 @@ export default function InboxScreen() {
         <EmptyState
           emoji="📥"
           title="Inbox is empty"
-          message="Share a link from any app via the iOS or Android share sheet to save it here."
-        />
+          message="Hit Share on any link, then tap memory-dump."
+        >
+          <ShareSheetMock />
+        </EmptyState>
       ) : (
         <SectionList
           sections={sections}
