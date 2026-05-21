@@ -5,6 +5,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.ai.synthesize import embed_page_chunks, patch_page, propose_slugs
 from app.db.models import Item, TopicPage, TopicPageChunk
@@ -96,24 +97,25 @@ async def synthesize_topics(ctx: dict[str, Any], item_id: str) -> str:
                 )
 
             # Create stubs for any wikilink targets that don't exist yet,
-            # so links resolve cleanly in the UI.
+            # so links resolve cleanly in the UI. Skip slugs we're about to
+            # patch as main pages in this same call, and rely on ON CONFLICT
+            # to absorb cross-worker races and within-session autoflush gaps.
             for backlink_slug in patched.backlinks:
-                exists = (
-                    await session.execute(
-                        select(TopicPage.id).where(TopicPage.slug == backlink_slug)
+                if backlink_slug in proposed.slugs or backlink_slug in existing_slugs:
+                    continue
+                stmt = (
+                    pg_insert(TopicPage)
+                    .values(
+                        slug=backlink_slug,
+                        title=backlink_slug.replace("-", " ").title(),
+                        body_md="_pending_",
+                        backlinks=None,
+                        source_item_ids=None,
+                        version=1,
                     )
-                ).first()
-                if exists is None:
-                    session.add(
-                        TopicPage(
-                            slug=backlink_slug,
-                            title=backlink_slug.replace("-", " ").title(),
-                            body_md="_pending_",
-                            backlinks=None,
-                            source_item_ids=None,
-                            version=1,
-                        )
-                    )
+                    .on_conflict_do_nothing(index_elements=["slug"])
+                )
+                await session.execute(stmt)
 
             existing_slugs = list({*existing_slugs, slug})
             updated.append(slug)
