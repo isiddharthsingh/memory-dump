@@ -5,7 +5,6 @@ import {
   ActivityIndicator,
   FlatList,
   Pressable,
-  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -87,13 +86,6 @@ export default function InboxScreen() {
           keyExtractor={(it) => it.id}
           renderItem={({ item }) => <ItemCard item={item} />}
           contentContainerStyle={styles.list}
-          refreshControl={
-            <RefreshControl
-              refreshing={items.isFetching && !items.isPending}
-              onRefresh={() => items.refetch()}
-              tintColor={theme.accent}
-            />
-          }
         />
       )}
     </View>

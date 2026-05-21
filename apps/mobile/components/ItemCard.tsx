@@ -33,10 +33,7 @@ export function ItemCard({ item }: { item: ItemSummary }) {
     <TouchableOpacity
       activeOpacity={0.7}
       style={styles.card}
-      onPress={() => {
-        console.log("[ItemCard] tap", item.id);
-        router.push({ pathname: "/item/[id]", params: { id: item.id } });
-      }}
+      onPress={() => router.push({ pathname: "/item/[id]", params: { id: item.id } })}
     >
       {item.thumbnail_url ? (
         <Image
