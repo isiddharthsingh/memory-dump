@@ -6,26 +6,50 @@ import httpx
 
 from app.extractors.base import ExtractedContent
 
-USER_AGENT = (
+# Tried in order. The Safari UA is the default; if a site walls it off
+# (Medium, some Substack tier links, Cloudflare bot challenges), we retry
+# as Googlebot — most publishers leave that lane open or they'd lose SEO —
+# and finally as facebookexternalhit, which is what social link-preview
+# bots send and which sites usually permit for OG/Twitter card scraping.
+USER_AGENTS: tuple[str, ...] = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 "
-    "(KHTML, like Gecko) Version/17.4 Safari/605.1.15"
+    "(KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
 )
-TIMEOUT = httpx.Timeout(15.0, connect=10.0)
+
+# Re-exported for the twitter / instagram extractors that still want a single
+# UA string. Points at the primary entry in the chain above.
+USER_AGENT = USER_AGENTS[0]
+
+# Status codes that mean "your client is blocked" rather than "the page
+# doesn't exist". These trigger a UA retry; anything else (404, 5xx)
+# bubbles up so we don't burn the chain.
+RETRY_STATUSES = frozenset({401, 403, 429, 451})
+
+# Public read-mode proxy. When every UA gets blocked (typically because the
+# publisher filters by datacenter IP, not UA — Medium does this), we fetch
+# the article through Jina AI Reader, which returns a markdown rendering
+# with a "Title:" / "Markdown Content:" frontmatter.
+JINA_READER = "https://r.jina.ai/"
+
+TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 
 
 class WebpageExtractor:
     source = "web"
 
     async def extract(self, url: str, share_text: str | None = None) -> ExtractedContent:
-        async with httpx.AsyncClient(
-            headers={"User-Agent": USER_AGENT},
-            timeout=TIMEOUT,
-            follow_redirects=True,
-        ) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            html = resp.text
+        async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+            direct = await _fetch_direct(client, url)
+            if direct is not None:
+                return await self._from_html(direct, url, share_text)
+            # Direct fetch hit a wall on every UA. Try the reader fallback.
+            return await self._from_reader(client, url, share_text)
 
+    async def _from_html(
+        self, html: str, url: str, share_text: str | None
+    ) -> ExtractedContent:
         meta = self._parse_og(html)
         body = await asyncio.to_thread(self._extract_body, html, url)
 
@@ -47,6 +71,42 @@ class WebpageExtractor:
             title=title,
             thumbnail_url=thumb,
             site_name=site,
+            raw_text="\n\n".join(text_parts) or None,
+        )
+
+    async def _from_reader(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        share_text: str | None,
+    ) -> ExtractedContent:
+        # Reader requires no auth for basic use. It rate-limits aggressively,
+        # so we only hit it after all direct UAs have failed.
+        resp = await client.get(
+            JINA_READER + url,
+            headers={"Accept": "text/plain", "X-Return-Format": "markdown"},
+        )
+        resp.raise_for_status()
+        text = resp.text
+
+        title, body = _split_reader_payload(text)
+        if _looks_like_challenge(title, body):
+            # Even the reader proxy hit a bot wall. Save a stub so the user
+            # still has the link in their inbox.
+            return _stub(url, share_text)
+
+        text_parts: list[str] = []
+        if title:
+            text_parts.append(f"Title: {title}")
+        if body:
+            text_parts.append("Body:\n" + body)
+        if share_text:
+            text_parts.append("User note:\n" + share_text)
+
+        return ExtractedContent(
+            title=title,
+            thumbnail_url=None,
+            site_name=None,
             raw_text="\n\n".join(text_parts) or None,
         )
 
@@ -85,3 +145,71 @@ class WebpageExtractor:
             return text.strip() if text else None
         except Exception:
             return None
+
+
+async def _fetch_direct(client: httpx.AsyncClient, url: str) -> str | None:
+    """Try each UA in order. Returns HTML on first 2xx, None if every UA
+    was rate-limited or blocked. Raises on non-block errors (404, 5xx)."""
+    blocked = False
+    for ua in USER_AGENTS:
+        resp = await client.get(url, headers={"User-Agent": ua})
+        if resp.status_code in RETRY_STATUSES:
+            blocked = True
+            continue
+        resp.raise_for_status()
+        return resp.text
+    if blocked:
+        return None
+    return None  # all UAs blocked
+
+
+CHALLENGE_TITLES = ("just a moment", "attention required", "checking your browser")
+CHALLENGE_BODY_PHRASES = (
+    "performing security verification",
+    "checking the site connection security",
+    "enable javascript and cookies to continue",
+)
+
+
+def _looks_like_challenge(title: str | None, body: str | None) -> bool:
+    if title:
+        low = title.lower()
+        if any(p in low for p in CHALLENGE_TITLES):
+            return True
+    if body:
+        low = body.lower()
+        if any(p in low for p in CHALLENGE_BODY_PHRASES):
+            return True
+    return False
+
+
+def _stub(url: str, share_text: str | None) -> ExtractedContent:
+    parts = [f"URL: {url}"]
+    if share_text:
+        parts.append("User note:\n" + share_text)
+    return ExtractedContent(
+        title=None,
+        thumbnail_url=None,
+        site_name=None,
+        raw_text="\n\n".join(parts),
+    )
+
+
+def _split_reader_payload(text: str) -> tuple[str | None, str | None]:
+    """Jina Reader returns 'Title: ...\\nURL Source: ...\\nMarkdown Content:\\n...'.
+    Pull the title and the body separately."""
+    title: str | None = None
+    body: str | None = None
+    marker = "\nMarkdown Content:\n"
+    head_end = text.find(marker)
+    if head_end == -1:
+        # No frontmatter — treat the whole payload as body.
+        stripped = text.strip()
+        return None, stripped or None
+    head = text[:head_end]
+    body = text[head_end + len(marker) :].strip() or None
+    for line in head.splitlines():
+        if line.startswith("Title:"):
+            title = line[len("Title:") :].strip() or None
+            break
+    return title, body
