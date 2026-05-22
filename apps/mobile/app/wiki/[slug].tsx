@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useMemo } from "react";
 import {
@@ -14,18 +14,32 @@ import Markdown from "react-native-markdown-display";
 import { api } from "../../lib/api";
 import { radii, theme } from "../../lib/theme";
 
+const ITEM_LINK_MAX_LEN = 48;
+
 /**
  * The body_md content has two custom token types:
  *   [[slug]]     → tappable wikilink to /wiki/[slug]
  *   [item:UUID]  → tappable item card link to /item/[id]
  *
  * We pre-process the markdown to convert them into standard markdown links
- * with custom URL schemes, then intercept onLinkPress to navigate.
+ * with custom URL schemes, then intercept onLinkPress to navigate. For item
+ * links we substitute the real item title (truncated) when we have it
+ * cached; otherwise fall back to "source" instead of the raw "→item" tag.
  */
-function preprocessMarkdown(md: string): string {
+function preprocessMarkdown(md: string, titleById: Map<string, string>): string {
   return md
     .replace(/\[\[([a-z0-9][a-z0-9\-]*)\]\]/g, (_, slug) => `[${slug}](memorydump://wiki/${slug})`)
-    .replace(/\[item:([A-Za-z0-9\-]{8,})\]/g, (_, id) => ` [→item](memorydump://item/${id})`);
+    .replace(/\[item:([A-Za-z0-9\-]{8,})\]/g, (_, id) => {
+      const title = titleById.get(id);
+      const label = title
+        ? title.length > ITEM_LINK_MAX_LEN
+          ? title.slice(0, ITEM_LINK_MAX_LEN - 1).trimEnd() + "…"
+          : title
+        : "source";
+      // Markdown link text can't contain unescaped brackets — sanitize.
+      const safe = label.replace(/[[\]]/g, "");
+      return ` [${safe}](memorydump://item/${id})`;
+    });
 }
 
 export default function WikiDetail() {
@@ -39,9 +53,32 @@ export default function WikiDetail() {
     enabled: !!slug,
   });
 
+  // Pull titles for every cited item in parallel. They're cached on the same
+  // "item" key as the item detail screen, so navigating between the two is
+  // free after the first fetch. Titles rarely change → long staleTime.
+  const referencedIds = useMemo(
+    () => page.data?.source_item_ids ?? [],
+    [page.data?.source_item_ids],
+  );
+  const itemQueries = useQueries({
+    queries: referencedIds.map((id) => ({
+      queryKey: ["item", id] as const,
+      queryFn: () => api.getItem(id),
+      staleTime: 5 * 60 * 1000,
+    })),
+  });
+  const titleById = useMemo(() => {
+    const m = new Map<string, string>();
+    itemQueries.forEach((q, i) => {
+      const id = referencedIds[i];
+      if (id && q.data?.title) m.set(id, q.data.title);
+    });
+    return m;
+  }, [itemQueries, referencedIds]);
+
   const processed = useMemo(
-    () => (page.data ? preprocessMarkdown(page.data.body_md) : ""),
-    [page.data],
+    () => (page.data ? preprocessMarkdown(page.data.body_md, titleById) : ""),
+    [page.data, titleById],
   );
 
   if (page.isPending) {
