@@ -1,5 +1,7 @@
+import { Ionicons } from "@expo/vector-icons";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useFocusEffect } from "expo-router";
+import * as Haptics from "expo-haptics";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -18,9 +20,33 @@ import { NoteEditor } from "../../components/NoteEditor";
 import { ShareSheetMock } from "../../components/ShareSheetMock";
 import { InboxSkeletonList } from "../../components/Skeleton";
 import { api, type ItemSummary } from "../../lib/api";
-import { radii, theme } from "../../lib/theme";
+import { TOUCH_TARGET, radii, theme } from "../../lib/theme";
 
 const PAGE_SIZE = 25;
+const SURPRISE_POOL_SIZE = 200;
+
+/**
+ * Pick one item with weight proportional to its age in days (plus 1 so
+ * brand-new items still have a chance). This makes "Surprise me" mostly
+ * surface older saves you've forgotten about, instead of regurgitating
+ * what's already at the top of the inbox.
+ */
+function pickAgeWeighted(items: ItemSummary[]): ItemSummary | null {
+  if (items.length === 0) return null;
+  if (items.length === 1) return items[0] ?? null;
+  const now = Date.now();
+  const weights = items.map((it) => {
+    const ageMs = now - new Date(it.created_at).getTime();
+    return 1 + Math.max(0, Math.floor(ageMs / 86_400_000));
+  });
+  const total = weights.reduce((a, b) => a + b, 0);
+  let r = Math.random() * total;
+  for (let i = 0; i < items.length; i++) {
+    r -= weights[i]!;
+    if (r <= 0) return items[i] ?? null;
+  }
+  return items[items.length - 1] ?? null;
+}
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -66,7 +92,26 @@ function groupByDate(
 }
 
 export default function InboxScreen() {
+  const router = useRouter();
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
+
+  // Separate "pool" query for the Surprise button so it picks from up to
+  // 200 ready items, not just whatever's been paged into the list yet.
+  const surprisePool = useQuery({
+    queryKey: ["items-pool"],
+    queryFn: () => api.listItems({ limit: SURPRISE_POOL_SIZE, status: "ready" }),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const onSurprise = useCallback(() => {
+    const pool = surprisePool.data ?? [];
+    if (pool.length === 0) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const pick = pickAgeWeighted(pool);
+    if (pick) {
+      router.push({ pathname: "/item/[id]", params: { id: pick.id } });
+    }
+  }, [router, surprisePool.data]);
 
   const items = useInfiniteQuery({
     queryKey: ["items", { tag: selectedTag }],
@@ -131,33 +176,53 @@ export default function InboxScreen() {
     }
   }, [items]);
 
+  const poolReady = (surprisePool.data?.length ?? 0) > 0;
+
   return (
     <View style={styles.container}>
-      {tags.data && tags.data.length > 0 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chipRow}
-          style={styles.chipScroll}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chipRow}
+        style={styles.chipScroll}
+      >
+        <Pressable
+          onPress={onSurprise}
+          disabled={!poolReady}
+          style={({ pressed }) => [
+            styles.surpriseBtn,
+            !poolReady && { opacity: 0.4 },
+            pressed && { opacity: 0.7 },
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Surprise me with a random saved item"
+          accessibilityState={{ disabled: !poolReady }}
         >
-          <Chip
-            label="All"
-            active={selectedTag === null}
-            onPress={() => setSelectedTag(null)}
-          />
-          {tags.data.slice(0, 20).map((t) => (
+          <Ionicons name="sparkles" size={14} color={theme.accent} />
+          <Text style={styles.surpriseText}>Surprise me</Text>
+        </Pressable>
+        {tags.data && tags.data.length > 0 ? (
+          <>
+            <View style={styles.chipDivider} />
             <Chip
-              key={t.tag}
-              label={`#${t.tag}`}
-              count={t.count}
-              active={selectedTag === t.tag}
-              onPress={() =>
-                setSelectedTag(selectedTag === t.tag ? null : t.tag)
-              }
+              label="All"
+              active={selectedTag === null}
+              onPress={() => setSelectedTag(null)}
             />
-          ))}
-        </ScrollView>
-      )}
+            {tags.data.slice(0, 20).map((t) => (
+              <Chip
+                key={t.tag}
+                label={`#${t.tag}`}
+                count={t.count}
+                active={selectedTag === t.tag}
+                onPress={() =>
+                  setSelectedTag(selectedTag === t.tag ? null : t.tag)
+                }
+              />
+            ))}
+          </>
+        ) : null}
+      </ScrollView>
 
       {items.isPending ? (
         <InboxSkeletonList />
@@ -269,6 +334,29 @@ const styles = StyleSheet.create({
     borderBottomColor: theme.border,
   },
   chipRow: { paddingHorizontal: 12, paddingVertical: 10, gap: 8, alignItems: "center" },
+  surpriseBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 14,
+    minHeight: 34,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: theme.accent,
+    backgroundColor: theme.surface,
+  },
+  surpriseText: {
+    color: theme.accent,
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: -0.1,
+  },
+  chipDivider: {
+    width: StyleSheet.hairlineWidth,
+    height: 22,
+    backgroundColor: theme.borderStrong,
+    marginHorizontal: 4,
+  },
   chip: {
     paddingHorizontal: 14,
     minHeight: 34,
