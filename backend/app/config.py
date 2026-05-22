@@ -26,6 +26,16 @@ class Settings(BaseSettings):
     voyage_embed_model: str = "voyage-3-large"
     voyage_rerank_model: str = "rerank-2.5"
 
+    # Multimodal backend for /ingest/file. Currently only "anthropic" is
+    # implemented; see app/ai/providers.py for how to add another (e.g.
+    # "openrouter") without changing call sites.
+    ai_vision_provider: str = "anthropic"
+
+    # Where the API drops uploaded files and the worker reads them. Must be
+    # the same path inside both containers (docker-compose mounts a shared
+    # volume).
+    uploads_dir: str = "/uploads"
+
     log_level: str = "INFO"
 
     @property
