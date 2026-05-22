@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 import {
   Alert,
   Pressable,
@@ -11,6 +12,7 @@ import {
 
 import { api } from "../../lib/api";
 import { useConfig } from "../../lib/settings";
+import { shareQueue } from "../../lib/shareQueue";
 import { TOUCH_TARGET, cardShadow, radii, theme } from "../../lib/theme";
 
 export default function SettingsScreen() {
@@ -18,6 +20,40 @@ export default function SettingsScreen() {
   const [serverUrl, setServerUrl] = useState("");
   const [apiToken, setApiToken] = useState("");
   const [checking, setChecking] = useState(false);
+  const [pendingShares, setPendingShares] = useState(0);
+
+  const refreshPending = useCallback(async () => {
+    setPendingShares(await shareQueue.count());
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshPending();
+    }, [refreshPending]),
+  );
+
+  async function onRetryQueue() {
+    const r = await shareQueue.flush();
+    await refreshPending();
+    Alert.alert(
+      "Queue",
+      `Sent ${r.sent} · Dropped ${r.failed} · Remaining ${r.remaining}`,
+    );
+  }
+
+  async function onClearQueue() {
+    Alert.alert("Clear queued shares?", "This discards any pending shares.", [
+      { text: "Cancel" },
+      {
+        text: "Clear",
+        style: "destructive",
+        onPress: async () => {
+          await shareQueue.clear();
+          await refreshPending();
+        },
+      },
+    ]);
+  }
 
   // Keep local form in sync once config loads.
   if (config && serverUrl === "" && apiToken === "") {
@@ -101,6 +137,42 @@ export default function SettingsScreen() {
         </Pressable>
       </View>
 
+      {pendingShares > 0 ? (
+        <View style={styles.queueCard}>
+          <Text style={styles.queueTitle}>
+            {pendingShares} pending share{pendingShares === 1 ? "" : "s"}
+          </Text>
+          <Text style={styles.queueText}>
+            Saved locally while offline. They'll send automatically when the
+            app comes back online.
+          </Text>
+          <View style={styles.queueBtnRow}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.queueBtn,
+                pressed && { backgroundColor: theme.surfaceSunken },
+              ]}
+              onPress={onRetryQueue}
+              accessibilityRole="button"
+              accessibilityLabel="Retry pending shares now"
+            >
+              <Text style={styles.queueBtnText}>Retry now</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [
+                styles.queueBtnDanger,
+                pressed && { opacity: 0.6 },
+              ]}
+              onPress={onClearQueue}
+              accessibilityRole="button"
+              accessibilityLabel="Discard pending shares"
+            >
+              <Text style={styles.queueBtnDangerText}>Discard</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
       <View style={styles.about}>
         <Text style={styles.aboutTitle}>About</Text>
         <Text style={styles.aboutText}>
@@ -183,4 +255,45 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   aboutText: { color: theme.text, fontSize: 14, lineHeight: 20 },
+  queueCard: {
+    marginTop: 16,
+    padding: 16,
+    backgroundColor: theme.surface,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: theme.borderStrong,
+    ...cardShadow("sm"),
+  },
+  queueTitle: {
+    color: theme.text,
+    fontWeight: "700",
+    fontSize: 15,
+    marginBottom: 4,
+  },
+  queueText: { color: theme.textMuted, fontSize: 13, lineHeight: 18 },
+  queueBtnRow: { flexDirection: "row", gap: 10, marginTop: 12 },
+  queueBtn: {
+    flex: 1,
+    backgroundColor: theme.surface,
+    borderWidth: 1,
+    borderColor: theme.borderStrong,
+    borderRadius: radii.md,
+    paddingVertical: 10,
+    minHeight: TOUCH_TARGET,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  queueBtnText: { color: theme.text, fontWeight: "600", fontSize: 15 },
+  queueBtnDanger: {
+    flex: 1,
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: theme.danger,
+    borderRadius: radii.md,
+    paddingVertical: 10,
+    minHeight: TOUCH_TARGET,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  queueBtnDangerText: { color: theme.danger, fontWeight: "600", fontSize: 15 },
 });

@@ -1,7 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -18,6 +19,8 @@ import { ShareSheetMock } from "../../components/ShareSheetMock";
 import { InboxSkeletonList } from "../../components/Skeleton";
 import { api, type ItemSummary } from "../../lib/api";
 import { radii, theme } from "../../lib/theme";
+
+const PAGE_SIZE = 25;
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -65,9 +68,19 @@ function groupByDate(
 export default function InboxScreen() {
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
 
-  const items = useQuery({
+  const items = useInfiniteQuery({
     queryKey: ["items", { tag: selectedTag }],
-    queryFn: () => api.listItems({ limit: 50, tag: selectedTag ?? undefined }),
+    queryFn: ({ pageParam }) =>
+      api.listItems({
+        limit: PAGE_SIZE,
+        offset: pageParam as number,
+        tag: selectedTag ?? undefined,
+      }),
+    initialPageParam: 0,
+    // Backend lists items in page-size chunks. We stop paging when we get a
+    // short page (fewer rows than asked) — there's nothing left.
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.length < PAGE_SIZE ? undefined : allPages.length * PAGE_SIZE,
   });
 
   const tags = useQuery({
@@ -81,7 +94,11 @@ export default function InboxScreen() {
     }, [items]),
   );
 
-  const sections = useMemo(() => groupByDate(items.data ?? []), [items.data]);
+  const flatItems = useMemo(
+    () => (items.data?.pages ?? []).flat(),
+    [items.data],
+  );
+  const sections = useMemo(() => groupByDate(flatItems), [flatItems]);
 
   const [editing, setEditing] = useState<{ id: string; initial: string } | null>(
     null,
@@ -107,6 +124,12 @@ export default function InboxScreen() {
       setPulling(false);
     }
   }, [items, tags]);
+
+  const onEndReached = useCallback(() => {
+    if (items.hasNextPage && !items.isFetchingNextPage) {
+      items.fetchNextPage();
+    }
+  }, [items]);
 
   return (
     <View style={styles.container}>
@@ -145,7 +168,7 @@ export default function InboxScreen() {
           </Text>
           <Text style={styles.errDetail}>{String((items.error as Error).message)}</Text>
         </View>
-      ) : items.data && items.data.length === 0 ? (
+      ) : flatItems.length === 0 ? (
         <EmptyState
           emoji="📥"
           title="Inbox is empty"
@@ -173,6 +196,17 @@ export default function InboxScreen() {
               onRefresh={onPullRefresh}
               tintColor={theme.accent}
             />
+          }
+          onEndReached={onEndReached}
+          onEndReachedThreshold={0.4}
+          ListFooterComponent={
+            items.isFetchingNextPage ? (
+              <View style={styles.footer}>
+                <ActivityIndicator color={theme.accent} />
+              </View>
+            ) : !items.hasNextPage && flatItems.length > PAGE_SIZE ? (
+              <Text style={styles.footerEnd}>End of inbox</Text>
+            ) : null
           }
         />
       )}
@@ -259,4 +293,11 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32 },
   errText: { color: theme.danger, fontWeight: "600" },
   errDetail: { color: theme.textMuted, marginTop: 8, textAlign: "center" },
+  footer: { paddingVertical: 16, alignItems: "center" },
+  footerEnd: {
+    color: theme.textFaint,
+    fontSize: 12,
+    textAlign: "center",
+    paddingVertical: 16,
+  },
 });

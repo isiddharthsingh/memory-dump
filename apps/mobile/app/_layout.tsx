@@ -12,6 +12,7 @@ import { queryClient } from "../lib/queryClient";
 import { TOUCH_TARGET, cardShadow, radii, theme } from "../lib/theme";
 import { useIncomingShare } from "../lib/useIncomingShare";
 import { usePushRegistration } from "../lib/usePushRegistration";
+import { useShareQueueDrain } from "../lib/useShareQueueDrain";
 
 function ShareToast({
   message,
@@ -67,6 +68,13 @@ function ShareHandler({ children }: { children: React.ReactNode }) {
 
   useIncomingShare(onResult);
   usePushRegistration();
+  useShareQueueDrain((sent) => {
+    setToast({
+      message: `Sent ${sent} queued share${sent === 1 ? "" : "s"}.`,
+      tone: "ok",
+    });
+    setTimeout(() => setToast(null), 3000);
+  });
 
   return (
     <>
