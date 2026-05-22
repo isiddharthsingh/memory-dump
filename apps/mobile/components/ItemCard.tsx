@@ -13,14 +13,18 @@ type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
 
 const SOURCE_ICON: Record<string, { name: IoniconName; color: string }> = {
   youtube: { name: "logo-youtube", color: theme.text },
-  twitter: { name: "logo-twitter", color: theme.text },
+  // Ionicons has no X (formerly Twitter) logo; "close" renders a clean X
+  // glyph that reads as the modern brand mark.
+  twitter: { name: "close", color: theme.text },
   instagram: { name: "logo-instagram", color: theme.text },
   reddit: { name: "logo-reddit", color: theme.text },
-  web: { name: "link", color: theme.textMuted },
+  pdf: { name: "document-text", color: theme.text },
+  image: { name: "image", color: theme.text },
+  web: { name: "globe-outline", color: theme.textMuted },
 };
 
 const WEB_ICON: { name: IoniconName; color: string } = {
-  name: "link",
+  name: "globe-outline",
   color: theme.textMuted,
 };
 
