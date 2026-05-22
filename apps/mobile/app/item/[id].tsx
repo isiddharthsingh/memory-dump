@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { Link, useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -13,16 +13,20 @@ import {
   Text,
   View,
 } from "react-native";
+import Markdown from "react-native-markdown-display";
 
 import { api } from "../../lib/api";
+import { parseReaderContent } from "../../lib/readerContent";
 import { TOUCH_TARGET, cardShadow, radii, theme } from "../../lib/theme";
+
+const PREVIEW_MAX_CHARS = 500;
+const COLLAPSE_THRESHOLD = 700;
 
 export default function ItemDetail() {
   const params = useLocalSearchParams<{ id: string }>();
   const id = params.id;
   const router = useRouter();
   const qc = useQueryClient();
-  const [showRaw, setShowRaw] = useState(false);
 
   const item = useQuery({
     queryKey: ["item", id],
@@ -55,6 +59,24 @@ export default function ItemDetail() {
       router.back();
     },
   });
+
+  const reader = useMemo(
+    () => parseReaderContent(item.data?.raw_text),
+    [item.data?.raw_text],
+  );
+  const [readerExpanded, setReaderExpanded] = useState(false);
+  // Show a snippet by default for long articles; full text behind a toggle.
+  // Cut at a paragraph or sentence boundary so the preview doesn't end mid-word.
+  const readerPreview = useMemo(() => {
+    if (!reader.body) return null;
+    if (reader.body.length <= COLLAPSE_THRESHOLD) return null; // no need to truncate
+    const slice = reader.body.slice(0, PREVIEW_MAX_CHARS);
+    const lastParaBreak = slice.lastIndexOf("\n\n");
+    if (lastParaBreak > 200) return slice.slice(0, lastParaBreak).trim();
+    const lastSentence = slice.lastIndexOf(". ");
+    if (lastSentence > 200) return slice.slice(0, lastSentence + 1).trim();
+    return slice.trim() + "…";
+  }, [reader.body]);
 
   if (item.isPending) {
     return (
@@ -186,14 +208,57 @@ export default function ItemDetail() {
         </View>
       ) : null}
 
-      {it.raw_text ? (
-        <View style={styles.section}>
-          <Pressable onPress={() => setShowRaw((v) => !v)}>
-            <Text style={styles.sectionLabel}>
-              Raw content {showRaw ? "▾" : "▸"}
-            </Text>
-          </Pressable>
-          {showRaw && <Text style={styles.raw}>{it.raw_text}</Text>}
+      {it.status === "ready" ? (
+        <View style={styles.readerSection}>
+          <Text style={styles.sectionLabel}>Read</Text>
+          {reader.note ? (
+            <View style={styles.noteCallout}>
+              <Text style={styles.noteLabel}>Your note</Text>
+              <Text style={styles.noteText}>{reader.note}</Text>
+            </View>
+          ) : null}
+          {reader.body && !reader.isStub ? (
+            <View>
+              <Markdown style={readerMarkdownStyles}>
+                {readerPreview && !readerExpanded ? readerPreview : reader.body}
+              </Markdown>
+              {readerPreview ? (
+                <Pressable
+                  onPress={() => setReaderExpanded((v) => !v)}
+                  style={({ pressed }) => [
+                    styles.readerToggle,
+                    pressed && { opacity: 0.6 },
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    readerExpanded ? "Collapse article" : "Show full article"
+                  }
+                >
+                  <Text style={styles.readerToggleText}>
+                    {readerExpanded ? "Show less" : "Show more"}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : (
+            <View style={styles.readerEmpty}>
+              <Text style={styles.readerEmptyText}>
+                Couldn't extract a readable version of this page — it may be
+                paywalled or behind a bot wall.
+              </Text>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.readerEmptyBtn,
+                  pressed && { opacity: 0.6 },
+                ]}
+                onPress={() => Linking.openURL(it.url)}
+                accessibilityRole="link"
+                accessibilityLabel="Open original URL"
+              >
+                <Text style={styles.readerEmptyBtnText}>Open original →</Text>
+              </Pressable>
+            </View>
+          )}
         </View>
       ) : null}
 
@@ -262,6 +327,65 @@ function EntityRow({ label, items }: { label: string; items: string[] | null }) 
   );
 }
 
+const readerMarkdownStyles = {
+  body: { color: theme.text, fontSize: 16, lineHeight: 25 },
+  paragraph: { marginTop: 0, marginBottom: 14 },
+  heading1: {
+    color: theme.text,
+    fontSize: 22,
+    fontWeight: "700",
+    marginTop: 18,
+    marginBottom: 8,
+    letterSpacing: -0.3,
+  },
+  heading2: {
+    color: theme.text,
+    fontSize: 19,
+    fontWeight: "700",
+    marginTop: 16,
+    marginBottom: 6,
+    letterSpacing: -0.2,
+  },
+  heading3: {
+    color: theme.text,
+    fontSize: 17,
+    fontWeight: "600",
+    marginTop: 14,
+    marginBottom: 4,
+  },
+  link: { color: theme.accent, fontWeight: "500" },
+  blockquote: {
+    backgroundColor: theme.surfaceSunken,
+    borderLeftWidth: 3,
+    borderLeftColor: theme.borderStrong,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginVertical: 8,
+  },
+  code_inline: {
+    backgroundColor: theme.surfaceSunken,
+    color: theme.text,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    borderRadius: 4,
+    fontFamily: "Menlo",
+    fontSize: 14,
+  },
+  code_block: {
+    backgroundColor: theme.surfaceSunken,
+    color: theme.text,
+    padding: 12,
+    borderRadius: radii.md,
+    fontFamily: "Menlo",
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  bullet_list: { marginVertical: 4 },
+  ordered_list: { marginVertical: 4 },
+  list_item: { marginBottom: 4 },
+  hr: { backgroundColor: theme.border, height: StyleSheet.hairlineWidth, marginVertical: 14 },
+} as const;
+
 function statusColor(status: string) {
   if (status === "failed") return { borderColor: theme.danger, backgroundColor: theme.dangerSoft };
   if (status === "processing") return { borderColor: theme.accent, backgroundColor: theme.accentSoft };
@@ -325,12 +449,68 @@ const styles = StyleSheet.create({
   entityRow: { flexDirection: "row", flexWrap: "wrap", marginTop: 4 },
   entityLabel: { color: theme.textMuted, marginRight: 4, fontSize: 13, fontWeight: "600" },
   entityValues: { color: theme.text, fontSize: 13, flex: 1 },
-  raw: {
+  readerSection: {
+    marginTop: 18,
+    padding: 18,
+    backgroundColor: theme.surface,
+    borderRadius: radii.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    ...cardShadow("sm"),
+  },
+  noteCallout: {
+    padding: 12,
+    backgroundColor: theme.surfaceSunken,
+    borderRadius: radii.md,
+    borderLeftWidth: 3,
+    borderLeftColor: theme.accent,
+    marginBottom: 14,
+  },
+  noteLabel: {
     color: theme.textMuted,
-    fontSize: 13,
-    lineHeight: 19,
+    fontSize: 10,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  noteText: { color: theme.text, fontSize: 14, lineHeight: 20 },
+  readerEmpty: {
+    paddingVertical: 8,
+    gap: 12,
+  },
+  readerEmptyText: {
+    color: theme.textMuted,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  readerEmptyBtn: {
+    alignSelf: "flex-start",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    borderColor: theme.borderStrong,
+  },
+  readerEmptyBtnText: {
+    color: theme.text,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  readerToggle: {
+    alignSelf: "flex-start",
     marginTop: 8,
-    fontFamily: "Menlo",
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: theme.borderStrong,
+    backgroundColor: theme.surfaceSunken,
+  },
+  readerToggleText: {
+    color: theme.text,
+    fontSize: 13,
+    fontWeight: "600",
   },
   actions: { flexDirection: "row", gap: 8, marginTop: 24, marginBottom: 32 },
   openBtn: {
