@@ -28,7 +28,7 @@ async def list_items(
     status_filter: str | None = Query(None, alias="status"),
     tag: str | None = Query(None, description="Filter by tag (exact match)"),
     source: str | None = Query(
-        None, description="Filter by source: youtube, twitter, instagram, web"
+        None, description="Filter by source: youtube, twitter, instagram, reddit, web"
     ),
 ) -> list[Item]:
     stmt = select(Item)

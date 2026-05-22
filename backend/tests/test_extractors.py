@@ -3,6 +3,7 @@ import os
 os.environ.setdefault("MEMORY_DUMP_API_TOKEN", "test-token")
 
 from app.extractors.base import detect_source, get_extractor  # noqa: E402
+from app.extractors.reddit import _parse, _to_json_url  # noqa: E402
 from app.extractors.youtube import extract_video_id  # noqa: E402
 
 
@@ -10,6 +11,9 @@ def test_detect_source_dispatch() -> None:
     assert detect_source("https://youtu.be/abc12345678") == "youtube"
     assert detect_source("https://x.com/u/status/1") == "twitter"
     assert detect_source("https://www.instagram.com/p/abc/") == "instagram"
+    assert detect_source("https://www.reddit.com/r/python/comments/abc/title/") == "reddit"
+    assert detect_source("https://old.reddit.com/r/python/") == "reddit"
+    assert detect_source("https://redd.it/abc123") == "reddit"
     assert detect_source("https://example.com/post") == "web"
 
 
@@ -17,9 +21,118 @@ def test_get_extractor_returns_correct_source() -> None:
     assert get_extractor("youtube").source == "youtube"
     assert get_extractor("twitter").source == "twitter"
     assert get_extractor("instagram").source == "instagram"
+    assert get_extractor("reddit").source == "reddit"
     assert get_extractor("web").source == "web"
     # Unknown sources fall back to web.
     assert get_extractor("not-a-source").source == "web"
+
+
+def test_reddit_to_json_url() -> None:
+    assert _to_json_url("https://www.reddit.com/r/python/comments/abc/title/") == (
+        "https://www.reddit.com/r/python/comments/abc/title.json?raw_json=1"
+    )
+    # old.reddit / m.reddit are rewritten to www.
+    assert _to_json_url("https://old.reddit.com/r/python/comments/abc/title").startswith(
+        "https://www.reddit.com/"
+    )
+    # redd.it short links become canonical comment URLs.
+    assert _to_json_url("https://redd.it/abc123") == (
+        "https://www.reddit.com/comments/abc123.json?raw_json=1"
+    )
+    # Pre-existing query strings are preserved.
+    assert "context=3" in _to_json_url(
+        "https://www.reddit.com/r/python/comments/abc/title/cmt/?context=3"
+    )
+
+
+def test_reddit_parse_post_with_comments() -> None:
+    payload = [
+        {
+            "kind": "Listing",
+            "data": {
+                "children": [
+                    {
+                        "kind": "t3",
+                        "data": {
+                            "title": "Why Python is great",
+                            "author": "alice",
+                            "subreddit": "python",
+                            "selftext": "Because it's readable.",
+                            "is_self": True,
+                            "url": "https://reddit.com/r/python/comments/abc",
+                            "thumbnail": "self",
+                        },
+                    }
+                ]
+            },
+        },
+        {
+            "kind": "Listing",
+            "data": {
+                "children": [
+                    {"kind": "t1", "data": {"author": "bob", "body": "Agreed."}},
+                    {"kind": "t1", "data": {"author": "carol", "body": "[deleted]"}},
+                    {"kind": "more", "data": {}},
+                ]
+            },
+        },
+    ]
+    content = _parse(payload, share_text=None)
+    assert content.title == "Why Python is great"
+    assert content.author == "alice"
+    assert content.site_name == "r/python"
+    assert content.thumbnail_url is None
+    assert content.raw_text is not None
+    assert "Because it's readable." in content.raw_text
+    assert "u/bob: Agreed." in content.raw_text
+    # Deleted comments are skipped.
+    assert "carol" not in content.raw_text
+
+
+def test_reddit_parse_link_post() -> None:
+    payload = [
+        {
+            "kind": "Listing",
+            "data": {
+                "children": [
+                    {
+                        "kind": "t3",
+                        "data": {
+                            "title": "Cool article",
+                            "author": "dave",
+                            "subreddit": "programming",
+                            "selftext": "",
+                            "is_self": False,
+                            "url_overridden_by_dest": "https://example.com/post",
+                            "thumbnail": "https://b.thumbs.redditmedia.com/x.jpg",
+                        },
+                    }
+                ]
+            },
+        },
+        {"kind": "Listing", "data": {"children": []}},
+    ]
+    content = _parse(payload, share_text="found this")
+    assert content.raw_text is not None
+    assert "Link: https://example.com/post" in content.raw_text
+    assert "User note:\nfound this" in content.raw_text
+    assert content.thumbnail_url == "https://b.thumbs.redditmedia.com/x.jpg"
+
+
+def test_reddit_parse_subreddit_listing() -> None:
+    payload = {
+        "kind": "Listing",
+        "data": {
+            "children": [
+                {"kind": "t3", "data": {"title": "Post one"}},
+                {"kind": "t3", "data": {"title": "Post two"}},
+            ]
+        },
+    }
+    content = _parse(payload, share_text=None)
+    assert content.raw_text is not None
+    assert "- Post one" in content.raw_text
+    assert "- Post two" in content.raw_text
 
 
 def test_extract_video_id_youtube() -> None:

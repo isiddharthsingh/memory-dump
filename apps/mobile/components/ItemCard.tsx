@@ -15,6 +15,7 @@ const SOURCE_ICON: Record<string, { name: IoniconName; color: string }> = {
   youtube: { name: "logo-youtube", color: theme.text },
   twitter: { name: "logo-twitter", color: theme.text },
   instagram: { name: "logo-instagram", color: theme.text },
+  reddit: { name: "logo-reddit", color: theme.text },
   web: { name: "link", color: theme.textMuted },
 };
 

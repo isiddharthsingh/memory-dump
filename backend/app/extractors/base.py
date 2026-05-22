@@ -31,11 +31,14 @@ def detect_source(url: str) -> str:
         return "twitter"
     if host == "instagram.com":
         return "instagram"
+    if host in {"reddit.com", "old.reddit.com", "m.reddit.com", "np.reddit.com", "redd.it"}:
+        return "reddit"
     return "web"
 
 
 def get_extractor(source: str) -> Extractor:
     from app.extractors.instagram import InstagramExtractor
+    from app.extractors.reddit import RedditExtractor
     from app.extractors.twitter import TwitterExtractor
     from app.extractors.webpage import WebpageExtractor
     from app.extractors.youtube import YouTubeExtractor
@@ -44,6 +47,7 @@ def get_extractor(source: str) -> Extractor:
         "youtube": YouTubeExtractor(),
         "twitter": TwitterExtractor(),
         "instagram": InstagramExtractor(),
+        "reddit": RedditExtractor(),
         "web": WebpageExtractor(),
     }
     return mapping.get(source, WebpageExtractor())
