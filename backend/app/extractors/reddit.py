@@ -30,13 +30,18 @@ class RedditExtractor:
     source = "reddit"
 
     async def extract(self, url: str, share_text: str | None = None) -> ExtractedContent:
-        api_url = _to_json_url(url)
         try:
             async with httpx.AsyncClient(
                 headers={"User-Agent": USER_AGENT},
                 timeout=TIMEOUT,
                 follow_redirects=True,
             ) as client:
+                # iOS share links (`/r/<sub>/s/<id>`) redirect to the canonical
+                # `/comments/<id>/<slug>/` URL — resolve that first, otherwise
+                # appending `.json` to the share path 307s back to the
+                # subreddit root and we lose the post.
+                resolved_url = await _resolve_share_link(client, url)
+                api_url = _to_json_url(resolved_url)
                 resp = await client.get(api_url)
                 resp.raise_for_status()
                 data = resp.json()
@@ -47,6 +52,16 @@ class RedditExtractor:
             )
 
         return _parse(data, share_text)
+
+
+async def _resolve_share_link(client: httpx.AsyncClient, url: str) -> str:
+    parsed = urlparse(url)
+    parts = [p for p in parsed.path.split("/") if p]
+    # Pattern: ["r", "<sub>", "s", "<id>"]
+    if len(parts) >= 4 and parts[0] == "r" and parts[2] == "s":
+        resp = await client.get(url)
+        return str(resp.url)
+    return url
 
 
 def _to_json_url(url: str) -> str:
