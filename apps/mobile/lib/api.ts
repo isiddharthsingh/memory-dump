@@ -161,6 +161,46 @@ export const api = {
     );
   },
 
+  async ingestFile(
+    file: { uri: string; name: string; mimeType: string },
+    shareText?: string,
+  ): Promise<{ item: ItemSummary }> {
+    const cfg = await loadConfig();
+    if (!cfg.serverUrl || !cfg.apiToken) {
+      throw new ApiError(0, "Server URL and API token not configured.");
+    }
+    const form = new FormData();
+    // React Native's FormData accepts the { uri, name, type } shape; the
+    // server reads it as a standard multipart/form-data upload.
+    form.append("file", {
+      uri: file.uri,
+      name: file.name,
+      type: file.mimeType,
+    } as unknown as Blob);
+    if (shareText) form.append("share_text", shareText);
+
+    const url = cfg.serverUrl.replace(/\/$/, "") + "/ingest/file";
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${cfg.apiToken}`,
+        // Do NOT set Content-Type — fetch sets the multipart boundary itself.
+      },
+      body: form as unknown as BodyInit,
+    });
+    if (!resp.ok) {
+      let detail = "";
+      try {
+        const body = await resp.json();
+        detail = body?.detail ?? "";
+      } catch {
+        detail = await resp.text().catch(() => "");
+      }
+      throw new ApiError(resp.status, detail || resp.statusText);
+    }
+    return z.object({ item: ItemSummary }).parse(await resp.json());
+  },
+
   search(q: string, limit = 10): Promise<{ hits: SearchHit[] }> {
     return request(
       `/search`,
