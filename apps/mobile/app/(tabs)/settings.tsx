@@ -10,15 +10,16 @@ import {
   View,
 } from "react-native";
 
+import { useAuth } from "../../lib/AuthContext";
 import { api } from "../../lib/api";
 import { useConfig } from "../../lib/settings";
 import { shareQueue } from "../../lib/shareQueue";
 import { TOUCH_TARGET, cardShadow, radii, theme } from "../../lib/theme";
 
 export default function SettingsScreen() {
+  const { session, logout, deleteAccount } = useAuth();
   const { config, save } = useConfig();
   const [serverUrl, setServerUrl] = useState("");
-  const [apiToken, setApiToken] = useState("");
   const [checking, setChecking] = useState(false);
   const [pendingShares, setPendingShares] = useState(0);
 
@@ -55,16 +56,14 @@ export default function SettingsScreen() {
     ]);
   }
 
-  // Keep local form in sync once config loads.
-  if (config && serverUrl === "" && apiToken === "") {
-    if (config.serverUrl) setServerUrl(config.serverUrl);
-    if (config.apiToken) setApiToken(config.apiToken);
+  if (config && serverUrl === "" && config.serverUrl) {
+    setServerUrl(config.serverUrl);
   }
 
-  async function onSave() {
+  async function onSaveServer() {
     const cleanedUrl = serverUrl.trim().replace(/\/$/, "");
-    await save({ serverUrl: cleanedUrl || null, apiToken: apiToken.trim() || null });
-    Alert.alert("Saved", "Settings updated.");
+    await save({ serverUrl: cleanedUrl || null, apiToken: null });
+    Alert.alert("Saved", "Server URL updated.");
   }
 
   async function onTest() {
@@ -79,8 +78,64 @@ export default function SettingsScreen() {
     }
   }
 
+  function onLogoutPress() {
+    Alert.alert("Sign out?", "You'll need to sign in again on this device.", [
+      { text: "Cancel" },
+      {
+        text: "Sign out",
+        style: "destructive",
+        onPress: () => {
+          void logout();
+        },
+      },
+    ]);
+  }
+
+  function onDeleteAccountPress() {
+    Alert.alert(
+      "Delete account?",
+      "This permanently removes your account and every saved item, wiki page, and device. This can't be undone.",
+      [
+        { text: "Cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await deleteAccount();
+            } catch (e) {
+              Alert.alert("Failed", String((e as Error).message));
+            }
+          },
+        },
+      ],
+    );
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
+      {session ? (
+        <View style={styles.card}>
+          <Text style={styles.label}>Signed in as</Text>
+          <Text style={styles.accountEmail}>{session.user.email}</Text>
+          {session.user.display_name ? (
+            <Text style={styles.accountName}>{session.user.display_name}</Text>
+          ) : null}
+          <Pressable
+            style={({ pressed }) => [
+              styles.secondary,
+              { marginTop: 16 },
+              pressed && { backgroundColor: theme.surfaceSunken },
+            ]}
+            onPress={onLogoutPress}
+            accessibilityRole="button"
+            accessibilityLabel="Sign out"
+          >
+            <Text style={styles.secondaryText}>Sign out</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
       <View style={styles.card}>
         <Text style={styles.label}>Server URL</Text>
         <TextInput
@@ -93,18 +148,6 @@ export default function SettingsScreen() {
           autoCorrect={false}
           keyboardType="url"
         />
-
-        <Text style={[styles.label, { marginTop: 16 }]}>API Token</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Bearer token from MEMORY_DUMP_API_TOKEN"
-          placeholderTextColor={theme.textFaint}
-          value={apiToken}
-          onChangeText={setApiToken}
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry
-        />
       </View>
 
       <View style={styles.btnRow}>
@@ -113,9 +156,9 @@ export default function SettingsScreen() {
             styles.primary,
             pressed && { backgroundColor: theme.accentPressed },
           ]}
-          onPress={onSave}
+          onPress={onSaveServer}
           accessibilityRole="button"
-          accessibilityLabel="Save settings"
+          accessibilityLabel="Save server URL"
         >
           <Text style={styles.primaryText}>Save</Text>
         </Pressable>
@@ -173,6 +216,28 @@ export default function SettingsScreen() {
         </View>
       ) : null}
 
+      {session ? (
+        <View style={[styles.queueCard, { borderColor: theme.danger }]}>
+          <Text style={styles.queueTitle}>Danger zone</Text>
+          <Text style={styles.queueText}>
+            Permanently delete your account and all saved items, wiki pages,
+            and devices.
+          </Text>
+          <Pressable
+            style={({ pressed }) => [
+              styles.queueBtnDanger,
+              { marginTop: 12 },
+              pressed && { opacity: 0.6 },
+            ]}
+            onPress={onDeleteAccountPress}
+            accessibilityRole="button"
+            accessibilityLabel="Delete account"
+          >
+            <Text style={styles.queueBtnDangerText}>Delete account</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
       <View style={styles.about}>
         <Text style={styles.aboutTitle}>About</Text>
         <Text style={styles.aboutText}>
@@ -201,6 +266,16 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     marginBottom: 6,
     letterSpacing: 0.5,
+  },
+  accountEmail: {
+    color: theme.text,
+    fontSize: 17,
+    fontWeight: "600",
+  },
+  accountName: {
+    color: theme.textMuted,
+    fontSize: 14,
+    marginTop: 2,
   },
   input: {
     backgroundColor: theme.surfaceSunken,
