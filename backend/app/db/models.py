@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import CITEXT, UUID
@@ -61,8 +62,15 @@ class RefreshToken(Base):
 
 class Item(Base):
     __tablename__ = "items"
+    __table_args__ = (UniqueConstraint("user_id", "url", name="uq_items_user_url"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     url: Mapped[str] = mapped_column(Text, nullable=False)
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
@@ -98,6 +106,14 @@ class ItemChunk(Base):
     item_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("items.id", ondelete="CASCADE"), nullable=False
     )
+    # Denormalized from items.user_id so retrieval SQL can scope chunks
+    # without joining items. Cascade deletes keep it in sync.
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     ord: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBED_DIM))
@@ -107,9 +123,16 @@ class ItemChunk(Base):
 
 class TopicPage(Base):
     __tablename__ = "topic_pages"
+    __table_args__ = (UniqueConstraint("user_id", "slug", name="uq_topic_pages_user_slug"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    slug: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    slug: Mapped[str] = mapped_column(String(255), nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     body_md: Mapped[str] = mapped_column(Text, nullable=False)
     backlinks: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
@@ -128,6 +151,12 @@ class Device(Base):
     __tablename__ = "devices"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     expo_push_token: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     platform: Mapped[str | None] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
@@ -144,6 +173,14 @@ class TopicPageChunk(Base):
         UUID(as_uuid=True),
         ForeignKey("topic_pages.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    # Denormalized from topic_pages.user_id for the same retrieval-scoping
+    # reason as item_chunks.
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     ord: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
