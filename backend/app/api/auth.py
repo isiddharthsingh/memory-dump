@@ -220,3 +220,18 @@ async def logout(
 @router.get("/me", response_model=UserOut)
 async def me(current_user: Annotated[User, Depends(get_current_user)]) -> User:
     return current_user
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_me(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    """Hard-delete the authenticated user.
+
+    The ON DELETE CASCADE FKs on items, item_chunks, topic_pages,
+    topic_page_chunks, refresh_tokens, and devices clear every trace of
+    the account in one statement. No tombstone — bring your own backup.
+    """
+    await session.delete(current_user)
+    await session.commit()
