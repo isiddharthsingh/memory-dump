@@ -2,30 +2,22 @@ import * as SecureStore from "expo-secure-store";
 import { useCallback, useEffect, useState } from "react";
 
 const SERVER_KEY = "memory_dump_server_url";
-const TOKEN_KEY = "memory_dump_api_token";
 
 export type ServerConfig = {
   serverUrl: string | null;
-  apiToken: string | null;
 };
 
 export async function loadConfig(): Promise<ServerConfig> {
-  const [serverUrl, apiToken] = await Promise.all([
-    SecureStore.getItemAsync(SERVER_KEY),
-    SecureStore.getItemAsync(TOKEN_KEY),
-  ]);
-  return { serverUrl, apiToken };
+  const serverUrl = await SecureStore.getItemAsync(SERVER_KEY);
+  return { serverUrl };
 }
 
 export async function saveConfig(cfg: ServerConfig): Promise<void> {
-  await Promise.all([
-    cfg.serverUrl
-      ? SecureStore.setItemAsync(SERVER_KEY, cfg.serverUrl)
-      : SecureStore.deleteItemAsync(SERVER_KEY),
-    cfg.apiToken
-      ? SecureStore.setItemAsync(TOKEN_KEY, cfg.apiToken)
-      : SecureStore.deleteItemAsync(TOKEN_KEY),
-  ]);
+  if (cfg.serverUrl) {
+    await SecureStore.setItemAsync(SERVER_KEY, cfg.serverUrl);
+  } else {
+    await SecureStore.deleteItemAsync(SERVER_KEY);
+  }
 }
 
 export function useConfig(): {

@@ -62,7 +62,7 @@ export default function SettingsScreen() {
 
   async function onSaveServer() {
     const cleanedUrl = serverUrl.trim().replace(/\/$/, "");
-    await save({ serverUrl: cleanedUrl || null, apiToken: null });
+    await save({ serverUrl: cleanedUrl || null });
     Alert.alert("Saved", "Server URL updated.");
   }
 

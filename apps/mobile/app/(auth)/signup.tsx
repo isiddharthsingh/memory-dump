@@ -46,7 +46,7 @@ export default function SignupScreen() {
     try {
       const cleanedUrl = serverUrl.trim().replace(/\/$/, "");
       if (cleanedUrl !== (config?.serverUrl ?? "")) {
-        await saveConfig({ serverUrl: cleanedUrl || null, apiToken: null });
+        await saveConfig({ serverUrl: cleanedUrl || null });
         await loadConfig();
       }
       await signup(
