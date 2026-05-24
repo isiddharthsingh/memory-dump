@@ -1,13 +1,15 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
-import { Stack, useRouter } from "expo-router";
+import { Stack, useRouter, useSegments } from "expo-router";
 import { ShareIntentProvider } from "expo-share-intent";
 import { StatusBar } from "expo-status-bar";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
+import { AuthProvider, useAuth } from "../lib/AuthContext";
+import { setOnSessionInvalid } from "../lib/api";
 import { queryClient } from "../lib/queryClient";
 import { TOUCH_TARGET, cardShadow, radii, theme } from "../lib/theme";
 import { useIncomingShare } from "../lib/useIncomingShare";
@@ -112,6 +114,35 @@ function BackButton({ fallback = "/" }: { fallback?: "/" | "/wiki" }) {
   );
 }
 
+/** Redirects in/out of `(auth)/*` based on session status. */
+function AuthGate({ children }: { children: React.ReactNode }) {
+  const { status, setSession } = useAuth();
+  const router = useRouter();
+  const segments = useSegments();
+
+  // Let the api client forcibly sign out the user (refresh failed, account
+  // deleted, etc.). The callback fires from outside React state, so we
+  // bridge it back through setSession.
+  useEffect(() => {
+    setOnSessionInvalid(() => {
+      void setSession(null);
+    });
+    return () => setOnSessionInvalid(null);
+  }, [setSession]);
+
+  useEffect(() => {
+    if (status === "loading") return;
+    const inAuthGroup = segments[0] === "(auth)";
+    if (status === "signedOut" && !inAuthGroup) {
+      router.replace("/(auth)/login");
+    } else if (status === "signedIn" && inAuthGroup) {
+      router.replace("/");
+    }
+  }, [status, segments, router]);
+
+  return <>{children}</>;
+}
+
 function RootLayoutInner() {
   const router = useRouter();
   return (
@@ -121,36 +152,39 @@ function RootLayoutInner() {
         onResetShareIntent: () => router.replace("/"),
       }}
     >
-      <ShareHandler>
-        <StatusBar style="dark" />
-        <Stack
-          screenOptions={{
-            headerStyle: { backgroundColor: theme.surface },
-            headerTintColor: theme.accent,
-            headerTitleStyle: { color: theme.text, fontWeight: "700" },
-            headerShadowVisible: false,
-            contentStyle: { backgroundColor: theme.bg },
-          }}
-        >
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen
-            name="item/[id]"
-            options={{
-              title: "Item",
-              headerBackVisible: false,
-              headerLeft: () => <BackButton fallback="/" />,
+      <AuthGate>
+        <ShareHandler>
+          <StatusBar style="dark" />
+          <Stack
+            screenOptions={{
+              headerStyle: { backgroundColor: theme.surface },
+              headerTintColor: theme.accent,
+              headerTitleStyle: { color: theme.text, fontWeight: "700" },
+              headerShadowVisible: false,
+              contentStyle: { backgroundColor: theme.bg },
             }}
-          />
-          <Stack.Screen
-            name="wiki/[slug]"
-            options={{
-              title: "Wiki",
-              headerBackVisible: false,
-              headerLeft: () => <BackButton fallback="/wiki" />,
-            }}
-          />
-        </Stack>
-      </ShareHandler>
+          >
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+            <Stack.Screen
+              name="item/[id]"
+              options={{
+                title: "Item",
+                headerBackVisible: false,
+                headerLeft: () => <BackButton fallback="/" />,
+              }}
+            />
+            <Stack.Screen
+              name="wiki/[slug]"
+              options={{
+                title: "Wiki",
+                headerBackVisible: false,
+                headerLeft: () => <BackButton fallback="/wiki" />,
+              }}
+            />
+          </Stack>
+        </ShareHandler>
+      </AuthGate>
     </ShareIntentProvider>
   );
 }
@@ -160,7 +194,9 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: theme.bg }}>
       <SafeAreaProvider>
         <QueryClientProvider client={queryClient}>
-          <RootLayoutInner />
+          <AuthProvider>
+            <RootLayoutInner />
+          </AuthProvider>
         </QueryClientProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
