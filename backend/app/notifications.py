@@ -9,6 +9,7 @@ delivery silently fails.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 
 import httpx
@@ -22,14 +23,19 @@ log = logging.getLogger(__name__)
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
 
-async def send_to_all(
+async def send_to_user(
     session: AsyncSession,
+    user_id: uuid.UUID,
     title: str,
     body: str,
     data: dict[str, Any] | None = None,
 ) -> int:
-    """Fan a single notification out to every registered device."""
-    rows = (await session.execute(select(Device.expo_push_token))).scalars().all()
+    """Fan a single notification out to every device registered to `user_id`."""
+    rows = (
+        await session.execute(
+            select(Device.expo_push_token).where(Device.user_id == user_id)
+        )
+    ).scalars().all()
     if not rows:
         return 0
 

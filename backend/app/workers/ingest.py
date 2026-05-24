@@ -14,7 +14,7 @@ from app.ai.providers import get_vision_provider
 from app.db.models import Item, ItemChunk
 from app.db.session import get_sessionmaker
 from app.extractors.base import get_extractor
-from app.notifications import send_to_all
+from app.notifications import send_to_user
 
 # Transient error types from upstream APIs that should be retried with backoff
 # rather than marked failed. Imported lazily so the worker boots without them.
@@ -67,6 +67,7 @@ async def ingest_item(ctx: dict[str, Any], item_id: str) -> str:
         url = item.url
         source = item.source
         share_text = item.share_text
+        user_id = item.user_id
 
     try:
         extractor = get_extractor(source)
@@ -118,8 +119,9 @@ async def ingest_item(ctx: dict[str, Any], item_id: str) -> str:
                 item.status = "failed"
                 item.error = f"{type(exc).__name__}: {exc}"[:1000]
                 await session.commit()
-                await send_to_all(
+                await send_to_user(
                     session,
+                    item.user_id,
                     title="Save failed",
                     body=(item.title or item.url or "An item")[:120]
                     + f" — {type(exc).__name__}",
@@ -150,6 +152,7 @@ async def ingest_item(ctx: dict[str, Any], item_id: str) -> str:
             session.add(
                 ItemChunk(
                     item_id=item_uuid,
+                    user_id=user_id,
                     ord=i,
                     text=text,
                     embedding=vec,
@@ -191,6 +194,7 @@ async def ingest_file(
         item.status = "processing"
         await session.commit()
         original_name = item.title or path.name
+        user_id = item.user_id
 
     try:
         if not path.exists():
@@ -248,8 +252,9 @@ async def ingest_file(
                 item.status = "failed"
                 item.error = f"{type(exc).__name__}: {exc}"[:1000]
                 await session.commit()
-                await send_to_all(
+                await send_to_user(
                     session,
+                    item.user_id,
                     title="Save failed",
                     body=(item.title or original_name)[:120] + f" — {type(exc).__name__}",
                     data={"item_id": str(item.id)},
@@ -279,6 +284,7 @@ async def ingest_file(
             session.add(
                 ItemChunk(
                     item_id=item_uuid,
+                    user_id=user_id,
                     ord=i,
                     text=text,
                     embedding=vec,
