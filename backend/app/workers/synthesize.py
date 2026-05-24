@@ -15,7 +15,11 @@ log = logging.getLogger(__name__)
 
 
 async def synthesize_topics(ctx: dict[str, Any], item_id: str) -> str:
-    """Fold a freshly-ingested item into AI-maintained topic pages."""
+    """Fold a freshly-ingested item into AI-maintained topic pages.
+
+    All page reads/writes are scoped to `item.user_id` so wiki synthesis
+    only ever touches the owner's pages.
+    """
     item_uuid = uuid.UUID(item_id)
     Session = get_sessionmaker()
 
@@ -25,7 +29,11 @@ async def synthesize_topics(ctx: dict[str, Any], item_id: str) -> str:
             log.info("synthesize: item %s not ready", item_id)
             return "skipped"
 
-        existing_slugs_rows = await session.execute(select(TopicPage.slug))
+        user_id = item.user_id
+
+        existing_slugs_rows = await session.execute(
+            select(TopicPage.slug).where(TopicPage.user_id == user_id)
+        )
         existing_slugs = [s for (s,) in existing_slugs_rows.all()]
 
         proposed = await propose_slugs(
@@ -42,9 +50,13 @@ async def synthesize_topics(ctx: dict[str, Any], item_id: str) -> str:
 
         updated: list[str] = []
         for slug in proposed.slugs:
-            # Fetch (or create) the page.
+            # Fetch (or create) the page — scoped to this user.
             page = (
-                await session.execute(select(TopicPage).where(TopicPage.slug == slug))
+                await session.execute(
+                    select(TopicPage)
+                    .where(TopicPage.user_id == user_id)
+                    .where(TopicPage.slug == slug)
+                )
             ).scalar_one_or_none()
             existing_body = page.body_md if page else ""
             existing_title = page.title if page else None
@@ -64,6 +76,7 @@ async def synthesize_topics(ctx: dict[str, Any], item_id: str) -> str:
 
             if page is None:
                 page = TopicPage(
+                    user_id=user_id,
                     slug=patched.slug,
                     title=patched.title,
                     body_md=patched.body_md,
@@ -90,6 +103,7 @@ async def synthesize_topics(ctx: dict[str, Any], item_id: str) -> str:
                 session.add(
                     TopicPageChunk(
                         topic_page_id=page.id,
+                        user_id=user_id,
                         ord=i,
                         text=text,
                         embedding=vec,
@@ -99,13 +113,15 @@ async def synthesize_topics(ctx: dict[str, Any], item_id: str) -> str:
             # Create stubs for any wikilink targets that don't exist yet,
             # so links resolve cleanly in the UI. Skip slugs we're about to
             # patch as main pages in this same call, and rely on ON CONFLICT
-            # to absorb cross-worker races and within-session autoflush gaps.
+            # over (user_id, slug) to absorb cross-worker races and
+            # within-session autoflush gaps.
             for backlink_slug in patched.backlinks:
                 if backlink_slug in proposed.slugs or backlink_slug in existing_slugs:
                     continue
                 stmt = (
                     pg_insert(TopicPage)
                     .values(
+                        user_id=user_id,
                         slug=backlink_slug,
                         title=backlink_slug.replace("-", " ").title(),
                         body_md="_pending_",
@@ -113,7 +129,9 @@ async def synthesize_topics(ctx: dict[str, Any], item_id: str) -> str:
                         source_item_ids=None,
                         version=1,
                     )
-                    .on_conflict_do_nothing(index_elements=["slug"])
+                    .on_conflict_do_nothing(
+                        constraint="uq_topic_pages_user_slug"
+                    )
                 )
                 await session.execute(stmt)
 
