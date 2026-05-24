@@ -12,17 +12,29 @@ from app.api.schemas import (
     RelatedResponse,
     TopicPageSummary,
 )
-from app.db.models import Item, ItemChunk, TopicPage
+from app.db.models import Item, ItemChunk, TopicPage, User
 from app.db.session import get_session
-from app.deps import require_token
+from app.deps import get_current_user
 from app.queue import get_arq_pool
 
-router = APIRouter(prefix="/items", tags=["items"], dependencies=[Depends(require_token)])
+router = APIRouter(prefix="/items", tags=["items"])
+
+
+async def _get_owned_item(
+    session: AsyncSession, item_id: uuid.UUID, user: User
+) -> Item:
+    """Fetch an item or 404. 404 (not 403) on cross-user access so we
+    don't leak which ids exist on the system."""
+    item = await session.get(Item, item_id)
+    if item is None or item.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    return item
 
 
 @router.get("", response_model=list[ItemSummary])
 async def list_items(
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     status_filter: str | None = Query(None, alias="status"),
@@ -31,7 +43,7 @@ async def list_items(
         None, description="Filter by source: youtube, twitter, instagram, reddit, web"
     ),
 ) -> list[Item]:
-    stmt = select(Item)
+    stmt = select(Item).where(Item.user_id == current_user.id)
     if status_filter:
         stmt = stmt.where(Item.status == status_filter)
     if source:
@@ -46,10 +58,12 @@ async def list_items(
 @router.get("/tags", tags=["items"])
 async def list_tags(
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> dict[str, list[dict[str, int | str]]]:
-    """Aggregate tag counts across ready items."""
+    """Aggregate tag counts across the caller's ready items."""
     stmt = (
         select(func.unnest(Item.tags).label("tag"), func.count().label("n"))
+        .where(Item.user_id == current_user.id)
         .where(Item.status == "ready")
         .where(Item.tags.is_not(None))
         .group_by("tag")
@@ -64,11 +78,9 @@ async def list_tags(
 async def get_item(
     item_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Item:
-    item = await session.get(Item, item_id)
-    if item is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
-    return item
+    return await _get_owned_item(session, item_id, current_user)
 
 
 @router.patch("/{item_id}", response_model=ItemDetail)
@@ -76,13 +88,12 @@ async def patch_item(
     item_id: uuid.UUID,
     body: ItemPatch,
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Item:
     """Update mutable item fields (currently just `share_text`/note) and
     re-run the ingest pipeline so the new note is folded into embeddings.
     """
-    item = await session.get(Item, item_id)
-    if item is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    item = await _get_owned_item(session, item_id, current_user)
     if body.share_text is not None:
         item.share_text = body.share_text or None
     item.status = "processing"
@@ -98,10 +109,9 @@ async def patch_item(
 async def retry_item(
     item_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Item:
-    item = await session.get(Item, item_id)
-    if item is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    item = await _get_owned_item(session, item_id, current_user)
     item.status = "pending"
     item.error = None
     await session.commit()
@@ -115,16 +125,16 @@ async def retry_item(
 async def related_items(
     item_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
     limit: int = Query(6, ge=1, le=20),
 ) -> RelatedResponse:
     """Wiki pages that cite this item + items closest to it by embedding."""
-    item = await session.get(Item, item_id)
-    if item is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    item = await _get_owned_item(session, item_id, current_user)
 
     wiki_stmt = (
         select(TopicPage)
-        .where(TopicPage.source_item_ids.any(item_id))
+        .where(TopicPage.user_id == current_user.id)
+        .where(TopicPage.source_item_ids.any(item.id))
         .order_by(TopicPage.updated_at.desc())
     )
     wiki_rows = (await session.execute(wiki_stmt)).scalars().all()
@@ -144,6 +154,7 @@ async def related_items(
             func.min(ItemChunk.embedding.cosine_distance(centroid_subq)).label("d"),
         )
         .join(ItemChunk, ItemChunk.item_id == Item.id)
+        .where(Item.user_id == current_user.id)
         .where(Item.id != item_id)
         .where(Item.status == "ready")
         .where(ItemChunk.embedding.is_not(None))
@@ -165,9 +176,8 @@ async def related_items(
 async def delete_item(
     item_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
-    item = await session.get(Item, item_id)
-    if item is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    item = await _get_owned_item(session, item_id, current_user)
     await session.delete(item)
     await session.commit()
