@@ -1,15 +1,11 @@
-import os
+from fastapi.testclient import TestClient
 
-os.environ.setdefault("MEMORY_DUMP_API_TOKEN", "test-token")
-
-from fastapi.testclient import TestClient  # noqa: E402
-
-from app.ai.synthesize import (  # noqa: E402
+from app.ai.synthesize import (
     WIKILINK_RE,
     _normalize_slug,
     _strip_json_fence,
 )
-from app.main import app  # noqa: E402
+from app.main import app
 
 
 def test_normalize_slug() -> None:

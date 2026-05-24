@@ -1,10 +1,6 @@
-import os
-
-os.environ.setdefault("MEMORY_DUMP_API_TOKEN", "test-token")
-
-from app.extractors.base import detect_source, get_extractor  # noqa: E402
-from app.extractors.reddit import _parse, _to_json_url  # noqa: E402
-from app.extractors.youtube import extract_video_id  # noqa: E402
+from app.extractors.base import detect_source, get_extractor
+from app.extractors.reddit import _parse, _to_json_url
+from app.extractors.youtube import extract_video_id
 
 
 def test_detect_source_dispatch() -> None:

@@ -1,11 +1,7 @@
-import os
+from fastapi.testclient import TestClient
 
-os.environ.setdefault("MEMORY_DUMP_API_TOKEN", "test-token")
-
-from fastapi.testclient import TestClient  # noqa: E402
-
-from app.ai.retrieval import _rrf_merge  # noqa: E402
-from app.main import app  # noqa: E402
+from app.ai.retrieval import _rrf_merge
+from app.main import app
 
 
 def test_rrf_merge_basic() -> None:

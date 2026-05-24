@@ -1,14 +1,9 @@
 """Tests that don't need a running database or external services."""
 
-import os
+from fastapi.testclient import TestClient
 
-# Ensure required settings are present before importing app modules.
-os.environ.setdefault("MEMORY_DUMP_API_TOKEN", "test-token")
-
-from fastapi.testclient import TestClient  # noqa: E402
-
-from app.api.ingest import detect_source  # noqa: E402
-from app.main import app  # noqa: E402
+from app.api.ingest import detect_source
+from app.main import app
 
 
 def test_detect_source_youtube() -> None:
