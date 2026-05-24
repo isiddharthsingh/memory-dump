@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 import { Platform } from "react-native";
 
 import { api } from "./api";
+import { loadSession } from "./auth";
 import { loadConfig } from "./settings";
 
 Notifications.setNotificationHandler({
@@ -18,9 +19,10 @@ Notifications.setNotificationHandler({
 
 /**
  * Asks for push permission, fetches the Expo push token, and registers
- * it with the backend. Silently no-ops on simulators or when permission
- * is denied. Free Apple Developer accounts get a token but APNs delivery
- * won't actually work — that's expected.
+ * it with the backend. Silently no-ops on simulators, when permission is
+ * denied, or when the user isn't signed in yet. Free Apple Developer
+ * accounts get a token but APNs delivery won't actually work — that's
+ * expected.
  */
 export function usePushRegistration(): void {
   const ranRef = useRef(false);
@@ -49,7 +51,8 @@ export function usePushRegistration(): void {
         );
 
         const cfg = await loadConfig();
-        if (!cfg.serverUrl || !cfg.apiToken) return;
+        const session = await loadSession();
+        if (!cfg.serverUrl || !session) return;
         await api.registerDevice(token.data, Platform.OS);
       } catch {
         // best-effort; silently no-op on errors (simulator, no APNs, etc.)
