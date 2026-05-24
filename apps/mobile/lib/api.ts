@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { Session, auth, clearSession, loadSession } from "./auth";
 import { loadConfig } from "./settings";
 
 const ItemSummary = z.object({
@@ -74,24 +75,77 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Hook for AuthContext to register a callback that fires when refresh
+ * fails and the user must be signed out. Keeps api.ts free of React.
+ */
+let onSessionInvalid: (() => void) | null = null;
+export function setOnSessionInvalid(cb: (() => void) | null): void {
+  onSessionInvalid = cb;
+}
+
+// Coalesce concurrent refresh attempts so a burst of 401s doesn't fire
+// N refresh calls.
+let refreshInFlight: Promise<Session | null> | null = null;
+
+async function refreshSession(currentRefresh: string): Promise<Session | null> {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    try {
+      return await auth.refresh(currentRefresh);
+    } catch {
+      await clearSession();
+      onSessionInvalid?.();
+      return null;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
+}
+
+async function authedFetch(
+  path: string,
+  init: RequestInit,
+): Promise<Response> {
+  const cfg = await loadConfig();
+  if (!cfg.serverUrl) {
+    throw new ApiError(0, "Server URL not configured.");
+  }
+  let session = await loadSession();
+  if (!session) {
+    throw new ApiError(401, "Not signed in.");
+  }
+  const url = cfg.serverUrl.replace(/\/$/, "") + path;
+
+  const send = async (token: string) =>
+    fetch(url, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...(init.headers || {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+  let resp = await send(session.accessToken);
+  if (resp.status === 401) {
+    const refreshed = await refreshSession(session.refreshToken);
+    if (!refreshed) {
+      throw new ApiError(401, "Session expired.");
+    }
+    session = refreshed;
+    resp = await send(session.accessToken);
+  }
+  return resp;
+}
+
 async function request<T>(
   path: string,
   init: RequestInit,
   schema: z.ZodSchema<T>,
 ): Promise<T> {
-  const cfg = await loadConfig();
-  if (!cfg.serverUrl || !cfg.apiToken) {
-    throw new ApiError(0, "Server URL and API token not configured.");
-  }
-  const url = cfg.serverUrl.replace(/\/$/, "") + path;
-  const resp = await fetch(url, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${cfg.apiToken}`,
-      ...(init.headers || {}),
-    },
-  });
+  const resp = await authedFetch(path, init);
   if (!resp.ok) {
     let detail = "";
     try {
@@ -166,9 +220,12 @@ export const api = {
     shareText?: string,
   ): Promise<{ item: ItemSummary }> {
     const cfg = await loadConfig();
-    if (!cfg.serverUrl || !cfg.apiToken) {
-      throw new ApiError(0, "Server URL and API token not configured.");
+    if (!cfg.serverUrl) {
+      throw new ApiError(0, "Server URL not configured.");
     }
+    let session = await loadSession();
+    if (!session) throw new ApiError(401, "Not signed in.");
+
     const form = new FormData();
     // React Native's FormData accepts the { uri, name, type } shape; the
     // server reads it as a standard multipart/form-data upload.
@@ -180,14 +237,23 @@ export const api = {
     if (shareText) form.append("share_text", shareText);
 
     const url = cfg.serverUrl.replace(/\/$/, "") + "/ingest/file";
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${cfg.apiToken}`,
-        // Do NOT set Content-Type — fetch sets the multipart boundary itself.
-      },
-      body: form as unknown as BodyInit,
-    });
+    const send = async (token: string) =>
+      fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          // Do NOT set Content-Type — fetch sets the multipart boundary itself.
+        },
+        body: form as unknown as BodyInit,
+      });
+
+    let resp = await send(session.accessToken);
+    if (resp.status === 401) {
+      const refreshed = await refreshSession(session.refreshToken);
+      if (!refreshed) throw new ApiError(401, "Session expired.");
+      session = refreshed;
+      resp = await send(session.accessToken);
+    }
     if (!resp.ok) {
       let detail = "";
       try {
@@ -258,17 +324,24 @@ export const api = {
       }
     };
 
-    loadConfig()
-      .then((cfg) => {
-        if (cancelled) return;
-        if (!cfg.serverUrl || !cfg.apiToken) {
-          handlers.onError(new ApiError(0, "Server URL and API token not configured."));
-          return;
-        }
-        const url = cfg.serverUrl.replace(/\/$/, "") + "/ask/stream";
+    (async () => {
+      const cfg = await loadConfig();
+      if (cancelled) return;
+      if (!cfg.serverUrl) {
+        handlers.onError(new ApiError(0, "Server URL not configured."));
+        return;
+      }
+      let session = await loadSession();
+      if (!session) {
+        handlers.onError(new ApiError(401, "Not signed in."));
+        return;
+      }
+      const url = cfg.serverUrl.replace(/\/$/, "") + "/ask/stream";
+
+      const open = (token: string) => {
         xhr.open("POST", url);
         xhr.setRequestHeader("Content-Type", "application/json");
-        xhr.setRequestHeader("Authorization", `Bearer ${cfg.apiToken}`);
+        xhr.setRequestHeader("Authorization", `Bearer ${token}`);
         xhr.setRequestHeader("Accept", "text/event-stream");
         xhr.onreadystatechange = () => {
           if (xhr.readyState >= 3 && xhr.status >= 200 && xhr.status < 300) {
@@ -276,7 +349,21 @@ export const api = {
             if (fresh.includes("\n\n")) processBuffer(fresh);
           }
           if (xhr.readyState === 4) {
-            if (xhr.status < 200 || xhr.status >= 300) {
+            if (xhr.status === 401) {
+              // 401 mid-stream: try a single refresh + retry. Avoid
+              // refreshing the same token from the stream while another
+              // request might already be refreshing.
+              refreshSession(session!.refreshToken).then((refreshed) => {
+                if (!refreshed) {
+                  handlers.onError(new ApiError(401, "Session expired."));
+                  return;
+                }
+                session = refreshed;
+                consumed = 0;
+                open(session.accessToken);
+                xhr.send(JSON.stringify({ question }));
+              });
+            } else if (xhr.status < 200 || xhr.status >= 300) {
               handlers.onError(new ApiError(xhr.status, xhr.responseText || xhr.statusText));
             }
           }
@@ -284,9 +371,11 @@ export const api = {
         xhr.onerror = () => {
           if (!cancelled) handlers.onError(new ApiError(0, "Network error"));
         };
-        xhr.send(JSON.stringify({ question }));
-      })
-      .catch((err) => handlers.onError(err as Error));
+      };
+
+      open(session.accessToken);
+      xhr.send(JSON.stringify({ question }));
+    })().catch((err) => handlers.onError(err as Error));
 
     return {
       abort: () => {
@@ -330,7 +419,15 @@ export const api = {
   },
 
   health(): Promise<{ status: string }> {
-    return request(`/healthz`, { method: "GET" }, z.object({ status: z.string() }));
+    // `/healthz` is unauthenticated — don't run it through authedFetch.
+    return (async () => {
+      const cfg = await loadConfig();
+      if (!cfg.serverUrl) throw new ApiError(0, "Server URL not configured.");
+      const url = cfg.serverUrl.replace(/\/$/, "") + "/healthz";
+      const resp = await fetch(url, { method: "GET" });
+      if (!resp.ok) throw new ApiError(resp.status, resp.statusText);
+      return z.object({ status: z.string() }).parse(await resp.json());
+    })();
   },
 
   registerDevice(token: string, platform?: string): Promise<{ id: string }> {
