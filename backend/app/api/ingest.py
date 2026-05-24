@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import IngestRequest, IngestResponse, ItemSummary
+from app.auth.rate_limit import rate_limit
 from app.config import get_settings
 from app.db.models import Item, User
 from app.db.session import get_session
@@ -12,7 +13,11 @@ from app.deps import get_current_user
 from app.extractors.base import detect_source
 from app.queue import get_arq_pool
 
-router = APIRouter(prefix="/ingest", tags=["ingest"])
+_ingest_rate_limit = rate_limit("ingest", "rate_limit_ingest_per_hour")
+
+router = APIRouter(
+    prefix="/ingest", tags=["ingest"], dependencies=[Depends(_ingest_rate_limit)]
+)
 
 # 25 MB cap. Anthropic accepts PDFs up to ~32 MB; we leave headroom for
 # request overhead. Bigger uploads get a 413 instead of a worker failure.

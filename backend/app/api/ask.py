@@ -8,11 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import ask as ask_module
 from app.api.schemas import AskRequest, AskResponse, CitationOut
+from app.auth.rate_limit import rate_limit
 from app.db.models import User
 from app.db.session import get_session
 from app.deps import get_current_user
 
-router = APIRouter(prefix="/ask", tags=["ask"])
+_ask_rate_limit = rate_limit("ask", "rate_limit_ask_per_hour")
+
+router = APIRouter(prefix="/ask", tags=["ask"], dependencies=[Depends(_ask_rate_limit)])
 
 
 @router.post("", response_model=AskResponse)
