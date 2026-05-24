@@ -5,10 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.retrieval import hybrid_search
 from app.api.schemas import SearchHit, SearchRequest, SearchResponse
+from app.db.models import User
 from app.db.session import get_session
-from app.deps import require_token
+from app.deps import get_current_user
 
-router = APIRouter(prefix="/search", tags=["search"], dependencies=[Depends(require_token)])
+router = APIRouter(prefix="/search", tags=["search"])
 
 
 def _snippet(text: str, max_chars: int = 280) -> str:
@@ -22,8 +23,11 @@ def _snippet(text: str, max_chars: int = 280) -> str:
 async def search(
     body: SearchRequest,
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> SearchResponse:
-    chunks = await hybrid_search(session, body.q, final_limit=body.limit)
+    chunks = await hybrid_search(
+        session, body.q, current_user.id, final_limit=body.limit
+    )
     hits = [
         SearchHit(
             kind=c.kind,

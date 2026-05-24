@@ -44,7 +44,7 @@ def _rrf_merge(rankings: list[list[tuple[str, str]]], k: int = 60) -> dict[tuple
 
 
 async def _dense_search(
-    session: AsyncSession, query_vec: list[float], limit: int
+    session: AsyncSession, query_vec: list[float], limit: int, user_id: uuid.UUID
 ) -> list[Candidate]:
     sql = text(
         """
@@ -59,7 +59,8 @@ async def _dense_search(
                    (ic.embedding <=> CAST(:qv AS vector)) AS distance
             FROM item_chunks ic
             JOIN items i ON i.id = ic.item_id
-            WHERE i.status = 'ready' AND ic.embedding IS NOT NULL
+            WHERE ic.user_id = :uid
+              AND i.status = 'ready' AND ic.embedding IS NOT NULL
             ORDER BY ic.embedding <=> CAST(:qv AS vector)
             LIMIT :lim
         ),
@@ -74,7 +75,7 @@ async def _dense_search(
                    (tc.embedding <=> CAST(:qv AS vector)) AS distance
             FROM topic_page_chunks tc
             JOIN topic_pages tp ON tp.id = tc.topic_page_id
-            WHERE tc.embedding IS NOT NULL
+            WHERE tc.user_id = :uid AND tc.embedding IS NOT NULL
             ORDER BY tc.embedding <=> CAST(:qv AS vector)
             LIMIT :lim
         )
@@ -86,7 +87,7 @@ async def _dense_search(
         """
     )
     qv_str = "[" + ",".join(f"{x:.7f}" for x in query_vec) + "]"
-    result = await session.execute(sql, {"qv": qv_str, "lim": limit})
+    result = await session.execute(sql, {"qv": qv_str, "lim": limit, "uid": str(user_id)})
     return [
         Candidate(
             kind=row.kind,
@@ -103,7 +104,7 @@ async def _dense_search(
 
 
 async def _lexical_search(
-    session: AsyncSession, query: str, limit: int
+    session: AsyncSession, query: str, limit: int, user_id: uuid.UUID
 ) -> list[Candidate]:
     # Use the precomputed `fts_doc` generated columns (created in the
     # initial migration) — same content as item/topic-page fields, indexed
@@ -127,7 +128,8 @@ async def _lexical_search(
                    ) AS score
             FROM item_chunks ic
             JOIN items i ON i.id = ic.item_id, q
-            WHERE i.status = 'ready'
+            WHERE ic.user_id = :uid
+              AND i.status = 'ready'
               AND (
                 i.fts_doc @@ q.tsq
                 OR to_tsvector('english'::regconfig, coalesce(ic.text,'')) @@ q.tsq
@@ -150,8 +152,11 @@ async def _lexical_search(
                    ) AS score
             FROM topic_page_chunks tc
             JOIN topic_pages tp ON tp.id = tc.topic_page_id, q
-            WHERE tp.fts_doc @@ q.tsq
-               OR to_tsvector('english'::regconfig, coalesce(tc.text,'')) @@ q.tsq
+            WHERE tc.user_id = :uid
+              AND (
+                tp.fts_doc @@ q.tsq
+                OR to_tsvector('english'::regconfig, coalesce(tc.text,'')) @@ q.tsq
+              )
             ORDER BY score DESC
             LIMIT :lim
         )
@@ -162,7 +167,7 @@ async def _lexical_search(
         LIMIT :lim
         """
     )
-    result = await session.execute(sql, {"q": query, "lim": limit})
+    result = await session.execute(sql, {"q": query, "lim": limit, "uid": str(user_id)})
     return [
         Candidate(
             kind=row.kind,
@@ -181,19 +186,24 @@ async def _lexical_search(
 async def hybrid_search(
     session: AsyncSession,
     query: str,
+    user_id: uuid.UUID,
     *,
     candidate_limit: int = 50,
     final_limit: int = 6,
     use_reranker: bool = True,
 ) -> list[Candidate]:
-    """Run dense + lexical, fuse with RRF, optionally rerank, return top-N."""
+    """Run dense + lexical, fuse with RRF, optionally rerank, return top-N.
+
+    All hits are scoped to `user_id` — items + topic-page chunks owned by
+    other users are never considered.
+    """
     embeddings = await embed_texts([query], input_type="query")
     if not embeddings:
         return []
     qv = embeddings[0]
 
-    dense = await _dense_search(session, qv, candidate_limit)
-    lexical = await _lexical_search(session, query, candidate_limit)
+    dense = await _dense_search(session, qv, candidate_limit, user_id)
+    lexical = await _lexical_search(session, query, candidate_limit, user_id)
 
     by_key: dict[tuple[str, str], Candidate] = {}
     for c in dense + lexical:
