@@ -4,7 +4,8 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 
 import app.logging_setup  # noqa: F401  — configures stdlib + structlog
-from app.api import ask, devices, ingest, items, search, wiki
+from app.api import ask, auth, devices, ingest, items, search, wiki
+from app.auth.rate_limit import close_redis
 from app.queue import close_arq_pool
 
 
@@ -12,6 +13,7 @@ from app.queue import close_arq_pool
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
     await close_arq_pool()
+    await close_redis()
 
 
 app = FastAPI(
@@ -27,6 +29,7 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+app.include_router(auth.router)
 app.include_router(ingest.router)
 app.include_router(items.router)
 app.include_router(search.router)
