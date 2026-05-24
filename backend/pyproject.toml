@@ -26,6 +26,9 @@ dependencies = [
     "python-slugify>=8.0",
     "tenacity>=9.0",
     "structlog>=24.4",
+    "argon2-cffi>=23.1",
+    "pyjwt>=2.10",
+    "email-validator>=2.2",
 ]
 
 [project.optional-dependencies]

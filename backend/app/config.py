@@ -7,7 +7,22 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    api_token: str = Field(alias="MEMORY_DUMP_API_TOKEN")
+    # Legacy single-user bearer token. Still consumed by app/deps.py until
+    # multi-user auth lands; will be removed when get_current_user replaces
+    # require_token.
+    api_token: str = Field(default="", alias="MEMORY_DUMP_API_TOKEN")
+
+    # Secret used to sign access JWTs. Generate with:
+    #   openssl rand -hex 32
+    jwt_secret: str = Field(alias="JWT_SECRET")
+    jwt_access_ttl_min: int = 15
+    jwt_refresh_ttl_days: int = 30
+    allow_signup: bool = True
+
+    # Per-user rate limits applied to the spend-heavy endpoints (Claude +
+    # Voyage usage). Counted in a Redis fixed-window bucket per hour.
+    rate_limit_ingest_per_hour: int = 60
+    rate_limit_ask_per_hour: int = 120
 
     postgres_user: str = "memory"
     postgres_password: str = "memory"
