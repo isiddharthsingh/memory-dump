@@ -7,11 +7,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Legacy single-user bearer token. Still consumed by app/deps.py until
-    # multi-user auth lands; will be removed when get_current_user replaces
-    # require_token.
-    api_token: str = Field(default="", alias="MEMORY_DUMP_API_TOKEN")
-
     # Secret used to sign access JWTs. Generate with:
     #   openssl rand -hex 32
     jwt_secret: str = Field(alias="JWT_SECRET")
