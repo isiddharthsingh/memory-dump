@@ -60,9 +60,16 @@ def _format_context(chunks: list[Candidate]) -> str:
 
 
 async def _collect_citations(
-    session: AsyncSession, answer: str, chunks: list[Candidate]
+    session: AsyncSession,
+    answer: str,
+    chunks: list[Candidate],
+    user_id: uuid.UUID,
 ) -> list[Citation]:
-    """Pull citations referenced in the answer, plus the top chunks as fallback."""
+    """Pull citations referenced in the answer, plus the top chunks as fallback.
+
+    All item/topic-page lookups are scoped to `user_id` so a hallucinated
+    or stale citation can never reveal another user's content.
+    """
     cited_item_ids: set[uuid.UUID] = set()
     cited_slugs: set[str] = set()
     for m in CITATION_RE.finditer(answer):
@@ -97,7 +104,11 @@ async def _collect_citations(
 
     citations: list[Citation] = []
     if cited_item_ids:
-        rows = await session.execute(select(Item).where(Item.id.in_(cited_item_ids)))
+        rows = await session.execute(
+            select(Item)
+            .where(Item.id.in_(cited_item_ids))
+            .where(Item.user_id == user_id)
+        )
         for item in rows.scalars():
             citations.append(
                 Citation(
@@ -109,7 +120,11 @@ async def _collect_citations(
                 )
             )
     if cited_slugs:
-        rows = await session.execute(select(TopicPage).where(TopicPage.slug.in_(cited_slugs)))
+        rows = await session.execute(
+            select(TopicPage)
+            .where(TopicPage.slug.in_(cited_slugs))
+            .where(TopicPage.user_id == user_id)
+        )
         for tp in rows.scalars():
             citations.append(
                 Citation(
@@ -134,10 +149,10 @@ class StreamDone:
 
 
 async def ask_stream(
-    session: AsyncSession, question: str
+    session: AsyncSession, question: str, user_id: uuid.UUID
 ) -> AsyncIterator[StreamToken | StreamDone]:
     """Stream Claude tokens as they arrive, then emit citations at the end."""
-    chunks = await hybrid_search(session, question, final_limit=6)
+    chunks = await hybrid_search(session, question, user_id, final_limit=6)
     if not chunks:
         yield StreamToken(text="I don't have anything saved about that.")
         yield StreamDone(citations=[])
@@ -163,12 +178,12 @@ async def ask_stream(
             yield StreamToken(text=text)
 
     answer = "".join(pieces).strip()
-    citations = await _collect_citations(session, answer, chunks)
+    citations = await _collect_citations(session, answer, chunks, user_id)
     yield StreamDone(citations=citations)
 
 
-async def ask(session: AsyncSession, question: str) -> AskResult:
-    chunks = await hybrid_search(session, question, final_limit=6)
+async def ask(session: AsyncSession, question: str, user_id: uuid.UUID) -> AskResult:
+    chunks = await hybrid_search(session, question, user_id, final_limit=6)
     if not chunks:
         return AskResult(
             answer="I don't have anything saved about that.",
@@ -190,5 +205,5 @@ async def ask(session: AsyncSession, question: str) -> AskResult:
         messages=[{"role": "user", "content": user}],
     )
     answer = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
-    citations = await _collect_citations(session, answer, chunks)
+    citations = await _collect_citations(session, answer, chunks, user_id)
     return AskResult(answer=answer, citations=citations)

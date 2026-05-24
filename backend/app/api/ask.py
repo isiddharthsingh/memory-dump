@@ -8,18 +8,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import ask as ask_module
 from app.api.schemas import AskRequest, AskResponse, CitationOut
+from app.db.models import User
 from app.db.session import get_session
-from app.deps import require_token
+from app.deps import get_current_user
 
-router = APIRouter(prefix="/ask", tags=["ask"], dependencies=[Depends(require_token)])
+router = APIRouter(prefix="/ask", tags=["ask"])
 
 
 @router.post("", response_model=AskResponse)
 async def ask_endpoint(
     body: AskRequest,
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> AskResponse:
-    result = await ask_module.ask(session, body.question)
+    result = await ask_module.ask(session, body.question, current_user.id)
     return AskResponse(
         answer=result.answer,
         citations=[
@@ -43,10 +45,13 @@ def _sse(event: str, data: dict) -> bytes:
 async def ask_stream_endpoint(
     body: AskRequest,
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> StreamingResponse:
+    user_id = current_user.id
+
     async def gen() -> AsyncIterator[bytes]:
         try:
-            async for evt in ask_module.ask_stream(session, body.question):
+            async for evt in ask_module.ask_stream(session, body.question, user_id):
                 if isinstance(evt, ask_module.StreamToken):
                     yield _sse("token", {"text": evt.text})
                 else:
