@@ -6,13 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import IngestRequest, IngestResponse, ItemSummary
 from app.config import get_settings
-from app.db.models import Item
+from app.db.models import Item, User
 from app.db.session import get_session
-from app.deps import require_token
+from app.deps import get_current_user
 from app.extractors.base import detect_source
 from app.queue import get_arq_pool
 
-router = APIRouter(prefix="/ingest", tags=["ingest"], dependencies=[Depends(require_token)])
+router = APIRouter(prefix="/ingest", tags=["ingest"])
 
 # 25 MB cap. Anthropic accepts PDFs up to ~32 MB; we leave headroom for
 # request overhead. Bigger uploads get a 413 instead of a worker failure.
@@ -44,9 +44,11 @@ _MIME_TO_EXT = {
 async def ingest(
     body: IngestRequest,
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> IngestResponse:
     url = str(body.url)
     item = Item(
+        user_id=current_user.id,
         url=url,
         source=detect_source(url),
         status="pending",
@@ -65,6 +67,7 @@ async def ingest(
 @router.post("/file", response_model=IngestResponse, status_code=status.HTTP_202_ACCEPTED)
 async def ingest_file(
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
     file: Annotated[UploadFile, File(...)],
     share_text: Annotated[str | None, Form()] = None,
 ) -> IngestResponse:
@@ -95,6 +98,7 @@ async def ingest_file(
     placeholder_url = f"file://{original_name}"
 
     item = Item(
+        user_id=current_user.id,
         url=placeholder_url,
         source=source,
         status="pending",
