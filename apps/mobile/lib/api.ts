@@ -141,6 +141,27 @@ async function authedFetch(
   return resp;
 }
 
+/**
+ * Multipart POST over XHR. Since SDK 56 the global `fetch` is expo/fetch,
+ * which rejects React Native's `{ uri, name, type }` file parts; RN's
+ * XMLHttpRequest still streams them from disk. XHR also sets the multipart
+ * boundary itself, so no Content-Type header here.
+ */
+function postFormData(
+  url: string,
+  token: string,
+  form: FormData,
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
+    xhr.onerror = () => reject(new ApiError(0, "Network error"));
+    xhr.send(form);
+  });
+}
+
 async function request<T>(
   path: string,
   init: RequestInit,
@@ -227,45 +248,37 @@ export const api = {
     let session = await loadSession();
     if (!session) throw new ApiError(401, "Not signed in.");
 
-    const form = new FormData();
     // React Native's FormData accepts the { uri, name, type } shape; the
     // server reads it as a standard multipart/form-data upload.
-    form.append("file", {
-      uri: file.uri,
-      name: file.name,
-      type: file.mimeType,
-    } as unknown as Blob);
-    if (shareText) form.append("share_text", shareText);
+    const makeForm = () => {
+      const form = new FormData();
+      form.append("file", {
+        uri: file.uri,
+        name: file.name,
+        type: file.mimeType,
+      } as unknown as Blob);
+      if (shareText) form.append("share_text", shareText);
+      return form;
+    };
 
     const url = cfg.serverUrl.replace(/\/$/, "") + "/ingest/file";
-    const send = async (token: string) =>
-      fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          // Do NOT set Content-Type — fetch sets the multipart boundary itself.
-        },
-        body: form as unknown as BodyInit,
-      });
-
-    let resp = await send(session.accessToken);
+    let resp = await postFormData(url, session.accessToken, makeForm());
     if (resp.status === 401) {
       const refreshed = await refreshSession(session.refreshToken);
       if (!refreshed) throw new ApiError(401, "Session expired.");
       session = refreshed;
-      resp = await send(session.accessToken);
+      resp = await postFormData(url, session.accessToken, makeForm());
     }
-    if (!resp.ok) {
+    if (resp.status < 200 || resp.status >= 300) {
       let detail = "";
       try {
-        const body = await resp.json();
-        detail = body?.detail ?? "";
+        detail = JSON.parse(resp.body)?.detail ?? "";
       } catch {
-        detail = await resp.text().catch(() => "");
+        detail = resp.body;
       }
-      throw new ApiError(resp.status, detail || resp.statusText);
+      throw new ApiError(resp.status, detail || `HTTP ${resp.status}`);
     }
-    return z.object({ item: ItemSummary }).parse(await resp.json());
+    return z.object({ item: ItemSummary }).parse(JSON.parse(resp.body));
   },
 
   search(q: string, limit = 10): Promise<{ hits: SearchHit[] }> {
