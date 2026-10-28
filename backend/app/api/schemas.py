@@ -22,6 +22,7 @@ class ItemSummary(BaseModel):
     summary: str | None
     thumbnail_url: str | None
     tags: list[str] | None
+    error: str | None = None
     created_at: datetime
 
 
@@ -32,7 +33,6 @@ class ItemDetail(ItemSummary):
     brands_products: list[str] | None
     topics: list[str] | None
     share_text: str | None
-    error: str | None
 
 
 class ItemPatch(BaseModel):
