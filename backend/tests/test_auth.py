@@ -6,6 +6,7 @@ fresh random email so collisions across runs are impossible.
 """
 
 import uuid
+from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,8 +21,9 @@ def _unique_email() -> str:
 
 
 @pytest.fixture
-def client() -> TestClient:
-    return TestClient(app)
+def client() -> Iterator[TestClient]:
+    with TestClient(app) as c:
+        yield c
 
 
 def _signup(client: TestClient, email: str | None = None) -> dict:
@@ -111,7 +113,9 @@ def test_refresh_rotates_tokens(client: TestClient) -> None:
     assert resp.status_code == 200
     rotated = resp.json()
     assert rotated["refresh_token"] != refresh
-    assert rotated["access_token"] != body["access_token"]
+    # Access JWTs carry only second-resolution claims, so one minted in the
+    # same second as the signup token is byte-identical — just check it exists.
+    assert rotated["access_token"]
     # Old refresh is now revoked — using it again triggers reuse detection.
     reuse = client.post("/auth/refresh", json={"refresh_token": refresh})
     assert reuse.status_code == 401

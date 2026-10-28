@@ -6,6 +6,7 @@ or ask their way into the other's data. Run via
 """
 
 import uuid
+from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
@@ -42,8 +43,9 @@ def two_users(client: TestClient) -> tuple[dict, dict]:
 
 
 @pytest.fixture
-def client() -> TestClient:
-    return TestClient(app)
+def client() -> Iterator[TestClient]:
+    with TestClient(app) as c:
+        yield c
 
 
 def _ingest(client: TestClient, auth: dict[str, str], url: str) -> str:

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import jwt as jwt_helper
 from app.auth.passwords import (
+    DUMMY_PASSWORD_HASH,
     MIN_PASSWORD_LEN,
     WeakPasswordError,
     hash_password,
@@ -141,7 +142,7 @@ async def login(
     # Constant-ish work on the missing-user path: verify against a throwaway
     # hash so timing doesn't trivially leak account existence.
     if user is None:
-        verify_password(body.password, "$argon2id$v=19$m=65536,t=3,p=4$Zm9v$Zm9v")
+        verify_password(body.password, DUMMY_PASSWORD_HASH)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
         )

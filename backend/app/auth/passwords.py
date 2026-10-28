@@ -14,6 +14,11 @@ from argon2.exceptions import InvalidHashError, VerifyMismatchError
 # are encoded into every hash, so changing them later is backwards-compatible.
 _HASHER = PasswordHasher()
 
+# A real hash of a throwaway password, for the unknown-email login path to
+# verify against. It must be produced by `_HASHER`: a hand-written literal
+# with a too-short salt/output makes argon2 raise instead of doing the work.
+DUMMY_PASSWORD_HASH = _HASHER.hash("memory-dump-dummy-password")
+
 MIN_PASSWORD_LEN = 10
 
 

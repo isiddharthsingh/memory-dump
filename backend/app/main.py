@@ -1,11 +1,12 @@
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from fastapi import FastAPI
 
 import app.logging_setup  # noqa: F401  — configures stdlib + structlog
 from app.api import ask, auth, devices, ingest, items, search, wiki
 from app.auth.rate_limit import close_redis
+from app.db.session import get_engine
 from app.queue import close_arq_pool
 
 
@@ -14,6 +15,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
     await close_arq_pool()
     await close_redis()
+    await get_engine().dispose()
 
 
 app = FastAPI(
