@@ -1,49 +1,64 @@
+import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
-import { Link, useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useMemo, useState } from "react";
-import {
-  ActivityIndicator,
-  Alert,
-  Linking,
-  Pressable,
-  ScrollView,
-  Share,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { ActivityIndicator, Linking, Pressable, ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import Markdown from "react-native-markdown-display";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { ItemConnections, ItemDetails } from "../../components/ItemSections";
+import { SourceThumb, showItemActions } from "../../components/ItemRow";
+import { NoteEditor } from "../../components/NoteEditor";
+import { BottomFade, Button, ErrorNotice, IconButton, StatusBadge, Tag } from "../../components/ui";
 import { api } from "../../lib/api";
+import {
+  domainOf,
+  friendlyIngestError,
+  humanizeTag,
+  isUploadedFile,
+  relativeTime,
+  sourceMeta,
+} from "../../lib/format";
 import { parseReaderContent } from "../../lib/readerContent";
-import { TOUCH_TARGET, cardShadow, radii, theme } from "../../lib/theme";
+import { readingMarkdown } from "../../lib/readingStyles";
+import { TOUCH_TARGET, colors, floatingShadow, pressedOpacity, radii, spacing, type } from "../../lib/theme";
 
-const PREVIEW_MAX_CHARS = 500;
-const COLLAPSE_THRESHOLD = 700;
+const PREVIEW_MAX_CHARS = 1200;
+const COLLAPSE_THRESHOLD = 1600;
+const MAX_TAGS = 3;
 
-export default function ItemDetail() {
-  const params = useLocalSearchParams<{ id: string }>();
-  const id = params.id;
+/** Cut long articles at a paragraph or sentence boundary so the preview never ends mid-word. */
+function previewOf(body: string): string | null {
+  if (body.length <= COLLAPSE_THRESHOLD) return null;
+  const slice = body.slice(0, PREVIEW_MAX_CHARS);
+  const lastPara = slice.lastIndexOf("\n\n");
+  if (lastPara > 400) return slice.slice(0, lastPara).trim();
+  const lastSentence = slice.lastIndexOf(". ");
+  if (lastSentence > 400) return slice.slice(0, lastSentence + 1).trim();
+  return slice.trim() + "…";
+}
+
+export default function ItemReader() {
+  const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const qc = useQueryClient();
+  const insets = useSafeAreaInsets();
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   const item = useQuery({
     queryKey: ["item", id],
     queryFn: () => api.getItem(id!),
     enabled: !!id,
     refetchInterval: (q) =>
-      q.state.data && ["pending", "processing"].includes(q.state.data.status)
-        ? 2000
-        : false,
+      q.state.data && ["pending", "processing"].includes(q.state.data.status) ? 2000 : false,
   });
-
   const related = useQuery({
     queryKey: ["item", id, "related"],
     queryFn: () => api.related(id!),
     enabled: !!id && item.data?.status === "ready",
   });
-
   const retry = useMutation({
     mutationFn: () => api.retryItem(id!),
     onSuccess: () => {
@@ -51,7 +66,6 @@ export default function ItemDetail() {
       qc.invalidateQueries({ queryKey: ["items"] });
     },
   });
-
   const remove = useMutation({
     mutationFn: () => api.deleteItem(id!),
     onSuccess: () => {
@@ -60,510 +74,226 @@ export default function ItemDetail() {
     },
   });
 
-  const reader = useMemo(
-    () => parseReaderContent(item.data?.raw_text),
-    [item.data?.raw_text],
-  );
-  const [readerExpanded, setReaderExpanded] = useState(false);
-  // Show a snippet by default for long articles; full text behind a toggle.
-  // Cut at a paragraph or sentence boundary so the preview doesn't end mid-word.
-  const readerPreview = useMemo(() => {
-    if (!reader.body) return null;
-    if (reader.body.length <= COLLAPSE_THRESHOLD) return null; // no need to truncate
-    const slice = reader.body.slice(0, PREVIEW_MAX_CHARS);
-    const lastParaBreak = slice.lastIndexOf("\n\n");
-    if (lastParaBreak > 200) return slice.slice(0, lastParaBreak).trim();
-    const lastSentence = slice.lastIndexOf(". ");
-    if (lastSentence > 200) return slice.slice(0, lastSentence + 1).trim();
-    return slice.trim() + "…";
-  }, [reader.body]);
+  const reader = useMemo(() => parseReaderContent(item.data?.raw_text), [item.data?.raw_text]);
+  // Extracted bodies often open with the page title, which is already the heading.
+  const body = useMemo(() => {
+    const t = item.data?.title?.trim();
+    if (!reader.body || !t || !reader.body.startsWith(t)) return reader.body;
+    return reader.body.slice(t.length).trimStart();
+  }, [reader.body, item.data?.title]);
+  const preview = useMemo(() => (body ? previewOf(body) : null), [body]);
 
   if (item.isPending) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color={theme.accent} />
+        <ActivityIndicator color={colors.ink2} />
       </View>
     );
   }
-
   if (item.error || !item.data) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.errText}>{String((item.error as Error)?.message ?? "Not found")}</Text>
+      <View style={[styles.center, { padding: spacing.lg }]}>
+        <ErrorNotice
+          title="Couldn’t open this item"
+          detail={(item.error as Error | null)?.message ?? "It may have been deleted."}
+          onRetry={() => void item.refetch()}
+        />
       </View>
     );
   }
 
   const it = item.data;
+  const domain = domainOf(it.url);
+  const title = it.title || domain;
+  const note = it.share_text || reader.note;
+  const tags = it.tags ?? [];
+  const author = it.people?.[0];
+  const openOriginal = () => void Linking.openURL(it.url);
+  const share = () => void Share.share({ url: it.url, message: it.title ? `${it.title}\n${it.url}` : it.url });
 
   return (
-    <ScrollView
-      contentContainerStyle={styles.scroll}
-      contentInsetAdjustmentBehavior="automatic"
-    >
-      {it.thumbnail_url ? (
-        <Image
-          source={{ uri: it.thumbnail_url }}
-          style={styles.thumb}
-          contentFit="cover"
-        />
-      ) : null}
+    <View style={styles.container}>
+      <Stack.Screen
+        options={{
+          headerRight: () => (
+            <IconButton
+              icon="ellipsis-horizontal"
+              accessibilityLabel="More actions"
+              onPress={() =>
+                showItemActions(it, { onNote: () => setNoteOpen(true), onDelete: () => remove.mutate() })
+              }
+            />
+          ),
+        }}
+      />
+      <ScrollView
+        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 54 + spacing.xxl * 2 }]}
+      >
+        {it.thumbnail_url ? (
+          <Image source={{ uri: it.thumbnail_url }} style={styles.hero} contentFit="cover" transition={150} />
+        ) : null}
 
-      <Text style={styles.title}>{it.title ?? it.url}</Text>
-      <Text style={styles.url} onPress={() => Linking.openURL(it.url)}>
-        {it.url}
-      </Text>
-
-      {it.status !== "ready" && (
-        <View style={[styles.banner, statusColor(it.status)]}>
-          <Text style={styles.bannerText}>Status: {it.status}</Text>
-          {it.error ? <Text style={styles.bannerError}>{it.error}</Text> : null}
-          {it.status === "failed" && (
-            <Pressable
-              onPress={() => retry.mutate()}
-              style={({ pressed }) => [
-                styles.retryBtn,
-                (retry.isPending || pressed) && { opacity: 0.7 },
-              ]}
-              disabled={retry.isPending}
-              accessibilityRole="button"
-              accessibilityLabel="Retry ingest"
-            >
-              <Text style={styles.retryText}>
-                {retry.isPending ? "Retrying…" : "Retry"}
-              </Text>
-            </Pressable>
-          )}
+        <View style={styles.sourceLine}>
+          <SourceThumb source={it.source} url={it.url} size={20} />
+          <Text style={styles.sourceText} numberOfLines={1}>
+            {sourceMeta(it.url, it.source)}
+          </Text>
         </View>
-      )}
-
-      {it.summary ? (
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Summary</Text>
-          <Text style={styles.body}>{it.summary}</Text>
-        </View>
-      ) : null}
-
-      {(it.tags && it.tags.length > 0) ||
-      (it.people && it.people.length > 0) ||
-      (it.handles && it.handles.length > 0) ||
-      (it.brands_products && it.brands_products.length > 0) ? (
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Entities</Text>
-          <EntityRow label="tags" items={it.tags} />
-          <EntityRow label="people" items={it.people} />
-          <EntityRow label="handles" items={it.handles} />
-          <EntityRow label="brands" items={it.brands_products} />
-          <EntityRow label="topics" items={it.topics} />
-        </View>
-      ) : null}
-
-      {related.data && related.data.in_wiki.length > 0 ? (
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Appears in wiki</Text>
-          {related.data.in_wiki.map((tp) => (
-            <Link
-              key={tp.id}
-              href={{ pathname: "/wiki/[slug]", params: { slug: tp.slug } }}
-              asChild
-            >
-              <Pressable
-                style={({ pressed }) => [
-                  styles.refRow,
-                  pressed && { opacity: 0.6 },
-                ]}
-              >
-                <Text style={styles.refKind}>wiki</Text>
-                <Text style={styles.refTitle} numberOfLines={2}>
-                  {tp.title}
-                </Text>
-              </Pressable>
-            </Link>
-          ))}
-        </View>
-      ) : null}
-
-      {related.data && related.data.related.length > 0 ? (
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Related items</Text>
-          {related.data.related.map((r) => (
-            <Link
-              key={r.id}
-              href={{ pathname: "/item/[id]", params: { id: r.id } }}
-              asChild
-            >
-              <Pressable
-                style={({ pressed }) => [
-                  styles.refRow,
-                  pressed && { opacity: 0.6 },
-                ]}
-              >
-                <Text style={styles.refKind}>{r.source}</Text>
-                <Text style={styles.refTitle} numberOfLines={2}>
-                  {r.title ?? r.url}
-                </Text>
-              </Pressable>
-            </Link>
-          ))}
-        </View>
-      ) : null}
-
-      {it.status === "ready" ? (
-        <View style={styles.readerSection}>
-          <Text style={styles.sectionLabel}>Read</Text>
-          {reader.note ? (
-            <View style={styles.noteCallout}>
-              <Text style={styles.noteLabel}>Your note</Text>
-              <Text style={styles.noteText}>{reader.note}</Text>
-            </View>
+        <Text style={styles.title} accessibilityRole="header">
+          {title}
+        </Text>
+        <Text style={styles.byline}>
+          {author ? (
+            <>
+              By <Text style={styles.bylineName}>{author}</Text> ·{" "}
+            </>
           ) : null}
-          {reader.body && !reader.isStub ? (
-            <View>
-              <Markdown style={readerMarkdownStyles}>
-                {readerPreview && !readerExpanded ? readerPreview : reader.body}
+          Saved {relativeTime(it.created_at)}
+        </Text>
+        {tags.length > 0 ? (
+          <View style={styles.tags}>
+            {tags.slice(0, MAX_TAGS).map((t) => (
+              <Tag key={t} label={humanizeTag(t)} />
+            ))}
+            {tags.length > MAX_TAGS ? <Tag label={`+${tags.length - MAX_TAGS}`} /> : null}
+          </View>
+        ) : null}
+
+        {it.status === "failed" ? (
+          isUploadedFile(it.url) ? (
+            <ErrorNotice
+              title={friendlyIngestError(it.error, it.url)}
+              detail="The file isn’t kept after a failed save. Share it to Memory Dump again to try once more."
+              style={styles.block}
+            />
+          ) : (
+            <ErrorNotice
+              title={friendlyIngestError(it.error, it.url)}
+              detail={`We couldn’t fetch ${domain}. Check the link, or try again.`}
+              onRetry={() => retry.mutate()}
+              retrying={retry.isPending}
+              style={styles.block}
+            />
+          )
+        ) : it.status !== "ready" ? (
+          <View style={[styles.block, styles.pending]}>
+            <StatusBadge status={it.status} />
+            <Text style={styles.pendingText}>Summarizing and filing this link. It’ll be ready in a moment.</Text>
+          </View>
+        ) : null}
+
+        {note ? (
+          <Pressable
+            onPress={() => setNoteOpen(true)}
+            style={({ pressed }) => [styles.block, styles.note, pressed && { opacity: pressedOpacity }]}
+            accessibilityRole="button"
+            accessibilityHint="Edit your note"
+          >
+            <Text style={styles.calloutLabel}>Your note</Text>
+            <Text style={styles.noteText}>{note}</Text>
+          </Pressable>
+        ) : null}
+
+        {it.summary ? (
+          <View style={[styles.block, styles.summary]}>
+            <View style={styles.calloutHeader}>
+              <Ionicons name="sparkles-outline" size={15} color={colors.accent} />
+              <Text style={[styles.calloutLabel, { color: colors.accent }]}>Summary</Text>
+            </View>
+            <Text style={styles.summaryText}>{it.summary}</Text>
+          </View>
+        ) : null}
+
+        {it.status === "ready" ? (
+          body && !reader.isStub ? (
+            <View style={styles.article}>
+              <Markdown style={readingMarkdown} onLinkPress={(url) => (Linking.openURL(url).catch(() => undefined), false)}>
+                {preview && !expanded ? preview : body}
               </Markdown>
-              {readerPreview ? (
-                <Pressable
-                  onPress={() => setReaderExpanded((v) => !v)}
-                  style={({ pressed }) => [
-                    styles.readerToggle,
-                    pressed && { opacity: 0.6 },
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityLabel={
-                    readerExpanded ? "Collapse article" : "Show full article"
-                  }
-                >
-                  <Text style={styles.readerToggleText}>
-                    {readerExpanded ? "Show less" : "Show more"}
-                  </Text>
-                </Pressable>
+              {preview ? (
+                <Button
+                  label={expanded ? "Show less" : "Continue reading"}
+                  variant="secondary"
+                  size="md"
+                  onPress={() => setExpanded((v) => !v)}
+                  style={styles.continue}
+                />
               ) : null}
             </View>
           ) : (
-            <View style={styles.readerEmpty}>
-              <Text style={styles.readerEmptyText}>
-                Couldn't extract a readable version of this page — it may be
-                paywalled or behind a bot wall.
-              </Text>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.readerEmptyBtn,
-                  pressed && { opacity: 0.6 },
-                ]}
-                onPress={() => Linking.openURL(it.url)}
-                accessibilityRole="link"
-                accessibilityLabel="Open original URL"
-              >
-                <Text style={styles.readerEmptyBtnText}>Open original →</Text>
-              </Pressable>
-            </View>
-          )}
+            <Text style={[styles.block, styles.stub]}>
+              There’s no readable version of this page. It may be paywalled or behind a bot wall. Open the
+              original to read it.
+            </Text>
+          )
+        ) : null}
+
+        {related.data ? <ItemConnections inWiki={related.data.in_wiki} related={related.data.related} /> : null}
+        <ItemDetails item={it} />
+      </ScrollView>
+
+      <BottomFade height={Math.max(insets.bottom, spacing.lg) + 54 + 28} />
+      <View style={[styles.toolbar, { bottom: Math.max(insets.bottom, spacing.lg) }]}>
+        <Button label="Open original" icon="open-outline" onPress={openOriginal} style={styles.openButton} />
+        <View style={styles.toolCapsule}>
+          <IconButton icon="create-outline" accessibilityLabel="Add a note" onPress={() => setNoteOpen(true)} />
+          <IconButton
+            icon="sparkles-outline"
+            color={colors.accent}
+            accessibilityLabel="Ask about this item"
+            onPress={() => router.push({ pathname: "/ask", params: { q: `What are the key ideas in “${title}”?` } })}
+          />
+          <IconButton icon="share-outline" accessibilityLabel="Share" onPress={share} />
         </View>
-      ) : null}
-
-      <View style={styles.actions}>
-        <Pressable
-          style={({ pressed }) => [
-            styles.openBtn,
-            pressed && { backgroundColor: theme.accentPressed },
-          ]}
-          onPress={() => Linking.openURL(it.url)}
-          accessibilityRole="link"
-          accessibilityLabel="Open original URL"
-        >
-          <Text style={styles.openBtnText}>Open original</Text>
-        </Pressable>
-        <Pressable
-          style={({ pressed }) => [
-            styles.shareBtn,
-            pressed && { opacity: 0.6 },
-          ]}
-          onPress={() =>
-            Share.share({
-              url: it.url,
-              message: it.title ? `${it.title}\n${it.url}` : it.url,
-              title: it.title ?? undefined,
-            })
-          }
-          accessibilityRole="button"
-          accessibilityLabel="Share item"
-        >
-          <Text style={styles.shareBtnText}>Share</Text>
-        </Pressable>
-        <Pressable
-          style={({ pressed }) => [
-            styles.dangerBtn,
-            pressed && { opacity: 0.6 },
-          ]}
-          onPress={() =>
-            Alert.alert("Delete?", "This removes the item permanently.", [
-              { text: "Cancel" },
-              {
-                text: "Delete",
-                style: "destructive",
-                onPress: () => remove.mutate(),
-              },
-            ])
-          }
-          disabled={remove.isPending}
-          accessibilityRole="button"
-          accessibilityLabel="Delete item"
-        >
-          <Text style={styles.dangerBtnText}>Delete</Text>
-        </Pressable>
       </View>
-    </ScrollView>
-  );
-}
 
-function EntityRow({ label, items }: { label: string; items: string[] | null }) {
-  if (!items || items.length === 0) return null;
-  return (
-    <View style={styles.entityRow}>
-      <Text style={styles.entityLabel}>{label}:</Text>
-      <Text style={styles.entityValues}>{items.join(", ")}</Text>
+      <NoteEditor
+        visible={noteOpen}
+        itemId={it.id}
+        itemTitle={title}
+        initialText={it.share_text ?? ""}
+        onClose={() => setNoteOpen(false)}
+      />
     </View>
   );
 }
 
-const readerMarkdownStyles = {
-  body: { color: theme.text, fontSize: 16, lineHeight: 25 },
-  paragraph: { marginTop: 0, marginBottom: 14 },
-  heading1: {
-    color: theme.text,
-    fontSize: 22,
-    fontWeight: "700",
-    marginTop: 18,
-    marginBottom: 8,
-    letterSpacing: -0.3,
-  },
-  heading2: {
-    color: theme.text,
-    fontSize: 19,
-    fontWeight: "700",
-    marginTop: 16,
-    marginBottom: 6,
-    letterSpacing: -0.2,
-  },
-  heading3: {
-    color: theme.text,
-    fontSize: 17,
-    fontWeight: "600",
-    marginTop: 14,
-    marginBottom: 4,
-  },
-  link: { color: theme.accent, fontWeight: "500" },
-  blockquote: {
-    backgroundColor: theme.surfaceSunken,
-    borderLeftWidth: 3,
-    borderLeftColor: theme.borderStrong,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginVertical: 8,
-  },
-  code_inline: {
-    backgroundColor: theme.surfaceSunken,
-    color: theme.text,
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-    borderRadius: 4,
-    fontFamily: "Menlo",
-    fontSize: 14,
-  },
-  code_block: {
-    backgroundColor: theme.surfaceSunken,
-    color: theme.text,
-    padding: 12,
-    borderRadius: radii.md,
-    fontFamily: "Menlo",
-    fontSize: 13,
-    lineHeight: 19,
-  },
-  bullet_list: { marginVertical: 4 },
-  ordered_list: { marginVertical: 4 },
-  list_item: { marginBottom: 4 },
-  hr: { backgroundColor: theme.border, height: StyleSheet.hairlineWidth, marginVertical: 14 },
-} as const;
-
-function statusColor(status: string) {
-  if (status === "failed") return { borderColor: theme.danger, backgroundColor: theme.dangerSoft };
-  if (status === "processing") return { borderColor: theme.accent, backgroundColor: theme.accentSoft };
-  return { borderColor: theme.border, backgroundColor: theme.surface };
-}
-
 const styles = StyleSheet.create({
-  scroll: { padding: 16, paddingBottom: 48 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: theme.bg },
-  errText: { color: theme.danger },
-  thumb: {
-    width: "100%",
-    aspectRatio: 16 / 9,
-    borderRadius: radii.lg,
-    marginBottom: 14,
-    backgroundColor: theme.surfaceSunken,
-  },
-  title: {
-    color: theme.text,
-    fontSize: 24,
-    fontWeight: "700",
-    letterSpacing: -0.5,
-  },
-  url: { color: theme.accent, marginTop: 4, fontSize: 13, fontWeight: "500" },
-  banner: {
-    borderWidth: 1,
-    borderRadius: radii.md,
-    padding: 12,
-    marginTop: 16,
-    gap: 8,
-  },
-  bannerText: { color: theme.text, fontWeight: "600" },
-  bannerError: { color: theme.danger, fontSize: 12 },
-  retryBtn: {
-    alignSelf: "flex-start",
-    paddingHorizontal: 16,
-    minHeight: TOUCH_TARGET,
-    justifyContent: "center",
-    backgroundColor: theme.accent,
-    borderRadius: radii.md,
-  },
-  retryText: { color: "#FFFFFF", fontWeight: "600", fontSize: 15 },
-  section: {
-    marginTop: 18,
-    padding: 16,
-    backgroundColor: theme.surface,
-    borderRadius: radii.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    ...cardShadow("sm"),
-  },
-  sectionLabel: {
-    color: theme.textMuted,
-    fontSize: 11,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 8,
-  },
-  body: { color: theme.text, fontSize: 15, lineHeight: 22 },
-  entityRow: { flexDirection: "row", flexWrap: "wrap", marginTop: 4 },
-  entityLabel: { color: theme.textMuted, marginRight: 4, fontSize: 13, fontWeight: "600" },
-  entityValues: { color: theme.text, fontSize: 13, flex: 1 },
-  readerSection: {
-    marginTop: 18,
-    padding: 18,
-    backgroundColor: theme.surface,
-    borderRadius: radii.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    ...cardShadow("sm"),
-  },
-  noteCallout: {
-    padding: 12,
-    backgroundColor: theme.surfaceSunken,
-    borderRadius: radii.md,
-    borderLeftWidth: 3,
-    borderLeftColor: theme.accent,
-    marginBottom: 14,
-  },
-  noteLabel: {
-    color: theme.textMuted,
-    fontSize: 10,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 4,
-  },
-  noteText: { color: theme.text, fontSize: 14, lineHeight: 20 },
-  readerEmpty: {
-    paddingVertical: 8,
-    gap: 12,
-  },
-  readerEmptyText: {
-    color: theme.textMuted,
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  readerEmptyBtn: {
-    alignSelf: "flex-start",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: radii.sm,
-    borderWidth: 1,
-    borderColor: theme.borderStrong,
-  },
-  readerEmptyBtnText: {
-    color: theme.text,
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  readerToggle: {
-    alignSelf: "flex-start",
-    marginTop: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: theme.borderStrong,
-    backgroundColor: theme.surfaceSunken,
-  },
-  readerToggleText: {
-    color: theme.text,
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  actions: { flexDirection: "row", gap: 8, marginTop: 24, marginBottom: 32 },
-  openBtn: {
-    flex: 1,
-    backgroundColor: theme.accent,
-    borderRadius: radii.md,
-    paddingVertical: 14,
-    minHeight: TOUCH_TARGET,
-    alignItems: "center",
-    justifyContent: "center",
-    ...cardShadow("sm"),
-  },
-  openBtnText: { color: "#FFFFFF", fontWeight: "700", fontSize: 16 },
-  shareBtn: {
-    backgroundColor: theme.surface,
-    borderWidth: 1,
-    borderColor: theme.accent,
-    borderRadius: radii.md,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    minHeight: TOUCH_TARGET,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  shareBtnText: { color: theme.accent, fontWeight: "700", fontSize: 16 },
-  dangerBtn: {
-    backgroundColor: theme.surface,
-    borderWidth: 1,
-    borderColor: theme.danger,
-    borderRadius: radii.md,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    minHeight: TOUCH_TARGET,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  dangerBtnText: { color: theme.danger, fontWeight: "700", fontSize: 16 },
-  refRow: {
+  container: { flex: 1, backgroundColor: colors.bg },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.bg },
+  scroll: { paddingHorizontal: spacing.xl, paddingTop: spacing.sm },
+  hero: { width: "100%", aspectRatio: 16 / 9, borderRadius: radii.xl, marginBottom: spacing.lg, backgroundColor: colors.fill },
+  sourceLine: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  sourceText: { ...type.footnote, color: colors.ink2, flexShrink: 1 },
+  title: { ...type.readingTitle, color: colors.ink, marginTop: spacing.md },
+  byline: { ...type.callout, color: colors.ink2, marginTop: spacing.sm },
+  bylineName: { color: colors.ink, fontWeight: "500" },
+  tags: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: spacing.md },
+  block: { marginTop: spacing.lg },
+  pending: { gap: spacing.sm },
+  pendingText: { ...type.callout, color: colors.ink2 },
+  note: { padding: spacing.lg - 4, borderRadius: radii.xl, backgroundColor: colors.processingSoft, gap: spacing.xs },
+  noteText: { ...type.callout, color: colors.ink },
+  summary: { padding: spacing.lg - 4, borderRadius: radii.xl, backgroundColor: colors.surfaceMuted, gap: spacing.sm },
+  calloutHeader: { flexDirection: "row", alignItems: "center", gap: 6 },
+  calloutLabel: { ...type.footnote, fontWeight: "600", color: colors.ink2 },
+  summaryText: { ...type.callout, color: colors.inkReading },
+  article: { marginTop: spacing.xl },
+  continue: { alignSelf: "flex-start" },
+  stub: { ...type.callout, color: colors.ink2 },
+  toolbar: { position: "absolute", left: spacing.lg, right: spacing.lg, flexDirection: "row", alignItems: "center", gap: 10 },
+  openButton: { flex: 1, ...floatingShadow },
+  toolCapsule: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    paddingVertical: 12,
-    minHeight: TOUCH_TARGET,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.border,
+    height: 54,
+    paddingHorizontal: spacing.xs,
+    borderRadius: radii.pill,
+    backgroundColor: colors.bg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.hairlineStrong,
+    minWidth: TOUCH_TARGET * 3,
+    ...floatingShadow,
   },
-  refKind: {
-    color: theme.accent,
-    fontSize: 11,
-    fontWeight: "700",
-    width: 48,
-    textTransform: "uppercase",
-    letterSpacing: 0.3,
-  },
-  refTitle: { color: theme.text, fontSize: 14, flex: 1 },
 });

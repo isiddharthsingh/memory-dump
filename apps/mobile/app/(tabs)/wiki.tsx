@@ -1,30 +1,24 @@
 import { useQuery } from "@tanstack/react-query";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
-import {
-  FlatList,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
+import { FlatList, RefreshControl, StyleSheet, View } from "react-native";
 
 import { EmptyState } from "../../components/EmptyState";
+import { useTabBarSpace } from "../../components/FloatingTabBar";
 import { WikiSkeletonList } from "../../components/Skeleton";
+import { ErrorNotice, LinkRow, ScreenHeader, WikiTile } from "../../components/ui";
 import { api } from "../../lib/api";
-import { cardShadow, radii, theme } from "../../lib/theme";
+import { plural, relativeTime, topicTitle } from "../../lib/format";
+import { colors, spacing } from "../../lib/theme";
 
 export default function WikiScreen() {
   const router = useRouter();
-  const pages = useQuery({
-    queryKey: ["wiki"],
-    queryFn: () => api.listWiki(),
-  });
+  const bottomSpace = useTabBarSpace();
+  const pages = useQuery({ queryKey: ["wiki"], queryFn: () => api.listWiki() });
 
   useFocusEffect(
     useCallback(() => {
-      pages.refetch();
+      void pages.refetch();
     }, [pages]),
   );
 
@@ -38,76 +32,62 @@ export default function WikiScreen() {
     }
   }, [pages]);
 
+  const count = pages.data?.length ?? 0;
+
+  let body: React.ReactNode;
   if (pages.isPending) {
-    return <WikiSkeletonList />;
-  }
-
-  if (pages.error) {
-    return (
-      <View style={styles.center}>
-        <Text style={styles.errText}>Couldn't load wiki.</Text>
-      </View>
+    body = <WikiSkeletonList />;
+  } else if (pages.error) {
+    body = (
+      <ErrorNotice
+        title="Couldn’t load your wiki"
+        detail={(pages.error as Error).message}
+        onRetry={() => void pages.refetch()}
+        retrying={pages.isRefetching}
+        style={styles.notice}
+      />
     );
-  }
-
-  if (pages.data && pages.data.length === 0) {
-    return (
+  } else if (count === 0) {
+    body = (
       <EmptyState
-        emoji="📚"
-        title="Wiki is empty"
-        message="As you save items, topic pages appear here. Each page is maintained automatically and links to the source items."
+        icon="book-outline"
+        title="Your wiki is empty"
+        message="As you save links, topic pages are written and kept up to date here, each linking back to its sources."
+      />
+    );
+  } else {
+    body = (
+      <FlatList
+        data={pages.data ?? []}
+        keyExtractor={(p) => p.id}
+        contentContainerStyle={[styles.list, { paddingBottom: bottomSpace }]}
+        refreshControl={<RefreshControl refreshing={pulling} onRefresh={onPullRefresh} tintColor={colors.ink2} />}
+        renderItem={({ item, index }) => (
+          <LinkRow
+            leading={<WikiTile />}
+            title={topicTitle(item.title)}
+            subtitle={`${plural(item.source_item_ids?.length ?? 0, "source")} · updated ${relativeTime(item.updated_at)}`}
+            onPress={() => router.push({ pathname: "/wiki/[slug]", params: { slug: item.slug } })}
+            last={index === count - 1}
+          />
+        )}
       />
     );
   }
 
   return (
-    <FlatList
-      data={pages.data ?? []}
-      keyExtractor={(p) => p.id}
-      contentContainerStyle={styles.list}
-      refreshControl={
-        <RefreshControl
-          refreshing={pulling}
-          onRefresh={onPullRefresh}
-          tintColor={theme.accent}
-        />
-      }
-      renderItem={({ item }) => (
-        <TouchableOpacity
-          activeOpacity={0.85}
-          style={styles.row}
-          onPress={() =>
-            router.push({ pathname: "/wiki/[slug]", params: { slug: item.slug } })
-          }
-          accessibilityRole="button"
-          accessibilityLabel={`Open wiki page ${item.title}`}
-        >
-          <Text style={styles.title}>{item.title}</Text>
-          <Text style={styles.slug}>{item.slug}</Text>
-          <Text style={styles.meta}>
-            {item.source_item_ids?.length ?? 0} item(s) · v{item.version}
-          </Text>
-        </TouchableOpacity>
-      )}
-    />
+    <View style={styles.container}>
+      <ScreenHeader
+        title="Wiki"
+        subtitle={count > 0 ? `${plural(count, "topic")}, written from your saves` : null}
+      />
+      {body}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  list: { padding: 12 },
-  row: {
-    backgroundColor: theme.surface,
-    padding: 16,
-    borderRadius: radii.lg,
-    marginBottom: 10,
-    minHeight: 72,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    ...cardShadow("sm"),
-  },
-  title: { color: theme.text, fontSize: 16, fontWeight: "600", letterSpacing: -0.2 },
-  slug: { color: theme.accent, marginTop: 2, fontSize: 12, fontWeight: "500" },
-  meta: { color: theme.textMuted, fontSize: 12, marginTop: 4 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  errText: { color: theme.danger },
+  container: { flex: 1, backgroundColor: colors.bg },
+  list: { paddingHorizontal: spacing.lg, paddingTop: spacing.xs },
+  notice: { margin: spacing.lg },
 });

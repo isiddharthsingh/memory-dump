@@ -12,6 +12,8 @@ const ItemSummary = z.object({
   summary: z.string().nullable(),
   thumbnail_url: z.string().nullable(),
   tags: z.array(z.string()).nullable(),
+  // Optional so the app still parses servers older than this field.
+  error: z.string().nullable().optional(),
   created_at: z.string(),
 });
 
@@ -22,7 +24,6 @@ const ItemDetail = ItemSummary.extend({
   brands_products: z.array(z.string()).nullable(),
   topics: z.array(z.string()).nullable(),
   share_text: z.string().nullable(),
-  error: z.string().nullable(),
 });
 
 const TopicPageSummary = z.object({

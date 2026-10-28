@@ -1,51 +1,47 @@
 import { Ionicons } from "@expo/vector-icons";
 import { StyleSheet, Text, View } from "react-native";
 
-import { cardShadow, radii, theme } from "../lib/theme";
+import { colors, floatingShadow, radii, spacing, type } from "../lib/theme";
+import { AppMark } from "./ui";
 
 type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
 
-const APPS: { name: string; icon: IoniconName; color: string; highlight?: boolean }[] = [
-  { name: "Messages", icon: "chatbubble", color: theme.textMuted },
-  { name: "Mail", icon: "mail", color: theme.textMuted },
-  { name: "Notes", icon: "document-text", color: theme.textMuted },
-  { name: "memory-dump", icon: "sparkles", color: theme.accent, highlight: true },
+const OTHER_APPS: { name: string; icon: IoniconName }[] = [
+  { name: "Messages", icon: "chatbubble-outline" },
+  { name: "Mail", icon: "mail-outline" },
+  { name: "Notes", icon: "document-text-outline" },
 ];
 
+/** Illustration of the iOS share sheet for the empty Library. */
 export function ShareSheetMock() {
   return (
-    <View style={styles.sheet}>
-      <View style={styles.handle} />
+    <View style={styles.sheet} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+      <View style={styles.grabber} />
       <View style={styles.linkBar}>
-        <Ionicons name="link" size={14} color={theme.textMuted} />
+        <Ionicons name="link-outline" size={14} color={colors.ink2} />
         <Text style={styles.linkText} numberOfLines={1}>
           youtube.com/watch?v=…
         </Text>
       </View>
       <View style={styles.row}>
-        {APPS.map((a) => (
+        {OTHER_APPS.map((a) => (
           <View key={a.name} style={styles.appCell}>
-            <View
-              style={[
-                styles.appIcon,
-                { backgroundColor: a.color + "22" },
-                a.highlight && styles.appIconHighlight,
-              ]}
-            >
-              <Ionicons name={a.icon} size={22} color={a.color} />
+            <View style={styles.appIcon}>
+              <Ionicons name={a.icon} size={22} color={colors.ink2} />
             </View>
-            <Text
-              style={[styles.appLabel, a.highlight && styles.appLabelHighlight]}
-              numberOfLines={1}
-            >
+            <Text style={styles.appLabel} numberOfLines={1}>
               {a.name}
             </Text>
           </View>
         ))}
-      </View>
-      <View style={styles.arrowWrap}>
-        <Ionicons name="arrow-up" size={18} color={theme.accent} />
-        <Text style={styles.arrowText}>Tap memory-dump to save</Text>
+        <View style={styles.appCell}>
+          <View style={styles.markRing}>
+            <AppMark size={44} />
+          </View>
+          <Text style={[styles.appLabel, styles.appLabelHighlight]} numberOfLines={1}>
+            Memory Dump
+          </Text>
+        </View>
       </View>
     </View>
   );
@@ -53,59 +49,44 @@ export function ShareSheetMock() {
 
 const styles = StyleSheet.create({
   sheet: {
-    width: 280,
-    backgroundColor: theme.surface,
-    borderRadius: radii.xl,
-    padding: 16,
+    width: 300,
+    backgroundColor: colors.bg,
+    borderRadius: radii.sheet,
+    padding: spacing.lg - 4,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    ...cardShadow("md"),
+    borderColor: colors.hairlineStrong,
+    ...floatingShadow,
   },
-  handle: {
+  grabber: {
     alignSelf: "center",
     width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: theme.borderStrong,
-    marginBottom: 12,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: colors.hairlineStrong,
+    marginBottom: spacing.md,
   },
   linkBar: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: theme.surfaceSunken,
+    backgroundColor: colors.fill,
     borderRadius: radii.sm,
     paddingHorizontal: 10,
-    paddingVertical: 8,
-    marginBottom: 14,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.lg - 4,
   },
-  linkText: { color: theme.textMuted, fontSize: 12, flex: 1 },
+  linkText: { ...type.caption, fontWeight: "400", color: colors.ink2, flex: 1 },
   row: { flexDirection: "row", justifyContent: "space-between" },
-  appCell: { alignItems: "center", width: 56 },
+  appCell: { alignItems: "center", width: 62, gap: 6 },
   appIcon: {
     width: 48,
     height: 48,
     borderRadius: radii.md,
+    backgroundColor: colors.fill,
     alignItems: "center",
     justifyContent: "center",
   },
-  appIconHighlight: {
-    borderWidth: 2,
-    borderColor: theme.accent,
-  },
-  appLabel: {
-    color: theme.textMuted,
-    fontSize: 10,
-    marginTop: 6,
-    textAlign: "center",
-  },
-  appLabelHighlight: { color: theme.accent, fontWeight: "700" },
-  arrowWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginTop: 14,
-    justifyContent: "center",
-  },
-  arrowText: { color: theme.accent, fontSize: 12, fontWeight: "600" },
+  markRing: { padding: 2, borderRadius: radii.md + 2, borderWidth: 2, borderColor: colors.accent },
+  appLabel: { fontSize: 10, color: colors.ink2, textAlign: "center" },
+  appLabelHighlight: { color: colors.accent, fontWeight: "700" },
 });

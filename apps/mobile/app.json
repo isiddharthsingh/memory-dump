@@ -15,6 +15,7 @@
       "bundleIdentifier": "com.siddharthsingh.memorydump",
       "supportsTablet": true,
       "infoPlist": {
+        "CFBundleDisplayName": "Memory Dump",
         "NSCameraUsageDescription": "Not used.",
         "NSPhotoLibraryUsageDescription": "Not used.",
         "ITSAppUsesNonExemptEncryption": false
@@ -24,7 +25,7 @@
       "package": "com.siddharthsingh.memorydump",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#1a0e38"
+        "backgroundColor": "#0B0B0C"
       },
       "intentFilters": [
         {
@@ -66,8 +67,8 @@
       [
         "expo-speech-recognition",
         {
-          "microphonePermission": "Allow memory-dump to use the microphone for voice input.",
-          "speechRecognitionPermission": "Allow memory-dump to transcribe your voice into questions."
+          "microphonePermission": "Allow Memory Dump to use the microphone so you can ask questions by voice.",
+          "speechRecognitionPermission": "Allow Memory Dump to turn your voice into questions."
         }
       ],
       "./plugins/withPodDeploymentTarget"

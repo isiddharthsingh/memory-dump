@@ -1,207 +1,235 @@
+import { Ionicons } from "@expo/vector-icons";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useMemo } from "react";
-import {
-  ActivityIndicator,
-  Linking,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
-import Markdown from "react-native-markdown-display";
+import { ActivityIndicator, Linking, ScrollView, StyleSheet, Text, View } from "react-native";
+import Markdown, { type RenderRules } from "react-native-markdown-display";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { SourceThumb } from "../../components/ItemRow";
+import { Chip, ErrorNotice, Eyebrow, IconButton, LinkRow } from "../../components/ui";
 import { api } from "../../lib/api";
-import { radii, theme } from "../../lib/theme";
+import { domainOf, plural, relativeTime, sourceMeta, topicTitle } from "../../lib/format";
+import { readingMarkdown } from "../../lib/readingStyles";
+import { colors, fonts, spacing, type } from "../../lib/theme";
 
-const ITEM_LINK_MAX_LEN = 48;
+const ITEM_MARKER = /\[item:([A-Za-z0-9-]{8,})\]/g;
+const CITE_PREFIX = "memorydump://cite/";
+const WIKI_PREFIX = "memorydump://wiki/";
 
-/**
- * The body_md content has two custom token types:
- *   [[slug]]     → tappable wikilink to /wiki/[slug]
- *   [item:UUID]  → tappable item card link to /item/[id]
- *
- * We pre-process the markdown to convert them into standard markdown links
- * with custom URL schemes, then intercept onLinkPress to navigate. For item
- * links we substitute the real item title (truncated) when we have it
- * cached; otherwise fall back to "source" instead of the raw "→item" tag.
- */
-function preprocessMarkdown(md: string, titleById: Map<string, string>): string {
-  return md
-    .replace(/\[\[([a-z0-9][a-z0-9\-]*)\]\]/g, (_, slug) => `[${slug}](memorydump://wiki/${slug})`)
-    .replace(/\[item:([A-Za-z0-9\-]{8,})\]/g, (_, id) => {
-      const title = titleById.get(id);
-      const label = title
-        ? title.length > ITEM_LINK_MAX_LEN
-          ? title.slice(0, ITEM_LINK_MAX_LEN - 1).trimEnd() + "…"
-          : title
-        : "source";
-      // Markdown link text can't contain unescaped brackets — sanitize.
-      const safe = label.replace(/[[\]]/g, "");
-      return ` [${safe}](memorydump://item/${id})`;
-    });
+/** Item ids in the order the page first cites them, then any uncited sources. */
+function citationOrder(md: string, sourceIds: string[]): string[] {
+  const order: string[] = [];
+  for (const m of md.matchAll(ITEM_MARKER)) if (!order.includes(m[1]!)) order.push(m[1]!);
+  for (const id of sourceIds) if (!order.includes(id)) order.push(id);
+  return order;
 }
 
-export default function WikiDetail() {
-  const params = useLocalSearchParams<{ slug: string }>();
-  const slug = params.slug;
+/**
+ * body_md has two custom tokens: [[slug]] wikilinks and [item:UUID]
+ * citations. Turn them into markdown links with app URLs: wikilinks show the
+ * topic's name, citations a number that matches the Sources list.
+ */
+function preprocess(md: string, title: string, order: string[], titleBySlug: Map<string, string>): string {
+  const lines = md.trimStart().split("\n");
+  // Pages usually open with "# <Title>", which the screen already shows.
+  if (lines[0]?.startsWith("# ") && topicTitle(lines[0].slice(2).trim()).toLowerCase() === title.toLowerCase()) {
+    lines.shift();
+  }
+  return lines
+    .join("\n")
+    .replace(/\[\[([a-z0-9][a-z0-9-]*)\]\]/g, (_, slug: string) => {
+      const label = topicTitle(titleBySlug.get(slug) ?? slug).replace(/[[\]]/g, "");
+      return `[${label}](${WIKI_PREFIX}${slug})`;
+    })
+    .replace(/\s*\[item:([A-Za-z0-9-]{8,})\]/g, (_, id: string) => `[${order.indexOf(id) + 1}](${CITE_PREFIX}${id})`);
+}
+
+const rules: RenderRules = {
+  link: (node, children, _parent, styles, onLinkPress) => {
+    const href = String(node.attributes.href ?? "");
+    if (href.startsWith(CITE_PREFIX)) {
+      // Draw the number ourselves: rendered children would inherit link underline.
+      const n = node.children[0]?.content ?? "";
+      return (
+        <Text
+          key={node.key}
+          style={markdownExtra.cite}
+          onPress={() => onLinkPress?.(href)}
+          accessibilityRole="link"
+          accessibilityLabel={`Source ${n}`}
+        >
+          {` ${n}`}
+        </Text>
+      );
+    }
+    return (
+      <Text key={node.key} style={styles.link} onPress={() => onLinkPress?.(href)} accessibilityRole="link">
+        {children}
+      </Text>
+    );
+  },
+};
+
+export default function WikiTopic() {
+  const { slug } = useLocalSearchParams<{ slug: string }>();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
-  const page = useQuery({
-    queryKey: ["wiki", slug],
-    queryFn: () => api.getWikiPage(slug!),
-    enabled: !!slug,
-  });
+  const page = useQuery({ queryKey: ["wiki", slug], queryFn: () => api.getWikiPage(slug!), enabled: !!slug });
+  // Shares the list query so wikilinks and linked topics can show real titles.
+  const pages = useQuery({ queryKey: ["wiki"], queryFn: () => api.listWiki() });
+  const titleBySlug = useMemo(() => new Map((pages.data ?? []).map((p) => [p.slug, p.title])), [pages.data]);
 
-  // Pull titles for every cited item in parallel. They're cached on the same
-  // "item" key as the item detail screen, so navigating between the two is
-  // free after the first fetch. Titles rarely change → long staleTime.
-  const referencedIds = useMemo(
-    () => page.data?.source_item_ids ?? [],
-    [page.data?.source_item_ids],
+  const order = useMemo(
+    () => (page.data ? citationOrder(page.data.body_md, page.data.source_item_ids ?? []) : []),
+    [page.data],
   );
-  const itemQueries = useQueries({
-    queries: referencedIds.map((id) => ({
+  // Cached on the same key as the reader, so opening a source is instant.
+  const sources = useQueries({
+    queries: order.map((id) => ({
       queryKey: ["item", id] as const,
       queryFn: () => api.getItem(id),
       staleTime: 5 * 60 * 1000,
     })),
   });
-  const titleById = useMemo(() => {
-    const m = new Map<string, string>();
-    itemQueries.forEach((q, i) => {
-      const id = referencedIds[i];
-      if (id && q.data?.title) m.set(id, q.data.title);
-    });
-    return m;
-  }, [itemQueries, referencedIds]);
 
+  const title = page.data ? topicTitle(page.data.title) : "";
   const processed = useMemo(
-    () => (page.data ? preprocessMarkdown(page.data.body_md, titleById) : ""),
-    [page.data, titleById],
+    () => (page.data ? preprocess(page.data.body_md, title, order, titleBySlug) : ""),
+    [page.data, title, order, titleBySlug],
   );
 
   if (page.isPending) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color={theme.accent} />
+        <ActivityIndicator color={colors.ink2} />
       </View>
     );
   }
-
   if (page.error || !page.data) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.errText}>{String((page.error as Error)?.message ?? "Not found")}</Text>
+      <View style={[styles.center, { padding: spacing.lg }]}>
+        <ErrorNotice
+          title="Couldn’t open this topic"
+          detail={(page.error as Error | null)?.message ?? "It may have been merged into another page."}
+          onRetry={() => void page.refetch()}
+        />
       </View>
     );
   }
 
   const onLink = (url: string) => {
-    if (url.startsWith("memorydump://wiki/")) {
-      const targetSlug = url.replace("memorydump://wiki/", "");
-      router.push({ pathname: "/wiki/[slug]", params: { slug: targetSlug } });
-      return false;
+    if (url.startsWith(WIKI_PREFIX)) {
+      router.push({ pathname: "/wiki/[slug]", params: { slug: url.slice(WIKI_PREFIX.length) } });
+    } else if (url.startsWith(CITE_PREFIX)) {
+      router.push({ pathname: "/item/[id]", params: { id: url.slice(CITE_PREFIX.length) } });
+    } else {
+      Linking.openURL(url).catch(() => undefined);
     }
-    if (url.startsWith("memorydump://item/")) {
-      const id = url.replace("memorydump://item/", "");
-      router.push({ pathname: "/item/[id]", params: { id } });
-      return false;
-    }
-    Linking.openURL(url).catch(() => undefined);
     return false;
   };
 
+  const backlinks = page.data.backlinks ?? [];
+  const meta = `Written from ${plural(page.data.source_item_ids?.length ?? 0, "source")} · updated ${relativeTime(page.data.updated_at)}`;
+
   return (
-    <ScrollView
-      contentContainerStyle={styles.scroll}
-      contentInsetAdjustmentBehavior="automatic"
-    >
-      <Text style={styles.title}>{page.data.title}</Text>
-      <Text style={styles.meta}>
-        {page.data.slug} · v{page.data.version} ·{" "}
-        {page.data.source_item_ids?.length ?? 0} sources
-      </Text>
-      <View style={styles.divider} />
-      <Markdown style={markdownStyles} onLinkPress={onLink} rules={rules}>
-        {processed}
-      </Markdown>
-      {page.data.backlinks && page.data.backlinks.length > 0 ? (
-        <View style={styles.backlinks}>
-          <Text style={styles.sectionLabel}>Linked topics</Text>
-          <View style={styles.chipRow}>
-            {page.data.backlinks.map((bl) => (
-              <Text
-                key={bl}
-                style={styles.chip}
-                onPress={() =>
-                  router.push({ pathname: "/wiki/[slug]", params: { slug: bl } })
-                }
-              >
-                {bl}
-              </Text>
-            ))}
-          </View>
+    <>
+      <Stack.Screen
+        options={{
+          headerRight: () => (
+            <IconButton
+              icon="sparkles-outline"
+              color={colors.accent}
+              accessibilityLabel="Ask about this topic"
+              onPress={() => router.push({ pathname: "/ask", params: { q: `What do I know about ${title}?` } })}
+            />
+          ),
+        }}
+      />
+      <ScrollView
+        style={styles.container}
+        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + spacing.xxl }]}
+      >
+        <View style={styles.eyebrow}>
+          <Ionicons name="book-outline" size={15} color={colors.ink2} />
+          <Text style={styles.eyebrowText}>Wiki</Text>
         </View>
-      ) : null}
-    </ScrollView>
+        <Text style={styles.title} accessibilityRole="header">
+          {title}
+        </Text>
+        <Text style={styles.meta}>{meta}</Text>
+        <View style={styles.rule} />
+
+        <Markdown style={readingMarkdown} rules={rules} onLinkPress={onLink}>
+          {processed}
+        </Markdown>
+
+        {order.length > 0 ? (
+          <View style={styles.group}>
+            <Eyebrow>Sources</Eyebrow>
+            {order.map((id, i) => {
+              const it = sources[i]?.data;
+              return (
+                <LinkRow
+                  key={id}
+                  leading={
+                    <View style={styles.sourceLead}>
+                      <Text style={styles.sourceNumber}>{i + 1}</Text>
+                      <SourceThumb source={it?.source ?? "web"} url={it?.url} thumbnailUrl={it?.thumbnail_url} size={40} />
+                    </View>
+                  }
+                  title={it?.title ?? (it ? domainOf(it.url) : "Loading…")}
+                  subtitle={it ? sourceMeta(it.url, it.source) : null}
+                  onPress={() => router.push({ pathname: "/item/[id]", params: { id } })}
+                  last={i === order.length - 1}
+                />
+              );
+            })}
+          </View>
+        ) : null}
+
+        {backlinks.length > 0 ? (
+          <View style={styles.group}>
+            <Eyebrow>Linked topics</Eyebrow>
+            <View style={styles.chips}>
+              {backlinks.map((bl) => (
+                <Chip
+                  key={bl}
+                  label={topicTitle(titleBySlug.get(bl) ?? bl)}
+                  onPress={() => router.push({ pathname: "/wiki/[slug]", params: { slug: bl } })}
+                />
+              ))}
+            </View>
+          </View>
+        ) : null}
+      </ScrollView>
+    </>
   );
 }
 
-const rules = {};
-
-const markdownStyles = {
-  body: { color: theme.text, fontSize: 16, lineHeight: 24 },
-  heading1: { color: theme.text, fontSize: 24, fontWeight: "700", marginTop: 16, letterSpacing: -0.4 },
-  heading2: { color: theme.text, fontSize: 20, fontWeight: "700", marginTop: 14, letterSpacing: -0.3 },
-  heading3: { color: theme.text, fontSize: 17, fontWeight: "600", marginTop: 12 },
-  link: { color: theme.accent, fontWeight: "500" },
-  code_inline: {
-    backgroundColor: theme.surfaceSunken,
-    color: theme.accent,
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-    borderRadius: 4,
-    fontFamily: "Menlo",
-    fontSize: 14,
-  },
-  code_block: {
-    backgroundColor: theme.surfaceSunken,
-    color: theme.text,
-    padding: 12,
-    borderRadius: radii.md,
-    fontFamily: "Menlo",
-    fontSize: 13,
-  },
-  bullet_list: { marginVertical: 4 },
-  hr: { backgroundColor: theme.border, height: 1, marginVertical: 12 },
-} as const;
+const markdownExtra = StyleSheet.create({
+  cite: { fontFamily: fonts.serifSemibold, fontSize: 14, color: colors.accent, textDecorationLine: "none" },
+});
 
 const styles = StyleSheet.create({
-  scroll: { padding: 16, paddingBottom: 48 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: theme.bg },
-  title: { color: theme.text, fontSize: 28, fontWeight: "700", letterSpacing: -0.5 },
-  meta: { color: theme.textMuted, fontSize: 12, marginTop: 6 },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: theme.border, marginVertical: 16 },
-  errText: { color: theme.danger },
-  backlinks: { marginTop: 24 },
-  sectionLabel: {
-    color: theme.textMuted,
-    fontSize: 11,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 8,
+  container: { flex: 1, backgroundColor: colors.bg },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.bg },
+  scroll: { paddingHorizontal: spacing.xl, paddingTop: spacing.sm },
+  eyebrow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  eyebrowText: { ...type.footnote, fontWeight: "600", color: colors.ink2 },
+  title: { ...type.readingTitle, fontSize: 34, lineHeight: 40, color: colors.ink, marginTop: spacing.sm },
+  meta: { ...type.subhead, color: colors.ink2, marginTop: spacing.sm },
+  rule: { height: StyleSheet.hairlineWidth, backgroundColor: colors.hairlineStrong, marginVertical: spacing.lg },
+  group: {
+    marginTop: spacing.xl,
+    paddingTop: spacing.lg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.hairlineStrong,
+    gap: spacing.xs,
   },
-  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: theme.accentSoft,
-    color: theme.accent,
-    borderRadius: radii.sm,
-    fontSize: 13,
-    fontWeight: "500",
-    overflow: "hidden",
-  },
+  sourceLead: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  sourceNumber: { width: 16, fontSize: 13, fontWeight: "700", color: colors.accent, textAlign: "center" },
+  chips: { flexDirection: "row", flexWrap: "wrap", columnGap: spacing.sm },
 });

@@ -1,23 +1,30 @@
+import { Ionicons } from "@expo/vector-icons";
 import { ReactNode } from "react";
 import { StyleSheet, Text, View } from "react-native";
 
-import { theme } from "../lib/theme";
+import { colors, radii, spacing, type } from "../lib/theme";
+
+type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
 
 export function EmptyState({
-  emoji,
+  icon,
   title,
   message,
   children,
 }: {
-  emoji: string;
+  icon: IoniconName;
   title: string;
   message: string;
   children?: ReactNode;
 }) {
   return (
     <View style={styles.wrap}>
-      <Text style={styles.emoji}>{emoji}</Text>
-      <Text style={styles.title}>{title}</Text>
+      <View style={styles.iconWrap} accessibilityElementsHidden importantForAccessibility="no">
+        <Ionicons name={icon} size={28} color={colors.ink2} />
+      </View>
+      <Text style={styles.title} accessibilityRole="header">
+        {title}
+      </Text>
       <Text style={styles.message}>{message}</Text>
       {children}
     </View>
@@ -29,23 +36,20 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    padding: 32,
-    gap: 10,
-    backgroundColor: theme.bg,
+    paddingHorizontal: spacing.xxl,
+    paddingVertical: spacing.xxl,
+    gap: spacing.sm,
+    backgroundColor: colors.bg,
   },
-  emoji: { fontSize: 56, marginBottom: 4 },
-  title: {
-    color: theme.text,
-    fontSize: 20,
-    fontWeight: "700",
-    letterSpacing: -0.3,
+  iconWrap: {
+    width: 60,
+    height: 60,
+    borderRadius: radii.xl,
+    backgroundColor: colors.fill,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.sm,
   },
-  message: {
-    color: theme.textMuted,
-    textAlign: "center",
-    marginBottom: 16,
-    fontSize: 15,
-    lineHeight: 21,
-    maxWidth: 320,
-  },
+  title: { ...type.section, color: colors.ink, textAlign: "center" },
+  message: { ...type.callout, color: colors.ink2, textAlign: "center", maxWidth: 320, marginBottom: spacing.lg },
 });

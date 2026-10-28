@@ -1,24 +1,16 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Animated, StyleProp, StyleSheet, View, ViewStyle } from "react-native";
 
-import { radii, theme } from "../lib/theme";
+import { colors, radii, spacing } from "../lib/theme";
 
 export function SkeletonBox({ style }: { style?: StyleProp<ViewStyle> }) {
-  const opacity = useRef(new Animated.Value(0.5)).current;
+  const [opacity] = useState(() => new Animated.Value(0.5));
 
   useEffect(() => {
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(opacity, {
-          toValue: 1,
-          duration: 750,
-          useNativeDriver: true,
-        }),
-        Animated.timing(opacity, {
-          toValue: 0.5,
-          duration: 750,
-          useNativeDriver: true,
-        }),
+        Animated.timing(opacity, { toValue: 1, duration: 750, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 0.5, duration: 750, useNativeDriver: true }),
       ]),
     );
     loop.start();
@@ -28,44 +20,40 @@ export function SkeletonBox({ style }: { style?: StyleProp<ViewStyle> }) {
   return <Animated.View style={[styles.box, style, { opacity }]} />;
 }
 
-export function ItemCardSkeleton() {
+/** Same geometry as ItemRow so nothing jumps when the real rows arrive. */
+function ItemRowSkeleton() {
   return (
-    <View style={styles.card}>
+    <View style={styles.row}>
       <SkeletonBox style={styles.thumb} />
-      <View style={styles.body}>
+      <View style={styles.text}>
         <SkeletonBox style={styles.titleLine} />
-        <SkeletonBox style={styles.titleLineShort} />
         <SkeletonBox style={styles.summaryLine} />
-        <View style={styles.tagRow}>
-          <SkeletonBox style={styles.tag} />
-          <SkeletonBox style={styles.tag} />
-        </View>
+        <SkeletonBox style={styles.metaLine} />
       </View>
     </View>
   );
 }
 
-export function WikiRowSkeleton() {
+function WikiRowSkeleton() {
   return (
-    <View style={styles.row}>
+    <View style={styles.wikiRow}>
       <SkeletonBox style={styles.titleLine} />
-      <SkeletonBox style={styles.slugLine} />
       <SkeletonBox style={styles.metaLine} />
     </View>
   );
 }
 
-export function InboxSkeletonList({ count = 5 }: { count?: number }) {
+export function LibrarySkeletonList({ count = 6 }: { count?: number }) {
   return (
     <View style={styles.list}>
       {Array.from({ length: count }).map((_, i) => (
-        <ItemCardSkeleton key={i} />
+        <ItemRowSkeleton key={i} />
       ))}
     </View>
   );
 }
 
-export function WikiSkeletonList({ count = 6 }: { count?: number }) {
+export function WikiSkeletonList({ count = 7 }: { count?: number }) {
   return (
     <View style={styles.list}>
       {Array.from({ length: count }).map((_, i) => (
@@ -76,43 +64,13 @@ export function WikiSkeletonList({ count = 6 }: { count?: number }) {
 }
 
 const styles = StyleSheet.create({
-  box: {
-    backgroundColor: theme.surfaceSunken,
-    borderRadius: 6,
-  },
-  list: { padding: 12, paddingTop: 14, backgroundColor: theme.bg, flex: 1 },
-  card: {
-    flexDirection: "row",
-    backgroundColor: theme.surface,
-    borderRadius: radii.lg,
-    marginBottom: 12,
-    overflow: "hidden",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-  },
-  thumb: {
-    width: 96,
-    aspectRatio: 1,
-    borderRadius: 0,
-  },
-  body: {
-    flex: 1,
-    padding: 12,
-    gap: 8,
-  },
-  titleLine: { height: 14, width: "85%" },
-  titleLineShort: { height: 14, width: "60%" },
-  summaryLine: { height: 11, width: "95%", marginTop: 2 },
-  slugLine: { height: 11, width: "40%", marginTop: 6 },
-  metaLine: { height: 11, width: "30%", marginTop: 6 },
-  tagRow: { flexDirection: "row", gap: 6, marginTop: 4 },
-  tag: { height: 16, width: 52, borderRadius: 6 },
-  row: {
-    backgroundColor: theme.surface,
-    padding: 16,
-    borderRadius: radii.lg,
-    marginBottom: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-  },
+  box: { backgroundColor: colors.fill, borderRadius: radii.sm },
+  list: { paddingTop: spacing.sm, backgroundColor: colors.bg, flex: 1 },
+  row: { flexDirection: "row", gap: 14, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
+  thumb: { width: 56, height: 56, borderRadius: radii.md },
+  text: { flex: 1, gap: spacing.sm, paddingTop: 2 },
+  titleLine: { height: 16, width: "80%" },
+  summaryLine: { height: 13, width: "95%" },
+  metaLine: { height: 12, width: "40%" },
+  wikiRow: { gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.lg - 4 },
 });

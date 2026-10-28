@@ -1,68 +1,20 @@
-import { Ionicons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
-import { ColorValue } from "react-native";
 
-import { theme } from "../../lib/theme";
-
-type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
-
-function makeIcon(
-  filled: IoniconName,
-  outline: IoniconName,
-): (props: { focused: boolean; color: ColorValue; size: number }) => React.ReactNode {
-  const Icon = ({ focused, color, size }: { focused: boolean; color: ColorValue; size: number }) => (
-    <Ionicons name={focused ? filled : outline} size={size} color={color as string} />
-  );
-  return Icon;
-}
+import { FloatingTabBar } from "../../components/FloatingTabBar";
+import { colors } from "../../lib/theme";
 
 export default function TabsLayout() {
   return (
     <Tabs
+      tabBar={(props) => <FloatingTabBar {...props} />}
       screenOptions={{
-        tabBarStyle: {
-          backgroundColor: theme.surface,
-          borderTopColor: theme.border,
-        },
-        tabBarActiveTintColor: theme.accent,
-        tabBarInactiveTintColor: theme.textMuted,
-        tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
-        headerStyle: { backgroundColor: theme.surface },
-        headerTitleStyle: { color: theme.text, fontWeight: "700" },
-        headerShadowVisible: false,
-        headerTintColor: theme.accent,
-        sceneStyle: { backgroundColor: theme.bg },
+        headerShown: false,
+        sceneStyle: { backgroundColor: colors.bg },
       }}
     >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: "Inbox",
-          tabBarIcon: makeIcon("file-tray-full", "file-tray-full-outline"),
-        }}
-      />
-      <Tabs.Screen
-        name="wiki"
-        options={{
-          title: "Wiki",
-          tabBarIcon: makeIcon("library", "library-outline"),
-        }}
-      />
-      <Tabs.Screen
-        name="ask"
-        options={{
-          title: "Ask",
-          tabBarIcon: makeIcon("sparkles", "sparkles-outline"),
-          tabBarHideOnKeyboard: true,
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: "Settings",
-          tabBarIcon: makeIcon("settings", "settings-outline"),
-        }}
-      />
+      <Tabs.Screen name="index" options={{ title: "Library" }} />
+      <Tabs.Screen name="wiki" options={{ title: "Wiki" }} />
+      <Tabs.Screen name="ask" options={{ title: "Ask" }} />
     </Tabs>
   );
 }

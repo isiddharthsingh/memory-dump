@@ -1,14 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useHeaderHeight } from "@react-navigation/elements";
+import { useQuery } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
-import { Link } from "expo-router";
+import { useLocalSearchParams } from "expo-router";
+import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ExpoSpeechRecognitionModule,
-  useSpeechRecognitionEvent,
-} from "expo-speech-recognition";
-import { useEffect, useRef, useState } from "react";
-import {
-  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -19,17 +15,36 @@ import {
   View,
 } from "react-native";
 
-import { api, type Citation } from "../../lib/api";
-import { TOUCH_TARGET, cardShadow, radii, theme } from "../../lib/theme";
+import { AskTurn, type Turn } from "../../components/AskTurn";
+import { useKeyboardVisible, useTabBarSpace } from "../../components/FloatingTabBar";
+import { Chip, IconButton, ScreenHeader } from "../../components/ui";
+import { api } from "../../lib/api";
+import { humanizeTag, topicTitle } from "../../lib/format";
+import { TOUCH_TARGET, colors, fonts, radii, spacing, type } from "../../lib/theme";
+
+const SUGGESTIONS = 3;
 
 export default function AskScreen() {
-  const headerHeight = useHeaderHeight();
-  const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState<string | null>(null);
-  const [citations, setCitations] = useState<Citation[]>([]);
-  const [streaming, setStreaming] = useState(false);
+  const params = useLocalSearchParams<{ q?: string }>();
+  const tabBarSpace = useTabBarSpace();
+  const keyboardVisible = useKeyboardVisible();
+  const [input, setInput] = useState("");
+  const [turns, setTurns] = useState<Turn[]>([]);
   const [listening, setListening] = useState(false);
   const streamRef = useRef<{ abort: () => void } | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const nextId = useRef(1);
+
+  const tags = useQuery({ queryKey: ["tags"], queryFn: () => api.listTags() });
+  const wiki = useQuery({ queryKey: ["wiki"], queryFn: () => api.listWiki() });
+  const streaming = turns.some((t) => t.status === "streaming");
+
+  // "Ask about this" on the reader opens this tab with a drafted question.
+  const [draftedFrom, setDraftedFrom] = useState<string | undefined>(undefined);
+  if (params.q !== draftedFrom) {
+    setDraftedFrom(params.q);
+    if (params.q) setInput(params.q);
+  }
 
   useEffect(() => {
     return () => {
@@ -40,7 +55,7 @@ export default function AskScreen() {
 
   useSpeechRecognitionEvent("result", (e) => {
     const t = e.results?.[0]?.transcript;
-    if (t) setQuestion(t);
+    if (t) setInput(t);
   });
   useSpeechRecognitionEvent("end", () => setListening(false));
   useSpeechRecognitionEvent("error", () => setListening(false));
@@ -55,239 +70,165 @@ export default function AskScreen() {
     if (!perm.granted) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setListening(true);
-    ExpoSpeechRecognitionModule.start({
-      lang: "en-US",
-      interimResults: true,
-      continuous: false,
-    });
+    ExpoSpeechRecognitionModule.start({ lang: "en-US", interimResults: true, continuous: false });
   };
 
-  const submit = (q: string) => {
-    if (!q || streaming) return;
-    streamRef.current?.abort();
-    setAnswer("");
-    setCitations([]);
-    setStreaming(true);
-    streamRef.current = api.askStream(q, {
-      onToken: (t) => setAnswer((prev) => (prev ?? "") + t),
-      onDone: (c) => {
-        setCitations(c);
-        setStreaming(false);
-      },
-      onError: (err) => {
-        setAnswer(`Error: ${err.message}`);
-        setCitations([]);
-        setStreaming(false);
-      },
-    });
+  const updateTurn = useCallback((id: number, patch: (t: Turn) => Partial<Turn>) => {
+    setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch(t) } : t)));
+  }, []);
+
+  const run = useCallback(
+    (id: number, question: string) => {
+      streamRef.current?.abort();
+      streamRef.current = api.askStream(question, {
+        onToken: (text) => updateTurn(id, (t) => ({ answer: t.answer + text })),
+        onDone: (citations) => updateTurn(id, () => ({ citations, status: "done" })),
+        onError: (err) => updateTurn(id, () => ({ status: "error", error: err.message })),
+      });
+    },
+    [updateTurn],
+  );
+
+  const submit = (raw: string) => {
+    const question = raw.trim();
+    if (!question || streaming) return;
+    const id = nextId.current++;
+    setTurns((prev) => [...prev, { id, question, answer: "", citations: [], status: "streaming" }]);
+    setInput("");
+    run(id, question);
   };
+
+  const retry = (turn: Turn) => {
+    updateTurn(turn.id, () => ({ answer: "", citations: [], status: "streaming", error: undefined }));
+    run(turn.id, turn.question);
+  };
+
+  const stop = () => {
+    streamRef.current?.abort();
+    setTurns((prev) => prev.map((t) => (t.status === "streaming" ? { ...t, status: "done" } : t)));
+  };
+
+  // Wiki titles are properly cased phrases ("Large Language Models"); tags
+  // are slugs, so they're only a fallback for a library without a wiki yet.
+  const topics = (wiki.data ?? []).map((p) => topicTitle(p.title));
+  const subjects = topics.length > 0 ? topics : (tags.data ?? []).map((t) => humanizeTag(t.tag));
+  const suggestions = [
+    ...subjects.slice(0, SUGGESTIONS).map((s) => `What do I know about ${s}?`),
+    "What did I save this week?",
+  ];
+  const canSend = input.trim().length > 0 && !streaming;
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-      keyboardVerticalOffset={Platform.OS === "ios" ? headerHeight : 0}
-    >
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <ScreenHeader
+        title="Ask"
+        right={
+          turns.length > 0 ? (
+            <IconButton
+              icon="create-outline"
+              accessibilityLabel="New question"
+              onPress={() => {
+                stop();
+                setTurns([]);
+              }}
+            />
+          ) : null
+        }
+      />
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+        onContentSizeChange={() => turns.length > 0 && scrollRef.current?.scrollToEnd({ animated: true })}
       >
-        {answer !== null ? (
-          <View style={styles.answerBox}>
-            <Text style={styles.answerText}>
-              {renderAnswer(answer)}
-              {streaming ? <Text style={styles.caret}>▍</Text> : null}
+        {turns.length === 0 ? (
+          <View style={styles.intro}>
+            <Text style={styles.introTitle}>Ask your library</Text>
+            <Text style={styles.introText}>
+              Answers come only from what you’ve saved, with numbered sources you can open.
             </Text>
-            {citations.length > 0 ? (
-              <View style={styles.citations}>
-                <Text style={styles.sectionLabel}>Sources</Text>
-                {citations.map((c) => (
-                  <CitationRow key={`${c.kind}:${c.id}`} citation={c} />
-                ))}
-              </View>
-            ) : null}
+            <View style={styles.suggestions}>
+              {suggestions.map((s) => (
+                <Chip key={s} label={s} onPress={() => submit(s)} />
+              ))}
+            </View>
           </View>
         ) : (
-          <View style={styles.intro}>
-            <Text style={styles.introTitle}>Ask your memory</Text>
-            <Text style={styles.introText}>
-              Try: "that Karpathy video on async runtimes" or "have I saved
-              anything about rust async?"
-            </Text>
-          </View>
+          turns.map((t) => <AskTurn key={t.id} turn={t} onRetry={() => retry(t)} />)
         )}
       </ScrollView>
 
-      <View style={styles.inputBar}>
-        <Pressable
-          onPress={toggleVoice}
-          style={({ pressed }) => [
-            styles.micBtn,
-            listening && styles.micBtnActive,
-            pressed && styles.micBtnPressed,
-          ]}
-          disabled={streaming}
-          accessibilityRole="button"
-          accessibilityLabel={listening ? "Stop listening" : "Start voice input"}
-          accessibilityState={{ disabled: streaming, selected: listening }}
-        >
-          <Ionicons
-            name={listening ? "stop" : "mic"}
-            size={20}
-            color={listening ? "#FFFFFF" : theme.accent}
+      <View style={[styles.composerWrap, { paddingBottom: keyboardVisible ? spacing.sm : tabBarSpace }]}>
+        <View style={styles.composer}>
+          <IconButton
+            icon={listening ? "stop-circle" : "mic-outline"}
+            color={listening ? colors.failed : colors.ink2}
+            accessibilityLabel={listening ? "Stop listening" : "Ask with your voice"}
+            onPress={() => void toggleVoice()}
           />
-        </Pressable>
-        <TextInput
-          style={styles.input}
-          placeholder="Ask anything…"
-          placeholderTextColor={theme.textFaint}
-          value={question}
-          onChangeText={setQuestion}
-          onSubmitEditing={() => submit(question.trim())}
-          returnKeyType="send"
-          editable={!streaming}
-        />
-        <Pressable
-          onPress={() => submit(question.trim())}
-          style={({ pressed }) => [
-            styles.sendBtn,
-            (streaming || !question.trim()) && { opacity: 0.5 },
-            pressed && styles.sendBtnPressed,
-          ]}
-          disabled={streaming || !question.trim()}
-          accessibilityRole="button"
-          accessibilityLabel="Send question"
-          accessibilityState={{ disabled: streaming || !question.trim() }}
-        >
-          {streaming ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <Text style={styles.sendText}>Ask</Text>
-          )}
-        </Pressable>
+          <TextInput
+            style={styles.input}
+            placeholder={turns.length > 0 ? "Ask another question" : "Ask anything you’ve saved"}
+            placeholderTextColor={colors.ink3}
+            value={input}
+            onChangeText={setInput}
+            multiline
+            submitBehavior="submit"
+            returnKeyType="send"
+            onSubmitEditing={() => submit(input)}
+            accessibilityLabel="Question"
+          />
+          <Pressable
+            onPress={() => (streaming ? stop() : submit(input))}
+            disabled={!streaming && !canSend}
+            style={[styles.send, !streaming && !canSend && styles.sendDisabled]}
+            accessibilityRole="button"
+            accessibilityLabel={streaming ? "Stop answering" : "Send question"}
+            accessibilityState={{ disabled: !streaming && !canSend }}
+          >
+            <Ionicons name={streaming ? "stop" : "arrow-up"} size={streaming ? 14 : 18} color={colors.onInk} />
+          </Pressable>
+        </View>
       </View>
     </KeyboardAvoidingView>
   );
 }
 
-function CitationRow({ citation }: { citation: Citation }) {
-  if (citation.kind === "item") {
-    return (
-      <Link href={{ pathname: "/item/[id]", params: { id: citation.id } }} asChild>
-        <Pressable style={styles.citationRow}>
-          <Text style={styles.citationKind}>item</Text>
-          <Text style={styles.citationTitle} numberOfLines={2}>
-            {citation.title ?? citation.url ?? "(untitled)"}
-          </Text>
-        </Pressable>
-      </Link>
-    );
-  }
-  return (
-    <Link href={{ pathname: "/wiki/[slug]", params: { slug: citation.slug ?? "" } }} asChild>
-      <Pressable style={styles.citationRow}>
-        <Text style={styles.citationKind}>wiki</Text>
-        <Text style={styles.citationTitle} numberOfLines={2}>
-          {citation.title ?? citation.slug ?? "(untitled)"}
-        </Text>
-      </Pressable>
-    </Link>
-  );
-}
-
-/** Strip [item:UUID] and [wiki:slug] markers from the answer text. */
-function renderAnswer(answer: string): string {
-  return answer.replace(/\[(item|wiki):[^\]]+\]/g, "").replace(/  +/g, " ");
-}
-
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.bg },
-  scroll: { padding: 16, flexGrow: 1 },
-  intro: { flex: 1, justifyContent: "center", gap: 8 },
-  introTitle: {
-    color: theme.text,
-    fontSize: 24,
-    fontWeight: "700",
-    letterSpacing: -0.3,
-  },
-  introText: { color: theme.textMuted, fontSize: 15, lineHeight: 21 },
-  answerBox: {
-    backgroundColor: theme.surface,
-    borderRadius: radii.lg,
-    padding: 18,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    ...cardShadow("sm"),
-  },
-  answerText: { color: theme.text, fontSize: 16, lineHeight: 23 },
-  caret: { color: theme.accent, fontSize: 16 },
-  citations: { marginTop: 16, gap: 6 },
-  sectionLabel: {
-    color: theme.textMuted,
-    fontSize: 11,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 4,
-  },
-  citationRow: {
+  container: { flex: 1, backgroundColor: colors.bg },
+  scroll: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.xl, flexGrow: 1 },
+  intro: { flex: 1, justifyContent: "flex-end", gap: spacing.sm, paddingBottom: spacing.md },
+  introTitle: { fontFamily: fonts.serifSemibold, fontSize: 28, lineHeight: 34, color: colors.ink },
+  introText: { ...type.callout, color: colors.ink2, marginBottom: spacing.sm },
+  suggestions: { alignItems: "flex-start" },
+  composerWrap: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, backgroundColor: colors.bg },
+  composer: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingVertical: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.border,
-  },
-  citationKind: {
-    color: theme.accent,
-    fontSize: 11,
-    fontWeight: "700",
-    width: 44,
-    textTransform: "uppercase",
-    letterSpacing: 0.3,
-  },
-  citationTitle: { color: theme.text, fontSize: 14, flex: 1 },
-  inputBar: {
-    flexDirection: "row",
-    padding: 12,
-    gap: 8,
-    alignItems: "center",
-    backgroundColor: theme.surface,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.border,
+    alignItems: "flex-end",
+    gap: spacing.xs,
+    minHeight: 54,
+    paddingVertical: 5,
+    paddingLeft: spacing.xs,
+    paddingRight: 5,
+    borderRadius: 27,
+    backgroundColor: colors.fill,
   },
   input: {
+    ...type.body,
     flex: 1,
-    backgroundColor: theme.surfaceSunken,
-    color: theme.text,
-    borderRadius: radii.pill,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    fontSize: 15,
-    minHeight: TOUCH_TARGET,
+    color: colors.ink,
+    maxHeight: 120,
+    paddingTop: 11,
+    paddingBottom: 11,
   },
-  sendBtn: {
-    backgroundColor: theme.accent,
-    borderRadius: radii.pill,
-    paddingHorizontal: 20,
-    justifyContent: "center",
-    minWidth: 72,
-    minHeight: TOUCH_TARGET,
-    alignItems: "center",
-    ...cardShadow("sm"),
-  },
-  sendBtnPressed: { backgroundColor: theme.accentPressed },
-  sendText: { color: "#FFFFFF", fontWeight: "700", letterSpacing: -0.2 },
-  micBtn: {
+  send: {
     width: TOUCH_TARGET,
     height: TOUCH_TARGET,
     borderRadius: radii.pill,
+    backgroundColor: colors.ink,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 1,
-    borderColor: theme.accent,
-    backgroundColor: theme.surface,
   },
-  micBtnActive: { backgroundColor: theme.accent, borderColor: theme.accent },
-  micBtnPressed: { opacity: 0.7 },
+  sendDisabled: { opacity: 0.25 },
 });
