@@ -112,6 +112,14 @@ async def retry_item(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Item:
     item = await _get_owned_item(session, item_id, current_user)
+    # Uploaded files are deleted once processed (see workers/ingest.py), so
+    # there's nothing to re-run; `ingest_item` would treat the `file://`
+    # placeholder as a web page.
+    if item.url.startswith("file://"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Uploaded files can't be retried. Share the file again.",
+        )
     item.status = "pending"
     item.error = None
     await session.commit()

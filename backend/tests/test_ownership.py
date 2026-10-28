@@ -93,6 +93,28 @@ def test_retry_404s_across_users(
     )
 
 
+def test_retry_rejects_file_uploads(
+    client: TestClient, two_users: tuple[dict, dict]
+) -> None:
+    # The worker deletes an upload once it's processed (or fails), so a
+    # retry would re-run the URL pipeline on a `file://` placeholder.
+    a, _ = two_users
+    png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+        "1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082"
+    )
+    resp = client.post(
+        "/ingest/file",
+        files={"file": ("note.png", png, "image/png")},
+        headers=_auth(a),
+    )
+    assert resp.status_code == 202, resp.text
+    item_id = resp.json()["item"]["id"]
+    retry = client.post(f"/items/{item_id}/retry", headers=_auth(a))
+    assert retry.status_code == 409
+    assert "share" in retry.json()["detail"].lower()
+
+
 def test_delete_404s_across_users(
     client: TestClient, two_users: tuple[dict, dict]
 ) -> None:
