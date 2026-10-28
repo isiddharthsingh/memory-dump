@@ -69,7 +69,8 @@
           "microphonePermission": "Allow memory-dump to use the microphone for voice input.",
           "speechRecognitionPermission": "Allow memory-dump to transcribe your voice into questions."
         }
-      ]
+      ],
+      "./plugins/withPodDeploymentTarget"
     ],
     "experiments": {
       "typedRoutes": true
