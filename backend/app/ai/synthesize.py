@@ -79,6 +79,34 @@ def _normalize_slug(s: str) -> str:
     return slugify(s, max_length=80, lowercase=True)
 
 
+_ACRONYMS = {
+    a.lower(): a
+    for a in (
+        "AI",
+        "LLM",
+        "LLMs",
+        "ML",
+        "NLP",
+        "API",
+        "GPU",
+        "RAG",
+        "UI",
+        "UX",
+        "SQL",
+        "GPT",
+        "RL",
+        "RLHF",
+        "iOS",
+        "PDF",
+    )
+}
+
+
+def title_from_slug(slug: str) -> str:
+    """'llm-scaling' -> 'LLM Scaling' (str.title() would give 'Llm Scaling')."""
+    return " ".join(_ACRONYMS.get(w, w.capitalize()) for w in slug.split("-") if w)
+
+
 def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
@@ -155,7 +183,7 @@ async def patch_page(
     settings = get_settings()
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
-    title = existing_title or slug.replace("-", " ").title()
+    title = existing_title or title_from_slug(slug)
     body = existing_body or ""
     related_text = ", ".join(related_slugs[:80]) if related_slugs else "(none yet)"
 
