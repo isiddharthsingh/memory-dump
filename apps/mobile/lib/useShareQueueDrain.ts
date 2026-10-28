@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useEffect, useEffectEvent } from "react";
 import { AppState, AppStateStatus } from "react-native";
 
 import { shareQueue } from "./shareQueue";
@@ -16,8 +16,8 @@ export function useShareQueueDrain(
   onFlushed?: (sent: number) => void,
 ): void {
   const qc = useQueryClient();
-  const onFlushedRef = useRef(onFlushed);
-  onFlushedRef.current = onFlushed;
+  // Always calls the latest callback without re-subscribing the effect.
+  const notifyFlushed = useEffectEvent((sent: number) => onFlushed?.(sent));
 
   useEffect(() => {
     let cancelled = false;
@@ -29,7 +29,7 @@ export function useShareQueueDrain(
       if (cancelled) return;
       if (result.sent > 0) {
         qc.invalidateQueries({ queryKey: ["items"] });
-        onFlushedRef.current?.(result.sent);
+        notifyFlushed(result.sent);
       }
     };
 

@@ -6,11 +6,7 @@
     "orientation": "portrait",
     "scheme": "memorydump",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "icon": "./assets/icon.png",
-    "splash": {
-      "backgroundColor": "#FFFFFF"
-    },
     "ios": {
       "bundleIdentifier": "com.siddharthsingh.memorydump",
       "supportsTablet": true,
@@ -53,6 +49,12 @@
     "plugins": [
       "expo-router",
       "expo-secure-store",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#FFFFFF"
+        }
+      ],
       [
         "expo-share-intent",
         {

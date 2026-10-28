@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
+import type { BottomTabBarProps } from "expo-router/tabs";
 import * as Haptics from "expo-haptics";
 import { useEffect, useState } from "react";
 import { Keyboard, Platform, Pressable, StyleSheet, Text, View } from "react-native";
@@ -43,7 +43,7 @@ export function useKeyboardVisible(): boolean {
 }
 
 /** iOS 26-style floating capsule: Library · Wiki · Ask, plus a save button. */
-export function FloatingTabBar({ state, navigation, insets }: BottomTabBarProps) {
+export function FloatingTabBar({ state, emitter, navigateToTab, insets }: BottomTabBarProps) {
   const keyboardVisible = useKeyboardVisible();
   const [saving, setSaving] = useState(false);
   // The sheet stays mounted while the keyboard is up (its own input raises it).
@@ -64,10 +64,10 @@ export function FloatingTabBar({ state, navigation, insets }: BottomTabBarProps)
               <Pressable
                 key={route.key}
                 onPress={() => {
-                  const event = navigation.emit({ type: "tabPress", target: route.key, canPreventDefault: true });
+                  const event = emitter.emit({ type: "tabPress", target: route.key, canPreventDefault: true });
                   if (!focused && !event.defaultPrevented) {
                     void Haptics.selectionAsync();
-                    navigation.navigate(route.name, route.params);
+                    navigateToTab(route.key);
                   }
                 }}
                 style={[styles.tab, focused && styles.tabActive]}

@@ -9,6 +9,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  type ScrollViewInstance,
   StyleSheet,
   Text,
   TextInput,
@@ -32,7 +33,7 @@ export default function AskScreen() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [listening, setListening] = useState(false);
   const streamRef = useRef<{ abort: () => void } | null>(null);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const nextId = useRef(1);
 
   const tags = useQuery({ queryKey: ["tags"], queryFn: () => api.listTags() });

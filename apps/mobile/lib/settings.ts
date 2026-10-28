@@ -40,8 +40,14 @@ export function useConfig(): {
   );
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    let cancelled = false;
+    void loadConfig().then((cfg) => {
+      if (!cancelled) setConfig(cfg);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return { config, refresh, save };
 }
