@@ -1,11 +1,13 @@
 import SwiftUI
 
-/// Past Ask chats from the server, most recent first. Tap one to reopen it;
-/// swipe to delete.
+/// Past Ask chats from the server, most recent first, in the drawer on the
+/// left of Ask. Tap one to reopen it; swipe to delete.
 struct ChatHistoryView: View {
   let model: AskModel
-  @Environment(\.dismiss) private var dismiss
+  let drawer: HistoryDrawer
+  @Environment(\.historyShown) private var shown
   @State private var query = ""
+  @State private var searching = false
   @State private var opening: UUID?
   @State private var openError: String?
 
@@ -41,9 +43,6 @@ struct ChatHistoryView: View {
       }
       .navigationTitle("History")
       .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-      }
       .alert(
         "Couldn’t open this chat",
         isPresented: Binding(get: { openError != nil }, set: { if !$0 { openError = nil } })
@@ -53,7 +52,11 @@ struct ChatHistoryView: View {
         Text(openError ?? "")
       }
     }
-    .task { await model.loadHistory() }
+    // Fetched as it starts to show, so a swipe already has the list; closing
+    // puts the search keyboard away.
+    .onChange(of: shown) {
+      if shown { Task { await model.loadHistory() } } else { searching = false }
+    }
   }
 
   private func list(_ history: [ChatSummary]) -> some View {
@@ -69,7 +72,7 @@ struct ChatHistoryView: View {
     }
     .listStyle(.plain)
     .refreshable { await model.loadHistory() }
-    .searchable(text: $query, prompt: "Search chats")
+    .searchable(text: $query, isPresented: $searching, prompt: "Search chats")
     .overlay {
       if sections.isEmpty { ContentUnavailableView.search(text: query) }
     }
@@ -84,7 +87,7 @@ struct ChatHistoryView: View {
       Task {
         do {
           try await model.open(chat.id)
-          dismiss()
+          drawer.setOpen(false)
         } catch {
           Haptics.error()
           openError = error.localizedDescription

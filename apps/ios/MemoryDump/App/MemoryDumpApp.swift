@@ -86,9 +86,7 @@ private struct MainTabs: View {
         }
       }
       Tab("Ask", systemImage: "sparkles", value: AppTab.ask) {
-        NavigationStack(path: $router.askPath) {
-          AskView().withRoutes()
-        }
+        AskTab()
       }
     }
     .tint(Palette.ink)
@@ -111,7 +109,7 @@ private struct RouteLinks: ViewModifier {
 }
 
 extension View {
-  fileprivate func withRoutes() -> some View { modifier(RouteLinks()) }
+  func withRoutes() -> some View { modifier(RouteLinks()) }
 }
 
 private struct ToastView: View {
