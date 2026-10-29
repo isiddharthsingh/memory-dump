@@ -19,7 +19,7 @@ struct SignInView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 12) {
         VStack(alignment: .leading, spacing: 6) {
-          Text("Memory Dump").font(.serif(34, .semibold, relativeTo: .largeTitle)).foregroundStyle(Palette.ink)
+          Text("Memory Dump").font(.display(36, .heavy, relativeTo: .largeTitle)).foregroundStyle(Palette.ink)
           Text(creating ? "Create your library" : "Sign in to your library")
             .font(.body).foregroundStyle(Palette.ink2)
         }

@@ -159,11 +159,11 @@ struct ItemReaderView: View {
             noteOpen = true
           } label: {
             VStack(alignment: .leading, spacing: 6) {
-              Eyebrow("Your note")
-              Text(note).font(.body).foregroundStyle(Palette.ink).frame(maxWidth: .infinity, alignment: .leading)
+              Eyebrow("Your note", color: Swatch.mint.ink)
+              Text(note).font(.body.weight(.medium)).foregroundStyle(Palette.ink).frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(16)
-            .background(Palette.surfaceMuted, in: .rect(cornerRadius: 14))
+            .background(Swatch.mint.fill, in: .rect(cornerRadius: 18))
           }
           .buttonStyle(.plain)
           .accessibilityHint("Edit your note")
@@ -271,7 +271,7 @@ struct ItemReaderView: View {
         group("In your wiki") {
           ForEach(related.inWiki) { tp in
             Button { router.push(.wiki(tp.slug)) } label: {
-              LinkRow(title: Format.topicTitle(tp.title)) { WikiTile() }
+              LinkRow(title: Format.topicTitle(tp.title)) { WikiTile(slug: tp.slug) }
             }
             .buttonStyle(.plain)
           }
