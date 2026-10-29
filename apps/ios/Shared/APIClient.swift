@@ -125,6 +125,25 @@ final class APIClient {
     }
   }
 
+  // MARK: Chats
+
+  func chats() async throws -> [ChatSummary] {
+    try await send("/chats")
+  }
+
+  func chat(_ id: UUID) async throws -> Chat {
+    try await send("/chats/\(id.lower)")
+  }
+
+  /// Creates or replaces the chat; the app picks the id.
+  func saveChat(_ chat: Chat) async throws -> ChatSummary {
+    try await send("/chats/\(chat.id.lower)", method: "PUT", body: ChatBody(turns: chat.turns))
+  }
+
+  func deleteChat(_ id: UUID) async throws {
+    _ = try await data("/chats/\(id.lower)", method: "DELETE")
+  }
+
   // MARK: Wiki
 
   func wiki() async throws -> [TopicPageSummary] {
@@ -157,6 +176,10 @@ final class APIClient {
   private struct SearchBody: Encodable {
     let q: String
     let limit: Int
+  }
+
+  private struct ChatBody: Encodable {
+    let turns: [ChatTurn]
   }
 
   private func send<T: Decodable>(

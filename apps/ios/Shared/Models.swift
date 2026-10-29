@@ -84,6 +84,90 @@ struct Citation: Codable, Hashable {
   var key: String { kind == "item" ? "item:\(id.lower)" : "wiki:\(slug ?? id.lower)" }
 }
 
+/// One question in an Ask chat and its answer. The JSON keys are single
+/// words, since request bodies are encoded without snake_case conversion.
+struct ChatTurn: Codable, Identifiable {
+  enum Status {
+    case streaming
+    case done
+    case failed(title: String, detail: String)
+  }
+
+  let id: UUID
+  let question: String
+  var answer = ""
+  var citations: [Citation] = []
+  var status: Status = .streaming
+
+  var isStreaming: Bool { if case .streaming = status { true } else { false } }
+
+  private enum CodingKeys: String, CodingKey { case id, question, answer, citations, status, error }
+  private struct Failure: Codable {
+    let title: String
+    let detail: String
+  }
+}
+
+extension ChatTurn {
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    id = try c.decode(UUID.self, forKey: .id)
+    question = try c.decode(String.self, forKey: .question)
+    answer = try c.decodeIfPresent(String.self, forKey: .answer) ?? ""
+    citations = try c.decodeIfPresent([Citation].self, forKey: .citations) ?? []
+    switch try c.decode(String.self, forKey: .status) {
+    case "streaming": status = .streaming
+    case "failed":
+      let f = try c.decodeIfPresent(Failure.self, forKey: .error)
+      status = .failed(title: f?.title ?? "Couldn’t answer", detail: f?.detail ?? "")
+    default: status = .done
+    }
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(id, forKey: .id)
+    try c.encode(question, forKey: .question)
+    try c.encode(answer, forKey: .answer)
+    try c.encode(citations, forKey: .citations)
+    switch status {
+    case .streaming: try c.encode("streaming", forKey: .status)
+    case .done: try c.encode("done", forKey: .status)
+    case .failed(let title, let detail):
+      try c.encode("failed", forKey: .status)
+      try c.encode(Failure(title: title, detail: detail), forKey: .error)
+    }
+  }
+}
+
+/// One Ask conversation, saved on the server so it follows the account.
+struct Chat: Codable, Identifiable {
+  let id: UUID
+  var turns: [ChatTurn]
+  var createdAt: Date
+  var updatedAt: Date
+
+  /// A turn still streaming was cut off (the app quit, or Stop). Keep what
+  /// arrived; with nothing, fail it so it shows Try again.
+  mutating func settle() {
+    for i in turns.indices where turns[i].isStreaming {
+      turns[i].status =
+        turns[i].answer.isEmpty
+        ? .failed(title: "No answer", detail: "This answer stopped before it started.") : .done
+    }
+  }
+}
+
+/// A chat in History: just its questions, so the list doesn't download every answer.
+struct ChatSummary: Codable, Identifiable {
+  let id: UUID
+  var questions: [String]
+  let createdAt: Date
+  var updatedAt: Date
+
+  var title: String { questions.first ?? "New chat" }
+}
+
 struct TagCount: Codable, Hashable {
   let tag: String
   let count: Int

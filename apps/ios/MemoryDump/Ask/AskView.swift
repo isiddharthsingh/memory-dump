@@ -4,6 +4,7 @@ struct AskView: View {
   @Environment(Router.self) private var router
   @State private var model = AskModel()
   @State private var voice = VoiceInput()
+  @State private var showHistory = false
   @FocusState private var focused: Bool
 
   var body: some View {
@@ -30,12 +31,21 @@ struct AskView: View {
     .safeAreaInset(edge: .bottom) { composer }
     .navigationTitle("Ask")
     .toolbar {
-      if !model.turns.isEmpty {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button("New question", systemImage: "square.and.pencil") { model.startOver() }
+      ToolbarItem(placement: .topBarLeading) {
+        Button("History", systemImage: "clock.arrow.circlepath") {
+          Haptics.tap()
+          showHistory = true
         }
       }
+      ToolbarItem(placement: .topBarTrailing) {
+        Button("New chat", systemImage: "square.and.pencil") {
+          Haptics.press()
+          withAnimation { model.newChat() }
+        }
+        .disabled(model.turns.isEmpty)
+      }
     }
+    .sheet(isPresented: $showHistory) { ChatHistoryView(model: model) }
     .task { await model.loadSuggestions() }
     .onAppear {
       voice.onText = { model.input = $0 }
@@ -45,9 +55,11 @@ struct AskView: View {
     .onDisappear { voice.stop() }
   }
 
-  /// "Ask about this" on the reader or a topic opens this tab with a drafted question.
+  /// "Ask about this" on the reader or a topic opens this tab with a drafted
+  /// question, in a new chat so it doesn't land in an unrelated one.
   private func takeDraft() {
     guard let draft = router.askDraft else { return }
+    if !model.turns.isEmpty { model.newChat() }
     model.input = draft
     router.askDraft = nil
     focused = true
@@ -93,7 +105,12 @@ struct AskView: View {
       .accessibilityLabel("Question")
 
       Button {
-        model.isStreaming ? model.stop() : model.submit(model.input)
+        if model.isStreaming {
+          Haptics.tap()
+          model.stop()
+        } else {
+          model.submit(model.input)
+        }
       } label: {
         Image(systemName: model.isStreaming ? "stop.fill" : "arrow.up")
           .font(.system(size: model.isStreaming ? 13 : 16, weight: .bold))

@@ -103,6 +103,63 @@ import Testing
   }
 }
 
+@Suite struct ChatCodingTests {
+  /// GET /chats/{id} as the server sends it.
+  @Test func decodesServerChatAndSettlesCutOffAnswers() throws {
+    let json = #"""
+      {"id": "6f1c1b0e-6b8e-4c33-9f55-5a1b2c3d4e5f", "created_at": "2026-10-29T02:10:00.123456Z",
+       "updated_at": "2026-10-29T02:11:00Z", "turns": [
+        {"id": "0b9a2f4e-1c2d-4e5f-8a9b-0c1d2e3f4a5b", "question": "What did I save?", "answer": "Two essays",
+         "citations": [{"kind": "item", "id": "6f1c1b0e-6b8e-4c33-9f55-5a1b2c3d4e5f", "title": "A", "url": null, "slug": null}],
+         "status": "done", "error": null},
+        {"id": "1b9a2f4e-1c2d-4e5f-8a9b-0c1d2e3f4a5b", "question": "And before?", "answer": "One",
+         "citations": [], "status": "streaming", "error": null},
+        {"id": "2b9a2f4e-1c2d-4e5f-8a9b-0c1d2e3f4a5b", "question": "Why?", "answer": "", "citations": [],
+         "status": "failed", "error": {"title": "Offline", "detail": "No network"}}]}
+      """#
+    var chat = try JSONDecoder.api.decode(Chat.self, from: Data(json.utf8))
+    #expect(chat.turns.map(\.question) == ["What did I save?", "And before?", "Why?"])
+    #expect(chat.turns[0].citations.first?.title == "A")
+    #expect(chat.turns[1].isStreaming)
+    chat.settle()
+    #expect(!chat.turns[1].isStreaming)
+    #expect(chat.turns[1].answer == "One")
+    guard case .failed(let title, let detail) = chat.turns[2].status else { Issue.record("lost the failure"); return }
+    #expect(title == "Offline")
+    #expect(detail == "No network")
+  }
+
+  @Test func settleOffersRetryWhenNoAnswerArrived() {
+    var chat = Chat(id: UUID(), turns: [ChatTurn(id: UUID(), question: "Lost?")], createdAt: .now, updatedAt: .now)
+    chat.settle()
+    guard case .failed = chat.turns[0].status else { Issue.record("expected Try again"); return }
+  }
+
+  @Test func decodesHistorySummary() throws {
+    let json = #"""
+      [{"id": "6f1c1b0e-6b8e-4c33-9f55-5a1b2c3d4e5f", "questions": ["First?", "Second?"],
+        "created_at": "2026-10-29T02:10:00Z", "updated_at": "2026-10-29T02:11:00.5+00:00"}]
+      """#
+    let history = try JSONDecoder.api.decode([ChatSummary].self, from: Data(json.utf8))
+    #expect(history.first?.title == "First?")
+    #expect(history.first?.questions.count == 2)
+  }
+
+  /// PUT bodies go out through a plain JSONEncoder, so the keys must already be the server's.
+  @Test func encodesTurnsWithTheServersKeys() throws {
+    let failed = ChatTurn(id: UUID(), question: "Why?", status: .failed(title: "Offline", detail: "No network"))
+    let f = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(failed)) as? [String: Any])
+    #expect(Set(f.keys) == ["id", "question", "answer", "citations", "status", "error"])
+    #expect(f["status"] as? String == "failed")
+    #expect((f["error"] as? [String: String])?["title"] == "Offline")
+
+    let done = ChatTurn(id: UUID(), question: "Hi", answer: "Hello", status: .done)
+    let d = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(done)) as? [String: Any])
+    #expect(d["status"] as? String == "done")
+    #expect(d["error"] == nil)
+  }
+}
+
 @Suite struct ShareTextTests {
   @Test func findsTheFirstWebURL() {
     #expect(ShareText.firstHTTPURL(in: "look https://x.com/a/status/1 and http://b.com")?.absoluteString == "https://x.com/a/status/1")

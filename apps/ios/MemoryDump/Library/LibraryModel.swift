@@ -40,15 +40,7 @@ final class LibraryModel {
   var searchActive: Bool { searchQuery.count >= 2 }
 
   var sections: [DateSection] {
-    let now = Date.now
-    var order: [String] = []
-    var buckets: [String: [ItemSummary]] = [:]
-    for item in items {
-      let label = Self.sectionLabel(item.createdAt, now: now)
-      if buckets[label] == nil { order.append(label) }
-      buckets[label, default: []].append(item)
-    }
-    return order.map { DateSection(title: $0, items: buckets[$0]!) }
+    Self.grouped(items, by: \.createdAt).map { DateSection(title: $0.title, items: $0.values) }
   }
 
   var sources: [String] {
@@ -206,5 +198,17 @@ final class LibraryModel {
     let cal = Calendar.current
     if cal.isDate(created, equalTo: now, toGranularity: .month) { return "This month" }
     return created.formatted(.dateTime.month(.wide).year())
+  }
+
+  /// Buckets values under the `sectionLabel` of their date, keeping their order.
+  static func grouped<T>(_ values: [T], by date: (T) -> Date, now: Date = .now) -> [(title: String, values: [T])] {
+    var order: [String] = []
+    var buckets: [String: [T]] = [:]
+    for value in values {
+      let label = sectionLabel(date(value), now: now)
+      if buckets[label] == nil { order.append(label) }
+      buckets[label, default: []].append(value)
+    }
+    return order.map { ($0, buckets[$0]!) }
   }
 }
