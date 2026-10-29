@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// Entry point named in Info.plist (NSExtensionPrincipalClass). Hosts the
-/// SwiftUI card and closes the sheet when the model is done.
+/// SwiftUI pill and closes the extension when the model is done.
 final class ShareViewController: UIViewController {
   private var model: ShareModel?
 
@@ -23,5 +23,12 @@ final class ShareViewController: UIViewController {
     view.addSubview(host.view)
     host.didMove(toParent: self)
     model.start()
+  }
+
+  /// The pill drops in only once the presentation has finished, so it never
+  /// rides along with the system's presentation animation.
+  override func viewDidAppear(_ animated: Bool) {
+    super.viewDidAppear(animated)
+    model?.shown = true
   }
 }

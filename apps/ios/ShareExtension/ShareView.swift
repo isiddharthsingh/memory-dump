@@ -12,12 +12,14 @@ final class ShareModel {
   }
 
   var phase: Phase = .reading
-  var title = "Memory Dump"
-  var subtitle = ""
+  var title = ""
+  /// Set once the extension is on screen; cleared to slide the pill away.
+  var shown = false
 
   private let items: [NSExtensionItem]
   private let close: () -> Void
   private var task: Task<Void, Never>?
+  private var closing = false
 
   init(items: [NSExtensionItem], close: @escaping () -> Void) {
     self.items = items
@@ -60,7 +62,7 @@ final class ShareModel {
 
   func cancel() {
     task?.cancel()
-    close()
+    Task { await finish() }
   }
 
   private func send(_ payload: SharePayload) async throws {
@@ -100,32 +102,47 @@ final class ShareModel {
   private func describe(_ payload: SharePayload) {
     switch payload {
     case .link(let url, _, let pageTitle):
-      let host = url.host()?.replacing(/^www\./, with: "") ?? url.absoluteString
-      title = pageTitle ?? host
-      subtitle = pageTitle == nil ? "Link" : host
-    case .file(_, let name, let mimeType, _):
+      title = pageTitle ?? url.host()?.replacing(/^www\./, with: "") ?? url.absoluteString
+    case .file(_, let name, _, _):
       title = name
-      subtitle = mimeType == "application/pdf" ? "PDF" : "Image"
     }
   }
 
-  private func finish(after delay: Duration) async {
+  private func finish(after delay: Duration = .zero) async {
     try? await Task.sleep(for: delay)
+    // Cancel can race a save that just finished; complete the request once.
+    guard !closing else { return }
+    closing = true
+    shown = false
+    try? await Task.sleep(for: .milliseconds(300))  // let the pill slide out
     close()
   }
 }
 
+/// A small status pill under the Dynamic Island or notch. The extension is shown
+/// full screen over the app with a clear background (see Info.plist), so the page
+/// stays visible around it.
 struct ShareView: View {
   let model: ShareModel
 
+  private static let ink = Color(red: 0.04, green: 0.04, blue: 0.05)
+
   var body: some View {
-    VStack {
-      Spacer()
-      card
-        .padding(.horizontal, 12)
-        .padding(.bottom, 12)
+    ZStack(alignment: .top) {
+      // Taps outside the pill dismiss a failure; while saving they do nothing.
+      Color.clear
+        .contentShape(.rect)
+        .ignoresSafeArea()
+        .onTapGesture { if isFailed { model.cancel() } }
+      if model.shown {
+        pill
+          .padding(.horizontal, 16)
+          .padding(.top, 6)
+          .transition(.move(edge: .top).combined(with: .opacity))
+      }
     }
-    .background(Color.black.opacity(0.25).ignoresSafeArea())
+    .animation(.spring(duration: 0.4, bounce: 0.25), value: model.shown)
+    .animation(.snappy, value: model.phase)
     .sensoryFeedback(trigger: model.phase) { _, phase in
       switch phase {
       case .saved, .queued: .success
@@ -135,66 +152,67 @@ struct ShareView: View {
     }
   }
 
-  private var card: some View {
-    VStack(spacing: 0) {
-      HStack(spacing: 8) {
-        Text("M")
-          .font(.custom("Georgia", size: 13).weight(.semibold))
-          .foregroundStyle(.white)
-          .frame(width: 22, height: 22)
-          .background(Color(red: 0.04, green: 0.04, blue: 0.05), in: .rect(cornerRadius: 6))
-        Text("Memory Dump").font(.headline)
-        Spacer()
+  private var pill: some View {
+    HStack(spacing: 12) {
+      glyph.frame(width: 28, height: 28)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(headline).font(.subheadline.weight(.semibold))
+        Text(detail)
+          .font(.footnote)
+          .foregroundStyle(.white.opacity(0.7))
+          .lineLimit(isFailed ? 3 : 2)
       }
-      .padding(.horizontal, 16)
-      .padding(.vertical, 12)
-      Divider()
-      VStack(alignment: .leading, spacing: 2) {
-        Text(model.title).font(.body.weight(.semibold)).lineLimit(2)
-        if !model.subtitle.isEmpty {
-          Text(model.subtitle).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-        }
+      if isBusy || isFailed {
+        Button(isBusy ? "Cancel" : "Close", systemImage: "xmark", action: model.cancel)
+          .labelStyle(.iconOnly)
+          .font(.footnote.weight(.bold))
+          .foregroundStyle(.white.opacity(0.8))
+          .frame(width: 28, height: 28)
+          .background(.white.opacity(0.15), in: .circle)
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.horizontal, 16)
-      .padding(.vertical, 12)
-      Divider()
-      status
-        .font(.subheadline)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
     }
-    .background(.background, in: .rect(cornerRadius: 22))
-    .shadow(color: .black.opacity(0.16), radius: 24, y: 8)
+    .foregroundStyle(.white)
+    .padding(.leading, 12)
+    .padding(.trailing, 14)
+    .padding(.vertical, 10)
+    .background(Self.ink, in: .rect(cornerRadius: 26))
+    .shadow(color: .black.opacity(0.2), radius: 16, y: 6)
   }
 
-  @ViewBuilder private var status: some View {
-    HStack(spacing: 8) {
-      switch model.phase {
-      case .reading:
-        ProgressView()
-        Text("Reading the share…").foregroundStyle(.secondary)
-        Spacer()
-        Button("Cancel", action: model.cancel)
-      case .sending:
-        ProgressView()
-        Text("Saving…").foregroundStyle(.secondary)
-        Spacer()
-        Button("Cancel", action: model.cancel)
-      case .saved:
-        Label("Saved", systemImage: "checkmark.circle.fill").foregroundStyle(.green).bold()
-        Text("Analyzing in the background.").foregroundStyle(.secondary)
-        Spacer()
-      case .queued:
-        Label("Kept", systemImage: "clock.fill").foregroundStyle(.orange).bold()
-        Text("Offline. It sends when you open Memory Dump.").foregroundStyle(.secondary)
-        Spacer()
-      case .failed(let reason):
-        Label("Not saved", systemImage: "exclamationmark.circle.fill").foregroundStyle(.red).bold()
-        Text(reason).foregroundStyle(.secondary).lineLimit(3)
-        Spacer()
-        Button("Close", action: model.cancel)
-      }
+  @ViewBuilder private var glyph: some View {
+    switch model.phase {
+    case .reading, .sending:
+      ProgressView().tint(.white)
+    case .saved:
+      Image(systemName: "checkmark.circle.fill").font(.title2).foregroundStyle(.green)
+    case .queued:
+      Image(systemName: "clock.fill").font(.title2).foregroundStyle(.orange)
+    case .failed:
+      Image(systemName: "exclamationmark.circle.fill").font(.title2).foregroundStyle(.red)
     }
+  }
+
+  private var headline: String {
+    switch model.phase {
+    case .reading, .sending: "Saving to Memory Dump"
+    case .saved: "Saved to Memory Dump"
+    case .queued: "Kept offline"
+    case .failed: "Not saved"
+    }
+  }
+
+  private var detail: String {
+    switch model.phase {
+    case .reading: "Reading the share…"
+    case .sending, .saved: model.title
+    case .queued: "It sends when you open Memory Dump."
+    case .failed(let reason): reason
+    }
+  }
+
+  private var isBusy: Bool { model.phase == .reading || model.phase == .sending }
+
+  private var isFailed: Bool {
+    if case .failed = model.phase { true } else { false }
   }
 }

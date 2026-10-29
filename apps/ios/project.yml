@@ -101,6 +101,9 @@ targets:
           NSExtensionAttributes:
             # Links, text, images and PDFs; the same rule the Expo extension used.
             NSExtensionActivationRule: 'SUBQUERY(extensionItems, $extensionItem, SUBQUERY($extensionItem.attachments, $attachment, ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.url" || ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.text" || ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.image" || ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.adobe.pdf" || ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.file-url").@count > 0).@count > 0'
+            # Present over the app instead of in a sheet: no dimming, shadow or
+            # white background, so only the status pill shows.
+            NSExtensionShareWantsFullScreenPresentation: true
     entitlements:
       path: ShareExtension/ShareExtension.entitlements
       properties:
