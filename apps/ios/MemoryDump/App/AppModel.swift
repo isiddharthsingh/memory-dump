@@ -22,7 +22,10 @@ final class AppModel {
 
   init() {
     session = store.current()
-    store.onSignedOut = { [weak self] in self?.session = nil }
+    store.onSignedOut = { [weak self] in
+      Self.forgetSavedCopies()
+      self?.session = nil
+    }
   }
 
   var serverURL: URL? { store.serverURL }
@@ -45,12 +48,14 @@ final class AppModel {
     // Best effort: the local session is cleared either way.
     if session != nil { try? await APIClient.shared.signOut() }
     store.clear()
+    Self.forgetSavedCopies()
     session = nil
   }
 
   func deleteAccount() async throws {
     try await APIClient.shared.deleteAccount()
     store.clear()
+    Self.forgetSavedCopies()
     session = nil
   }
 
@@ -66,6 +71,11 @@ final class AppModel {
     Task { await registerForPush() }
   }
 
+  /// Nothing from an account stays on the phone after it signs out.
+  private static func forgetSavedCopies() {
+    SavedResponses.shared.clear()
+  }
+
   private func base(from server: String) throws -> URL {
     let cleaned = server.trimmingCharacters(in: .whitespacesAndNewlines).replacing(/\/+$/, with: "")
     guard let url = URL(string: cleaned), url.scheme?.hasPrefix("http") == true, url.host() != nil else {
@@ -78,7 +88,11 @@ final class AppModel {
 
   func becameActive() async {
     // The extension can rotate the tokens while the app is in the background.
-    if session != nil { session = store.current() }
+    if session != nil {
+      session = store.current()
+      // Or ended it, when the server refused its refresh there.
+      if session == nil { Self.forgetSavedCopies() }
+    }
     guard session != nil else { return }
     let result = await ShareQueue.flush()
     libraryVersion += 1

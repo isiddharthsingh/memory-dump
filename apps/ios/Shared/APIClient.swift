@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 enum APIError: LocalizedError, Equatable {
   case notConfigured
@@ -7,6 +8,8 @@ enum APIError: LocalizedError, Equatable {
   case http(Int, String)
   /// Sign-in or sign-up was refused; the text says why, ready to show.
   case auth(String)
+  /// `APIClient.saved` has no copy of this.
+  case notSaved
 
   var errorDescription: String? {
     switch self {
@@ -14,18 +17,45 @@ enum APIError: LocalizedError, Equatable {
     case .signedOut: "Not signed in."
     case .http(let status, let detail): detail.isEmpty ? "HTTP \(status)" : detail
     case .auth(let message): message
+    case .notSaved: "Not saved on this phone yet."
     }
+  }
+}
+
+extension Error {
+  /// The request never got an answer: no network, a wrong address, or the
+  /// server (or the proxy in front of it) is down.
+  var isUnreachable: Bool {
+    if let error = self as? URLError { return error.code != .cancelled }
+    if case .http(let status, _)? = self as? APIError { return [502, 503, 504].contains(status) }
+    return false
   }
 }
 
 /// The backend API. Every authorized call adds the access token, and after a
 /// 401 refreshes it once (see SessionStore.refresh) and tries again.
+///
+/// Every GET's answer is saved for the signed-in account (SavedResponses).
+/// When the server can't be reached, a GET returns that saved copy instead.
+@Observable
 final class APIClient {
   static let shared = APIClient()
+  /// Reads only the saved copies, never the network, so a screen can show
+  /// them before the server answers. Throws APIError.notSaved when there's none.
+  static let saved = APIClient(savedOnly: true)
 
+  /// The last request couldn't reach the server, so reads are saved copies.
+  private(set) var isOffline = false
+
+  private let savedOnly: Bool
+  private let saves = SavedResponses.shared
   private let store = SessionStore.shared
   private let http = URLSession.shared
   private let decoder = JSONDecoder.api
+
+  private init(savedOnly: Bool = false) {
+    self.savedOnly = savedOnly
+  }
 
   // MARK: Items
 
@@ -45,15 +75,17 @@ final class APIClient {
   }
 
   func retryItem(_ id: UUID) async throws -> ItemDetail {
-    try await send("/items/\(id.lower)/retry", method: "POST")
+    try await send("/items/\(id.lower)/retry", method: "POST", saveAs: "/items/\(id.lower)")
   }
 
   func updateNote(_ id: UUID, note: String?) async throws -> ItemDetail {
-    try await send("/items/\(id.lower)", method: "PATCH", body: ["share_text": note])
+    try await send(
+      "/items/\(id.lower)", method: "PATCH", body: ["share_text": note], saveAs: "/items/\(id.lower)")
   }
 
   func deleteItem(_ id: UUID) async throws {
     _ = try await data("/items/\(id.lower)", method: "DELETE")
+    forget("/items/\(id.lower)")
   }
 
   func related(_ id: UUID) async throws -> RelatedResponse {
@@ -145,6 +177,7 @@ final class APIClient {
 
   func deleteChat(_ id: UUID) async throws {
     _ = try await data("/chats/\(id.lower)", method: "DELETE")
+    forget("/chats/\(id.lower)")
   }
 
   // MARK: Wiki
@@ -196,24 +229,65 @@ final class APIClient {
     let turns: [ChatTurn]
   }
 
+  /// `saveAs` saves a write's answer as the copy of the GET at that path, for
+  /// writes that answer with the thing they changed.
   private func send<T: Decodable>(
     _ path: String, method: String = "GET", query: [String: String?] = [:],
-    body: (any Encodable)? = nil
+    body: (any Encodable)? = nil, saveAs: String? = nil
   ) async throws -> T {
-    let data = try await data(path, method: method, query: query, body: body)
+    let data = try await data(path, method: method, query: query, body: body, saveAs: saveAs)
     return try decoder.decode(T.self, from: data)
   }
 
   private func data(
     _ path: String, method: String = "GET", query: [String: String?] = [:],
-    body: (any Encodable)? = nil
+    body: (any Encodable)? = nil, saveAs: String? = nil
   ) async throws -> Data {
-    let (data, _) = try await authorized { base, token in
-      try self.request(base, path, method: method, query: query, body: body, token: token)
-    } perform: { req in
-      try await self.http.data(for: req)
+    let isRead = method == "GET"
+    let key = isRead ? Self.savedKey(path, query) : saveAs
+    let user = store.current()?.user.id
+    if savedOnly {
+      guard isRead, let key, let user, let saved = saves.read(key, user: user) else {
+        throw APIError.notSaved
+      }
+      return saved
     }
-    return data
+    do {
+      let (data, _) = try await authorized { base, token in
+        try self.request(base, path, method: method, query: query, body: body, token: token)
+      } perform: { req in
+        try await self.http.data(for: req)
+      }
+      // Set only on a change: every set re-renders the views that show it.
+      if isOffline { isOffline = false }
+      // Not if the account signed out while this was on its way.
+      if let key, let user, store.current()?.user.id == user { saves.write(data, key, user: user) }
+      return data
+    } catch let error where error.isUnreachable {
+      if !isOffline { isOffline = true }
+      // A read falls back to the saved copy; a write has to fail.
+      if isRead, let key, let user, let saved = saves.read(key, user: user) { return saved }
+      throw error
+    }
+  }
+
+  /// What a GET is saved under: its path and sorted query, without the server
+  /// address, so a new address still finds the copies.
+  static func savedKey(_ path: String, _ query: [String: String?]) -> String {
+    let items = queryItems(query)
+    guard !items.isEmpty else { return path }
+    return path + "?" + items.map { "\($0.name)=\($0.value ?? "")" }.joined(separator: "&")
+  }
+
+  /// Drops the saved copy of something deleted, so it can't be opened offline.
+  private func forget(_ path: String) {
+    guard let user = store.current()?.user.id else { return }
+    saves.remove(Self.savedKey(path, [:]), user: user)
+  }
+
+  private static func queryItems(_ query: [String: String?]) -> [URLQueryItem] {
+    query.compactMap { k, v in v.map { URLQueryItem(name: k, value: $0) } }
+      .sorted { $0.name < $1.name }
   }
 
   /// Builds the request with the current access token, and after a 401 builds it
@@ -223,6 +297,7 @@ final class APIClient {
     perform: (URLRequest) async throws -> (R, URLResponse),
     detail: (R) async throws -> Data = { $0 as? Data ?? Data() }
   ) async throws -> (R, HTTPURLResponse) {
+    guard !savedOnly else { throw APIError.notSaved }
     guard let base = store.serverURL else { throw APIError.notConfigured }
     guard var session = store.current() else { throw APIError.signedOut }
     var (result, resp) = try await perform(make(base, session.accessToken))
@@ -247,10 +322,13 @@ final class APIClient {
     body: (any Encodable)? = nil, token: String?
   ) throws -> URLRequest {
     var url = base.appending(path: path)
-    let items = query.compactMap { k, v in v.map { URLQueryItem(name: k, value: $0) } }
-    if !items.isEmpty { url.append(queryItems: items.sorted { $0.name < $1.name }) }
+    let items = Self.queryItems(query)
+    if !items.isEmpty { url.append(queryItems: items) }
     var req = URLRequest(url: url)
     req.httpMethod = method
+    // A read has a saved copy to fall back on, so don't wait the default
+    // minute on a server that's asleep or off the network.
+    if method == "GET" { req.timeoutInterval = 10 }
     if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
     if let body {
       req.setValue("application/json", forHTTPHeaderField: "Content-Type")
