@@ -191,11 +191,16 @@ async def hybrid_search(
     candidate_limit: int = 50,
     final_limit: int = 6,
     use_reranker: bool = True,
+    min_score: float | None = None,
 ) -> list[Candidate]:
     """Run dense + lexical, fuse with RRF, optionally rerank, return top-N.
 
     All hits are scoped to `user_id` — items + topic-page chunks owned by
     other users are never considered.
+
+    With `min_score`, a chunk found only by the dense search is dropped
+    unless its rerank score reaches it: nearest neighbours exist even for a
+    query that matches nothing. Keyword matches are kept whatever their score.
     """
     embeddings = await embed_texts([query], input_type="query")
     if not embeddings:
@@ -225,9 +230,10 @@ async def hybrid_search(
     for cand, score in fused[: len(fused_candidates)]:
         cand.score = score
 
-    if not use_reranker or len(fused_candidates) <= final_limit:
+    if not use_reranker or (min_score is None and len(fused_candidates) <= final_limit):
         return fused_candidates[:final_limit]
 
+    keyword = {(c.kind, str(c.chunk_id)) for c in lexical}
     try:
         rerank_input = [c.text for c in fused_candidates]
         rerank_result = await rerank(query, rerank_input, top_k=final_limit)
@@ -236,9 +242,16 @@ async def hybrid_search(
             cand = fused_candidates[idx]
             cand.score = float(score)
             reranked.append(cand)
+        if min_score is not None:
+            reranked = [
+                c for c in reranked if c.score >= min_score or (c.kind, str(c.chunk_id)) in keyword
+            ]
         return reranked
     except Exception:
-        # Reranker is optional — fall back to RRF order.
+        # Reranker is optional — fall back to RRF order. With no rerank scores
+        # to judge dense-only chunks by, `min_score` keeps keyword matches only.
+        if min_score is not None:
+            fused_candidates = [c for c in fused_candidates if (c.kind, str(c.chunk_id)) in keyword]
         return fused_candidates[:final_limit]
 
 

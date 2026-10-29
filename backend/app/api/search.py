@@ -12,6 +12,11 @@ from app.deps import get_current_user
 
 router = APIRouter(prefix="/search", tags=["search"])
 
+# Rerank score a semantic-only match needs to be listed. With rerank-2.5 on a
+# real library, the closest chunks to nonsense or off-topic queries scored
+# 0.30–0.48, and on-topic queries' top chunks 0.50–0.93.
+_MIN_SCORE = 0.5
+
 
 # Item chunks are embedded as labeled blocks ("Title: …", "Tags: …", see
 # workers/ingest.py). The title is already shown next to the snippet and the
@@ -57,7 +62,7 @@ async def search(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> SearchResponse:
     chunks = await hybrid_search(
-        session, body.q, current_user.id, final_limit=body.limit
+        session, body.q, current_user.id, final_limit=body.limit, min_score=_MIN_SCORE
     )
     hits = [
         SearchHit(
