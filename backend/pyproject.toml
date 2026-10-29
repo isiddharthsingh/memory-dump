@@ -54,6 +54,4 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-
-[tool.pytest_asyncio]
 asyncio_mode = "auto"
