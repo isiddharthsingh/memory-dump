@@ -192,3 +192,56 @@ import Testing
     #expect(ShareText.fileNote(from: "   ") == nil)
   }
 }
+
+@Suite struct OfflineCopyTests {
+  /// A fresh folder per test; Swift Testing makes a new suite value for each.
+  private let saves = SavedResponses(
+    root: FileManager.default.temporaryDirectory.appending(path: "saved-\(UUID().uuidString)"))
+
+  @Test func keepsEachAccountsCopiesApart() {
+    let (a, b) = (UUID(), UUID())
+    saves.write(Data("A".utf8), "/items", user: a)
+    #expect(saves.read("/items", user: a) == Data("A".utf8))
+    #expect(saves.read("/items", user: b) == nil)
+    saves.write(Data("A2".utf8), "/items", user: a)
+    #expect(saves.read("/items", user: a) == Data("A2".utf8))
+    saves.remove("/items", user: a)
+    #expect(saves.read("/items", user: a) == nil)
+  }
+
+  @Test func clearForgetsEveryAccount() {
+    let (a, b) = (UUID(), UUID())
+    saves.write(Data("A".utf8), "/wiki", user: a)
+    saves.write(Data("B".utf8), "/wiki", user: b)
+    saves.clear()
+    #expect(saves.read("/wiki", user: a) == nil)
+    #expect(saves.read("/wiki", user: b) == nil)
+  }
+
+  /// The Library's pages and the offline walk's pages must land on the same copy.
+  @Test func savedKeyIgnoresQueryOrderAndMissingValues() {
+    #expect(APIClient.savedKey("/items", ["offset": "25", "limit": "25", "tag": nil]) == "/items?limit=25&offset=25")
+    #expect(APIClient.savedKey("/items", ["limit": "25", "offset": "25"]) == "/items?limit=25&offset=25")
+    #expect(APIClient.savedKey("/wiki/llms", [:]) == "/wiki/llms")
+  }
+
+  @Test func onlyAMissingServerFallsBackToTheSavedCopy() {
+    #expect(URLError(.notConnectedToInternet).isUnreachable)
+    #expect(URLError(.cannotConnectToHost).isUnreachable)
+    #expect(URLError(.timedOut).isUnreachable)
+    #expect(APIError.http(503, "").isUnreachable)
+    #expect(!URLError(.cancelled).isUnreachable)
+    #expect(!APIError.http(404, "Item not found").isUnreachable)
+    #expect(!APIError.signedOut.isUnreachable)
+  }
+
+  /// The walk skips what matches, so a chat's date must survive the round trip.
+  @Test func syncManifestRoundTrips() throws {
+    var manifest = OfflineSync.Manifest()
+    manifest.items[UUID()] = "ready"
+    manifest.wiki["large-language-models"] = 3
+    manifest.chats[UUID()] = try #require(ISODate.parse("2026-10-28T19:54:13.728123Z"))
+    let data = try JSONEncoder().encode(manifest)
+    #expect(try JSONDecoder().decode(OfflineSync.Manifest.self, from: data) == manifest)
+  }
+}
