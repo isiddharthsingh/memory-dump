@@ -101,6 +101,10 @@ Push needs a paid Apple Developer account. Once you have one, set
 | DELETE | `/items/{id}`         | delete                                  |
 | POST   | `/search`             | hybrid retrieval (returns SearchHits)   |
 | POST   | `/ask`                | RAG answer with citations               |
+| GET    | `/chats`              | Ask history: each chat's questions      |
+| GET    | `/chats/{id}`         | one chat with its answers               |
+| PUT    | `/chats/{id}`         | save a chat (the app picks the id)      |
+| DELETE | `/chats/{id}`         | delete a chat                           |
 | GET    | `/wiki`               | list topic pages                        |
 | GET    | `/wiki/{slug}`        | topic page markdown                     |
 
