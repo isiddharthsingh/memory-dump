@@ -6,7 +6,7 @@ import Foundation
 final class SessionStore {
   static let shared = SessionStore()
 
-  /// Called after a failed refresh clears the session. The app shows sign-in.
+  /// Called after `expire()` clears the session. The app shows sign-in.
   var onSignedOut: (() -> Void)?
 
   private enum Key {
@@ -41,10 +41,16 @@ final class SessionStore {
     Keychain.delete(Key.session)
   }
 
-  /// One refresh at a time across the app and the extension. The backend
-  /// revokes every session when a refresh token is used twice
-  /// (backend/app/api/auth.py), so a second caller must pick up the tokens
-  /// the first one wrote instead of refreshing again.
+  /// Drops a session the server no longer accepts. The app shows sign-in.
+  func expire() {
+    clear()
+    onSignedOut?()
+  }
+
+  /// One refresh at a time across the app and the extension. SuperTokens
+  /// rotates the refresh token and ends the session when a replaced one is
+  /// used again, so a second caller must pick up the tokens the first one
+  /// wrote instead of refreshing again.
   func refresh(after stale: Session) async throws -> Session {
     try await AppGroup.withFileLock("session.lock") {
       guard let now = current() else { throw APIError.signedOut }
@@ -52,12 +58,11 @@ final class SessionStore {
       if now.refreshToken != stale.refreshToken { return now }
       guard let base = serverURL else { throw APIError.notConfigured }
       do {
-        let fresh = try await AuthAPI.refresh(base: base, refreshToken: now.refreshToken)
+        let fresh = try await AuthAPI.refresh(base: base, session: now)
         save(fresh)
         return fresh
       } catch APIError.http(401, _) {
-        clear()
-        onSignedOut?()
+        expire()
         throw APIError.signedOut
       }
     }

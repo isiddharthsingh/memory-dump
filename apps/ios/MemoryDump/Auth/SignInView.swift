@@ -38,7 +38,7 @@ struct SignInView: View {
             .autocorrectionDisabled()
         }
         field("Password") {
-          SecureField(creating ? "At least 8 characters" : "Your password", text: $password)
+          SecureField(creating ? "At least 10 characters" : "Your password", text: $password)
             .textContentType(creating ? .newPassword : .password)
         }
 

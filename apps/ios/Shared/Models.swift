@@ -180,18 +180,37 @@ struct User: Codable, Hashable {
   let createdAt: Date
 }
 
+/// A SuperTokens session: the tokens from the `st-access-token` and
+/// `st-refresh-token` response headers, and the `/auth/me` profile.
 struct Session: Codable, Equatable {
   let accessToken: String
   let refreshToken: String
   let user: User
 }
 
-struct TokenResponse: Codable {
-  let accessToken: String
-  let refreshToken: String
-  let user: User
+/// The body of SuperTokens' sign-in and sign-up responses. A refusal is still
+/// a 200, with a status instead of "OK". Its keys are camelCase, so it is read
+/// with a plain JSONDecoder.
+struct AuthResult: Decodable {
+  struct FieldError: Decodable {
+    let id: String
+    let error: String
+  }
 
-  var session: Session { Session(accessToken: accessToken, refreshToken: refreshToken, user: user) }
+  let status: String
+  let formFields: [FieldError]?
+  let message: String?
+  let reason: String?
+
+  /// What to tell the person, or nil when it worked.
+  var problem: String? {
+    switch status {
+    case "OK": nil
+    case "WRONG_CREDENTIALS_ERROR": "Incorrect email or password."
+    case "FIELD_ERROR": formFields?.first?.error ?? "Check your email and password."
+    default: message ?? reason ?? "The server said \(status)."
+    }
+  }
 }
 
 struct IngestResponse: Codable { let item: ItemSummary }

@@ -5,12 +5,15 @@ enum APIError: LocalizedError, Equatable {
   case signedOut
   /// The server answered with a non-2xx status. The text is FastAPI's `detail`.
   case http(Int, String)
+  /// Sign-in or sign-up was refused; the text says why, ready to show.
+  case auth(String)
 
   var errorDescription: String? {
     switch self {
     case .notConfigured: "Server URL not configured."
     case .signedOut: "Not signed in."
     case .http(let status, let detail): detail.isEmpty ? "HTTP \(status)" : detail
+    case .auth(let message): message
     }
   }
 }
@@ -154,6 +157,17 @@ final class APIClient {
     try await send("/wiki/\(slug)")
   }
 
+  // MARK: Account
+
+  /// Ends this device's session on the server.
+  func signOut() async throws {
+    _ = try await data("/auth/signout", method: "POST")
+  }
+
+  func deleteAccount() async throws {
+    _ = try await data("/auth/me", method: "DELETE")
+  }
+
   // MARK: Devices and health
 
   func registerDevice(token: String, apnsEnv: String) async throws {
@@ -218,7 +232,11 @@ final class APIClient {
     }
     let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
     guard let http = resp as? HTTPURLResponse, (200..<300).contains(status) else {
-      if status == 401 { throw APIError.signedOut }
+      if status == 401 {
+        // Refused even with fresh tokens: the account behind the session is gone.
+        store.expire()
+        throw APIError.signedOut
+      }
       throw APIError.http(status, FastAPIError.detail(in: try await detail(result)))
     }
     return (result, http)
@@ -242,63 +260,87 @@ final class APIClient {
   }
 }
 
-/// Unauthenticated `/auth/*` calls. They take the server address explicitly so
-/// sign-in can try an address before it is saved.
+/// SuperTokens' sign-in, sign-up and refresh routes, with header-based
+/// sessions: requests send `st-auth-mode: header`, tokens come back in the
+/// `st-access-token` and `st-refresh-token` response headers. They take the
+/// server address explicitly so sign-in can try an address before it is saved.
 enum AuthAPI {
-  static func login(base: URL, email: String, password: String) async throws -> Session {
-    try session(await post(base, "/auth/login", ["email": email, "password": password]))
+  static func signIn(base: URL, email: String, password: String) async throws -> Session {
+    try await session(base, "/auth/signin", [("email", email), ("password", password)])
   }
 
-  static func signup(base: URL, email: String, password: String, displayName: String?)
+  static func signUp(base: URL, email: String, password: String, displayName: String?)
     async throws -> Session
   {
-    try session(
-      await post(
-        base, "/auth/signup",
-        ["email": email, "password": password, "display_name": displayName]))
+    var fields = [("email", email), ("password", password)]
+    if let displayName { fields.append(("name", displayName)) }
+    return try await session(base, "/auth/signup", fields)
   }
 
-  static func refresh(base: URL, refreshToken: String) async throws -> Session {
-    try session(await post(base, "/auth/refresh", ["refresh_token": refreshToken]))
-  }
-
-  /// Best effort: the local session is cleared either way.
-  static func logout(base: URL, refreshToken: String) async {
-    _ = try? await post(base, "/auth/logout", ["refresh_token": refreshToken])
-  }
-
-  static func deleteAccount(base: URL, accessToken: String) async throws {
-    var req = URLRequest(url: base.appending(path: "/auth/me"))
-    req.httpMethod = "DELETE"
-    req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+  /// New tokens for old. SuperTokens rotates the refresh token each time, and a
+  /// refresh token used again after its replacement ends the session.
+  static func refresh(base: URL, session: Session) async throws -> Session {
+    var req = try APIClient.shared.request(
+      base, "/auth/session/refresh", method: "POST", token: session.refreshToken)
+    req.setValue("header", forHTTPHeaderField: "st-auth-mode")
     let (data, resp) = try await URLSession.shared.data(for: req)
-    let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-    guard (200..<300).contains(status) else {
-      throw APIError.http(status, FastAPIError.detail(in: data))
+    let http = resp as? HTTPURLResponse
+    guard let http, http.statusCode == 200, let tokens = Tokens(http) else {
+      throw APIError.http(http?.statusCode ?? 0, FastAPIError.detail(in: data))
+    }
+    return Session(accessToken: tokens.access, refreshToken: tokens.refresh, user: session.user)
+  }
+
+  private struct Tokens {
+    let access: String
+    let refresh: String
+
+    init?(_ response: HTTPURLResponse) {
+      guard let access = response.value(forHTTPHeaderField: "st-access-token"), !access.isEmpty,
+        let refresh = response.value(forHTTPHeaderField: "st-refresh-token"), !refresh.isEmpty
+      else { return nil }
+      self.access = access
+      self.refresh = refresh
     }
   }
 
-  private static func session(_ data: Data) throws -> Session {
-    try JSONDecoder.api.decode(TokenResponse.self, from: data).session
+  private struct Form: Encodable {
+    struct Field: Encodable {
+      let id: String
+      let value: String
+    }
+    let formFields: [Field]
   }
 
-  private static func post(_ base: URL, _ path: String, _ body: [String: String?]) async throws
-    -> Data
+  /// Signs in or up, then loads the profile with the new access token.
+  private static func session(_ base: URL, _ path: String, _ fields: [(String, String)])
+    async throws -> Session
   {
-    var req = URLRequest(url: base.appending(path: path))
-    req.httpMethod = "POST"
-    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    req.httpBody = try JSONEncoder().encode(body)
+    let form = Form(formFields: fields.map { .init(id: $0, value: $1) })
+    var req = try APIClient.shared.request(base, path, method: "POST", body: form, token: nil)
+    req.setValue("header", forHTTPHeaderField: "st-auth-mode")
     let (data, resp) = try await URLSession.shared.data(for: req)
     let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-    guard (200..<300).contains(status) else {
-      throw APIError.http(status, FastAPIError.detail(in: data))
+    guard status == 200 else { throw APIError.http(status, FastAPIError.detail(in: data)) }
+    if let problem = try JSONDecoder().decode(AuthResult.self, from: data).problem {
+      throw APIError.auth(problem)
     }
-    return data
+    guard let http = resp as? HTTPURLResponse, let tokens = Tokens(http) else {
+      throw APIError.auth("The server didn’t start a session.")
+    }
+    let me = try APIClient.shared.request(base, "/auth/me", token: tokens.access)
+    let (profile, meResp) = try await URLSession.shared.data(for: me)
+    let meStatus = (meResp as? HTTPURLResponse)?.statusCode ?? 0
+    guard (200..<300).contains(meStatus) else {
+      throw APIError.http(meStatus, FastAPIError.detail(in: profile))
+    }
+    let user = try JSONDecoder.api.decode(User.self, from: profile)
+    return Session(accessToken: tokens.access, refreshToken: tokens.refresh, user: user)
   }
 }
 
 /// FastAPI errors look like {"detail": "..."}; validation errors carry a list.
+/// SuperTokens' own /auth routes answer {"message": "..."}.
 enum FastAPIError {
   static func detail(in data: Data) -> String {
     guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -308,7 +350,7 @@ enum FastAPIError {
     if let list = obj["detail"] as? [[String: Any]], let msg = list.first?["msg"] as? String {
       return msg
     }
-    return ""
+    return obj["message"] as? String ?? ""
   }
 }
 

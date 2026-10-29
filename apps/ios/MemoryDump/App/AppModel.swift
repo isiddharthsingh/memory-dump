@@ -31,29 +31,27 @@ final class AppModel {
 
   func signIn(server: String, email: String, password: String) async throws {
     let base = try base(from: server)
-    finishSignIn(try await AuthAPI.login(base: base, email: email, password: password), server: server)
+    finishSignIn(try await AuthAPI.signIn(base: base, email: email, password: password), server: server)
   }
 
   func signUp(server: String, email: String, password: String, displayName: String?) async throws {
     let base = try base(from: server)
-    let session = try await AuthAPI.signup(
+    let session = try await AuthAPI.signUp(
       base: base, email: email, password: password, displayName: displayName)
     finishSignIn(session, server: server)
   }
 
   func signOut() async {
-    if let session, let base = store.serverURL {
-      await AuthAPI.logout(base: base, refreshToken: session.refreshToken)
-    }
+    // Best effort: the local session is cleared either way.
+    if session != nil { try? await APIClient.shared.signOut() }
     store.clear()
     session = nil
   }
 
   func deleteAccount() async throws {
-    guard let session = store.current(), let base = store.serverURL else { return }
-    try await AuthAPI.deleteAccount(base: base, accessToken: session.accessToken)
+    try await APIClient.shared.deleteAccount()
     store.clear()
-    self.session = nil
+    session = nil
   }
 
   func setServer(_ raw: String) {

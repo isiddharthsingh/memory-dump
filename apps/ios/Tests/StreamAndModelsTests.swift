@@ -66,16 +66,28 @@ import Testing
     #expect(ISODate.parse(raw) != nil)
   }
 
-  @Test func decodesTokenResponseIntoSession() throws {
+  @Test func readsSuperTokensSignInResults() throws {
+    func problem(_ json: String) throws -> String? {
+      try JSONDecoder().decode(AuthResult.self, from: Data(json.utf8)).problem
+    }
+    #expect(try problem(#"{"status": "OK", "user": {"id": "u"}}"#) == nil)
+    #expect(try problem(#"{"status": "WRONG_CREDENTIALS_ERROR"}"#) == "Incorrect email or password.")
+    #expect(
+      try problem(
+        #"{"status": "FIELD_ERROR", "formFields": [{"id": "email", "error": "This email already exists. Please sign in instead."}]}"#
+      ) == "This email already exists. Please sign in instead.")
+    #expect(try problem(#"{"status": "GENERAL_ERROR", "message": "Signups are paused"}"#) == "Signups are paused")
+  }
+
+  /// `/auth/me` is a FastAPI response, read with JSONDecoder.api.
+  @Test func decodesProfile() throws {
     let json = #"""
-      {"access_token": "a", "refresh_token": "r", "token_type": "bearer", "expires_in": 900,
-       "user": {"id": "6f1c1b0e-6b8e-4c33-9f55-5a1b2c3d4e5f", "email": "e@x.com",
-                "display_name": null, "created_at": "2026-10-28T19:54:13.728123Z"}}
+      {"id": "6f1c1b0e-6b8e-4c33-9f55-5a1b2c3d4e5f", "email": "e@x.com",
+       "display_name": null, "created_at": "2026-10-28T19:54:13.728123Z"}
       """#
-    let session = try JSONDecoder.api.decode(TokenResponse.self, from: Data(json.utf8)).session
-    #expect(session.accessToken == "a")
-    #expect(session.refreshToken == "r")
-    #expect(session.user.email == "e@x.com")
+    let user = try JSONDecoder.api.decode(User.self, from: Data(json.utf8))
+    #expect(user.email == "e@x.com")
+    #expect(user.displayName == nil)
   }
 
   /// SessionStore writes with JSONEncoder.api and reads with JSONDecoder.api.
@@ -90,6 +102,7 @@ import Testing
     #expect(FastAPIError.detail(in: Data(#"{"detail": "Item not found"}"#.utf8)) == "Item not found")
     #expect(FastAPIError.detail(in: Data(#"{"detail": [{"msg": "bad email"}]}"#.utf8)) == "bad email")
     #expect(FastAPIError.detail(in: Data("oops".utf8)) == "oops")
+    #expect(FastAPIError.detail(in: Data(#"{"message": "try refresh token"}"#.utf8)) == "try refresh token")
   }
 
   @Test func writesMultipartBody() throws {
