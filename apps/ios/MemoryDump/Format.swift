@@ -158,14 +158,18 @@ enum Format {
 /// Ported from the Expo app's lib/readerContent.ts.
 struct ReaderContent: Equatable {
   let body: String?
+  /// The section the body came from: "Body", "Transcript", "Tweet"…
+  let bodySection: String?
   let note: String?
+  /// The video's channel or the post's author.
+  let author: String?
   let isStub: Bool
 
-  private static let bodyPriority = ["Body", "Transcript", "Description", "Summary"]
+  private static let bodyPriority = ["Body", "Transcript", "Tweet", "Description", "Summary"]
 
   init(rawText: String?) {
     guard let rawText, !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-      self.init(body: nil, note: nil, isStub: true)
+      self.init(body: nil, bodySection: nil, note: nil, author: nil, isStub: true)
       return
     }
     var sections: [String: String] = [:]
@@ -175,13 +179,18 @@ struct ReaderContent: Equatable {
       let key = m.1.trimmingCharacters(in: .whitespaces)
       if sections[key] == nil { sections[key] = m.2.trimmingCharacters(in: .whitespacesAndNewlines) }
     }
-    let body = Self.bodyPriority.lazy.compactMap { sections[$0] }.first { !$0.isEmpty }
-    self.init(body: body, note: sections["User note"], isStub: (body?.count ?? 0) < 40)
+    let section = Self.bodyPriority.first { sections[$0]?.isEmpty == false }
+    let body = section.flatMap { sections[$0] }
+    self.init(
+      body: body, bodySection: section, note: sections["User note"],
+      author: sections["Channel"] ?? sections["Author"], isStub: (body?.count ?? 0) < 40)
   }
 
-  private init(body: String?, note: String?, isStub: Bool) {
+  private init(body: String?, bodySection: String?, note: String?, author: String?, isStub: Bool) {
     self.body = body
+    self.bodySection = bodySection
     self.note = note
+    self.author = author
     self.isStub = isStub
   }
 }

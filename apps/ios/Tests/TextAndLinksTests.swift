@@ -88,6 +88,16 @@ import Testing
     #expect(ReaderContent(rawText: "URL: https://a.com").isStub)
   }
 
+  @Test func readerContentReadsPostsAndVideos() {
+    let post = ReaderContent(rawText: "Author: Maya Okafor\n\nTweet:\nShipped my first solo iOS app last month.")
+    #expect(post.body == "Shipped my first solo iOS app last month.")
+    #expect(post.bodySection == "Tweet")
+    #expect(post.author == "Maya Okafor")
+    let video = ReaderContent(rawText: "Title: T\n\nChannel: Home Barista Lab\n\nTranscript:\nhello")
+    #expect(video.bodySection == "Transcript")
+    #expect(video.author == "Home Barista Lab")
+  }
+
   @Test func previewCutsAtAParagraph() {
     let para = String(repeating: "a", count: 500)
     let body = "\(para)\n\n\(para)\n\n\(para)\n\n\(para)"
