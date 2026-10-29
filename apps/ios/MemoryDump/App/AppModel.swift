@@ -69,6 +69,7 @@ final class AppModel {
     store.save(session)
     self.session = session
     Task { await registerForPush() }
+    Task { await OfflineSync.run() }
   }
 
   /// Nothing from an account stays on the phone after it signs out.
@@ -99,6 +100,7 @@ final class AppModel {
     if result.sent > 0 {
       show("Sent \(Format.plural(result.sent, "queued share")).", ok: true)
     }
+    await OfflineSync.run()
   }
 
   /// Asks for permission, then registers. The token arrives in AppDelegate.
