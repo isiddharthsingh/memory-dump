@@ -181,7 +181,7 @@ private struct SourceFan: View {
   }
 }
 
-private struct TopicTile: View {
+struct TopicTile: View {
   let page: TopicPageSummary
 
   private static let dots = [Palette.video, Palette.ink, Palette.card]

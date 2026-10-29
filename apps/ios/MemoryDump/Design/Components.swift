@@ -51,6 +51,23 @@ struct SourceThumb: View {
   }
 }
 
+/// A source's color, covered by its thumbnail once that loads. Takes the size
+/// it is given and crops the image to it.
+struct ThumbnailFill: View {
+  let url: String?
+  let fallback: Color
+
+  var body: some View {
+    fallback
+      .overlay {
+        if let url, let image = URL(string: url) {
+          AsyncImage(url: image) { $0.resizable().scaledToFill() } placeholder: { fallback }
+        }
+      }
+      .clipped()
+  }
+}
+
 struct StatusBadge: View {
   let status: String
   /// For dark cards: butter on a translucent wash.

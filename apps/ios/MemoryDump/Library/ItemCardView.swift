@@ -11,20 +11,24 @@ struct ItemCardView: View {
   let onRetry: () -> Void
   let onDelete: () -> Void
 
-  enum Style {
+  enum Style: Equatable {
     case video, post, reel, file, failed
     case article(image: Bool)
   }
 
   static func style(of item: ItemSummary) -> Style {
-    if item.isFailed { return .failed }
-    if Format.isUploadedFile(item.url) { return .file }
-    switch item.source {
+    item.isFailed ? .failed : style(source: item.source, url: item.url, hasImage: item.thumbnailUrl != nil)
+  }
+
+  /// The shape a source takes, on the wall and at the top of the reader.
+  static func style(source: String, url: String, hasImage: Bool) -> Style {
+    if Format.isUploadedFile(url) { return .file }
+    switch source {
     case "youtube": return .video
     case "twitter", "reddit": return .post
     case "instagram": return .reel
     case "pdf", "image": return .file
-    default: return .article(image: item.thumbnailUrl != nil)
+    default: return .article(image: hasImage)
     }
   }
 
@@ -215,18 +219,7 @@ struct ItemCardView: View {
   // MARK: Parts
 
   private func thumbnail(height: CGFloat, fallback: Color) -> some View {
-    fallback
-      .frame(height: height)
-      .overlay {
-        if let thumb = item.thumbnailUrl, let url = URL(string: thumb) {
-          AsyncImage(url: url) { image in
-            image.resizable().scaledToFill()
-          } placeholder: {
-            fallback
-          }
-        }
-      }
-      .clipped()
+    ThumbnailFill(url: item.thumbnailUrl, fallback: fallback).frame(height: height)
   }
 
   private var footer: some View {
@@ -248,7 +241,7 @@ struct ItemCardView: View {
 }
 
 /// The white play button over video and reel thumbnails.
-private struct PlayBadge: View {
+struct PlayBadge: View {
   let size: CGFloat
 
   var body: some View {

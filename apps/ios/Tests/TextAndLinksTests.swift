@@ -158,6 +158,16 @@ import Testing
     #expect(Format.source(ofURL: nil) == "web")
   }
 
+  @Test func cardStyleFollowsTheSource() {
+    #expect(ItemCardView.style(source: "image", url: "file://1/a.png", hasImage: true) == .file)
+    #expect(ItemCardView.style(source: "webpage", url: "file://1/a.pdf", hasImage: false) == .file)
+    #expect(ItemCardView.style(source: "youtube", url: "https://youtu.be/1", hasImage: true) == .video)
+    #expect(ItemCardView.style(source: "reddit", url: "https://reddit.com/r/a/1", hasImage: true) == .post)
+    #expect(ItemCardView.style(source: "instagram", url: "https://instagram.com/reel/1", hasImage: false) == .reel)
+    #expect(ItemCardView.style(source: "webpage", url: "https://a.com/x", hasImage: true) == .article(image: true))
+    #expect(ItemCardView.style(source: "webpage", url: "https://a.com/x", hasImage: false) == .article(image: false))
+  }
+
   @Test func topicColorIsStablePerSlug() {
     #expect(Swatch.topic("sourdough") == Swatch.topic("sourdough"))
   }
