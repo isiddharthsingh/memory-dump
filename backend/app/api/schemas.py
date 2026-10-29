@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 
 class IngestRequest(BaseModel):
@@ -69,7 +70,7 @@ class AskRequest(BaseModel):
 class CitationOut(BaseModel):
     kind: str
     id: uuid.UUID
-    title: str | None
+    title: str | None = None
     url: str | None = None
     slug: str | None = None
 
@@ -77,6 +78,43 @@ class CitationOut(BaseModel):
 class AskResponse(BaseModel):
     answer: str
     citations: list[CitationOut]
+
+
+class ChatError(BaseModel):
+    title: str = Field(max_length=500)
+    detail: str = Field(default="", max_length=4000)
+
+
+class ChatTurn(BaseModel):
+    """One question and its answer. Keys are single words because the app
+    sends request bodies without snake_case conversion."""
+
+    id: uuid.UUID
+    question: str = Field(min_length=1, max_length=20_000)
+    answer: str = Field(default="", max_length=200_000)
+    citations: list[CitationOut] = Field(default_factory=list, max_length=200)
+    # "streaming" is saved when the question is asked, so it isn't lost if
+    # the app quits before the answer finishes.
+    status: Literal["streaming", "done", "failed"]
+    error: ChatError | None = None
+
+
+class ChatIn(BaseModel):
+    turns: list[ChatTurn] = Field(min_length=1, max_length=500)
+
+
+class ChatSummary(BaseModel):
+    id: uuid.UUID
+    questions: list[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatOut(BaseModel):
+    id: uuid.UUID
+    turns: list[ChatTurn]
+    created_at: datetime
+    updated_at: datetime
 
 
 class TopicPageSummary(BaseModel):

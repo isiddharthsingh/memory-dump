@@ -231,7 +231,7 @@ async def delete_me(
     """Hard-delete the authenticated user.
 
     The ON DELETE CASCADE FKs on items, item_chunks, topic_pages,
-    topic_page_chunks, refresh_tokens, and devices clear every trace of
+    topic_page_chunks, refresh_tokens, devices, and chats clear every trace of
     the account in one statement. No tombstone — bring your own backup.
     """
     await session.delete(current_user)

@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 import app.logging_setup  # noqa: F401  — configures stdlib + structlog
-from app.api import ask, auth, devices, ingest, items, search, wiki
+from app.api import ask, auth, chats, devices, ingest, items, search, wiki
 from app.auth.rate_limit import close_redis
 from app.db.session import get_engine
 from app.queue import close_arq_pool
@@ -36,5 +36,6 @@ app.include_router(ingest.router)
 app.include_router(items.router)
 app.include_router(search.router)
 app.include_router(ask.router)
+app.include_router(chats.router)
 app.include_router(wiki.router)
 app.include_router(devices.router)

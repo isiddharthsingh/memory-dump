@@ -2,19 +2,21 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     ARRAY,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import CITEXT, UUID
+from sqlalchemy.dialects.postgresql import CITEXT, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 EMBED_DIM = 1024  # voyage-3-large
@@ -165,6 +167,29 @@ class Device(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class Chat(Base):
+    """One Ask conversation, kept per user so it follows the account to any device."""
+
+    __tablename__ = "chats"
+    __table_args__ = (Index("ix_chats_user_id_updated_at", "user_id", "updated_at"),)
+
+    # The app picks the id, so it can save a chat before the first answer arrives.
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # The questions and answers in order; each one is a ChatTurn (app/api/schemas.py).
+    turns: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
 
