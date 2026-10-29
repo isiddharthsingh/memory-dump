@@ -53,6 +53,9 @@ targets:
           - Newsreader_400Regular.ttf
           - Newsreader_500Medium.ttf
           - Newsreader_600SemiBold.ttf
+          - BricolageGrotesque_600SemiBold.ttf
+          - BricolageGrotesque_700Bold.ttf
+          - BricolageGrotesque_800ExtraBold.ttf
         NSMicrophoneUsageDescription: Allow Memory Dump to use the microphone so you can ask questions by voice.
         NSSpeechRecognitionUsageDescription: Allow Memory Dump to turn your voice into questions.
         NSLocalNetworkUsageDescription: Memory Dump connects to your self-hosted server on your local network.

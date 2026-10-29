@@ -40,6 +40,9 @@
 		<string>Newsreader_400Regular.ttf</string>
 		<string>Newsreader_500Medium.ttf</string>
 		<string>Newsreader_600SemiBold.ttf</string>
+		<string>BricolageGrotesque_600SemiBold.ttf</string>
+		<string>BricolageGrotesque_700Bold.ttf</string>
+		<string>BricolageGrotesque_800ExtraBold.ttf</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>

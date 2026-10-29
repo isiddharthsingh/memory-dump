@@ -33,6 +33,26 @@ enum Format {
     }
   }
 
+  /// The source a link is filed under, from its host alone: "youtube",
+  /// "twitter" or "web". For search hits and citations, which carry no source.
+  static func source(ofURL url: String?) -> String {
+    let host = url.map(domain) ?? ""
+    if host.contains(/(^|\.)youtube\.com$|^youtu\.be$/) { return "youtube" }
+    if host.contains(/(^|\.)(x|twitter)\.com$/) { return "twitter" }
+    return "web"
+  }
+
+  /// FNV-1a over UTF-16 units. Stable across launches, unlike Hasher, so a
+  /// pick or a color keyed on it stays put.
+  static func fnv1a(_ s: String) -> UInt32 {
+    var h: UInt32 = 0x811C_9DC5
+    for unit in s.utf16 {
+      h ^= UInt32(unit)
+      h = h &* 0x0100_0193
+    }
+    return h
+  }
+
   /// "karpathy.github.io · Article". Shared files are stored as `file://<id>/<name>`
   /// with the name as their title, so they get only the kind.
   static func sourceMeta(_ url: String, _ source: String) -> String {

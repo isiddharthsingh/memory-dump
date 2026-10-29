@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
     UNUserNotificationCenter.current().delegate = self
+    Theme.styleNavigationBars()
     if app.session != nil { Task { await app.registerForPush() } }
     return true
   }
