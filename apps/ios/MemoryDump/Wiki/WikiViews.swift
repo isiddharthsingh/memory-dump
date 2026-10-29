@@ -7,6 +7,8 @@ struct WikiListView: View {
 
   var body: some View {
     content
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(Palette.ground)
       .navigationTitle("Wiki")
       .navigationSubtitle(pages.map { $0.isEmpty ? "" : "\(Format.plural($0.count, "topic")), written from your saves" } ?? "")
       .task { await load() }
@@ -21,17 +23,24 @@ struct WikiListView: View {
           Text("As you save links, topic pages are written and kept up to date here, each linking back to its sources.")
         }
       } else {
-        List(pages) { page in
-          Button { router.push(.wiki(page.slug)) } label: {
-            LinkRow(
-              title: Format.topicTitle(page.title),
-              subtitle: "\(Format.plural(page.sourceItemIds?.count ?? 0, "source")) · updated \(Format.relativeTime(page.updatedAt))"
-            ) { WikiTile() }
+        ScrollView {
+          VStack(alignment: .leading, spacing: 10) {
+            if let latest = pages.max(by: { $0.updatedAt < $1.updatedAt }) {
+              topicButton(latest) { RevisedRibbon(page: latest) }
+            }
+            let featured = Self.featured(pages)
+            if let featured {
+              topicButton(featured) { FeaturedTopicTile(page: featured, showsLabel: pages.count > 1) }
+            }
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+              ForEach(pages.filter { $0.id != featured?.id }) { page in
+                topicButton(page) { TopicTile(page: page) }
+              }
+            }
           }
-          .buttonStyle(.plain)
-          .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20))
+          .padding(.horizontal, 16)
+          .padding(.bottom, 24)
         }
-        .listStyle(.plain)
         .refreshable { await load() }
       }
     } else if let error {
@@ -43,6 +52,21 @@ struct WikiListView: View {
     }
   }
 
+  private func topicButton<Label: View>(_ page: TopicPageSummary, @ViewBuilder label: () -> Label) -> some View {
+    Button { router.push(.wiki(page.slug)) } label: { label() }
+      .buttonStyle(PressableCardStyle())
+      .accessibilityLabel(
+        "\(Format.topicTitle(page.title)), \(Format.plural(page.sourceItemIds?.count ?? 0, "source")), updated \(Format.relativeTime(page.updatedAt))")
+  }
+
+  /// The topic with the most sources, newest first on a tie.
+  static func featured(_ pages: [TopicPageSummary]) -> TopicPageSummary? {
+    pages.max { a, b in
+      let (na, nb) = (a.sourceItemIds?.count ?? 0, b.sourceItemIds?.count ?? 0)
+      return na == nb ? a.updatedAt < b.updatedAt : na < nb
+    }
+  }
+
   private func load() async {
     do {
       pages = try await APIClient.shared.wiki()
@@ -50,6 +74,144 @@ struct WikiListView: View {
     } catch {
       if pages == nil { self.error = error }
     }
+  }
+}
+
+/// The most recently revised page: "Updated 2h ago" over its title.
+private struct RevisedRibbon: View {
+  let page: TopicPageSummary
+
+  var body: some View {
+    HStack(spacing: 12) {
+      Circle().fill(Palette.fresh).frame(width: 9, height: 9)
+      VStack(alignment: .leading, spacing: 1) {
+        Text("Updated \(Format.relativeTime(page.updatedAt))")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(Palette.ink2)
+        Text(Format.topicTitle(page.title))
+          .font(.subheadline.weight(.semibold))
+          .foregroundStyle(Palette.ink)
+          .lineLimit(1)
+      }
+      Spacer(minLength: 0)
+      Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(Palette.hairlineStrong)
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 9)
+    .frame(minHeight: 52)
+    .background(Palette.card, in: .rect(cornerRadius: 18))
+  }
+}
+
+/// The biggest topic, full width, with a fan of cards standing in for its sources.
+private struct FeaturedTopicTile: View {
+  let page: TopicPageSummary
+  let showsLabel: Bool
+  /// Grows with the title's text size, so larger type isn't clipped.
+  @ScaledMetric(relativeTo: .largeTitle) private var height: CGFloat = 188
+
+  var body: some View {
+    let swatch = Swatch.topic(page.slug)
+    ZStack(alignment: .topTrailing) {
+      VStack(alignment: .leading, spacing: 0) {
+        if showsLabel {
+          Text("Your biggest topic").font(.caption.weight(.bold)).foregroundStyle(swatch.ink)
+        }
+        Text(Format.topicTitle(page.title))
+          .font(.display(34, .heavy, relativeTo: .largeTitle))
+          .foregroundStyle(Palette.ink)
+          .lineLimit(3)
+          .minimumScaleFactor(0.6)
+          .multilineTextAlignment(.leading)
+          .padding(.top, 4)
+        Spacer(minLength: 12)
+        Text("\(Format.plural(page.sourceItemIds?.count ?? 0, "source")) · updated \(Format.relativeTime(page.updatedAt))")
+          .font(.caption.weight(.bold))
+          .foregroundStyle(swatch.ink)
+      }
+      .frame(maxWidth: 190, maxHeight: .infinity, alignment: .topLeading)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      SourceFan(behind: swatch).padding(.top, 28).padding(.trailing, -8)
+    }
+    .padding(18)
+    .frame(height: height)
+    .background(swatch.fill, in: .rect(cornerRadius: 26))
+    .clipShape(.rect(cornerRadius: 26))
+  }
+}
+
+private struct SourceFan: View {
+  let behind: Swatch
+
+  var body: some View {
+    let note = behind == .mint ? Swatch.lilac : .mint
+    ZStack(alignment: .topLeading) {
+      card(band: Palette.sand).rotationEffect(.degrees(-12)).offset(y: 12)
+      card(band: Palette.video, play: true).rotationEffect(.degrees(3)).offset(x: 30)
+      VStack(alignment: .leading, spacing: 5) {
+        Capsule().fill(note.ink.opacity(0.3)).frame(height: 6)
+        Capsule().fill(note.ink.opacity(0.3)).frame(height: 6)
+        Capsule().fill(note.ink.opacity(0.3)).frame(width: 34, height: 6)
+        Spacer(minLength: 0)
+      }
+      .padding(10)
+      .frame(width: 72, height: 92)
+      .background(note.fill, in: .rect(cornerRadius: 14))
+      .shadow(color: Palette.ink.opacity(0.14), radius: 8, y: 6)
+      .rotationEffect(.degrees(14))
+      .offset(x: 66, y: 26)
+    }
+    .frame(width: 140, height: 130, alignment: .topLeading)
+    .accessibilityHidden(true)
+  }
+
+  private func card(band: Color, play: Bool = false) -> some View {
+    VStack(alignment: .leading, spacing: 5) {
+      band.frame(height: 48).overlay {
+        if play { Image(systemName: "play.fill").font(.caption).foregroundStyle(.white) }
+      }
+      Capsule().fill(Palette.hairline).frame(height: 6).padding(.horizontal, 8)
+      Capsule().fill(Palette.hairline).frame(width: 36, height: 6).padding(.leading, 8)
+      Spacer(minLength: 0)
+    }
+    .frame(width: 72, height: 92)
+    .background(Palette.card)
+    .clipShape(.rect(cornerRadius: 14))
+    .shadow(color: Palette.ink.opacity(0.14), radius: 8, y: 6)
+  }
+}
+
+private struct TopicTile: View {
+  let page: TopicPageSummary
+
+  private static let dots = [Palette.video, Palette.ink, Palette.card]
+
+  var body: some View {
+    let swatch = Swatch.topic(page.slug)
+    let count = page.sourceItemIds?.count ?? 0
+    VStack(alignment: .leading, spacing: 4) {
+      Text(Format.topicTitle(page.title))
+        .font(.display(22, .heavy))
+        .foregroundStyle(Palette.ink)
+        .lineLimit(3)
+        .minimumScaleFactor(0.8)
+        .multilineTextAlignment(.leading)
+      Text(Format.plural(count, "source")).font(.caption.weight(.semibold)).foregroundStyle(swatch.ink)
+      Spacer(minLength: 10)
+      HStack(spacing: 8) {
+        HStack(spacing: -8) {
+          ForEach(0..<min(count, Self.dots.count), id: \.self) { i in
+            Circle().fill(Self.dots[i]).frame(width: 26, height: 26)
+              .overlay { Circle().strokeBorder(swatch.fill, lineWidth: 2) }
+          }
+        }
+        Text(Format.relativeTime(page.updatedAt)).font(.caption).foregroundStyle(swatch.ink).lineLimit(1)
+      }
+      .accessibilityHidden(true)
+    }
+    .padding(14)
+    .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+    .background(swatch.fill, in: .rect(cornerRadius: 24))
   }
 }
 
@@ -133,9 +295,14 @@ struct WikiPageView: View {
   private func content(_ page: TopicPageDetail) -> some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 0) {
-        Label("Wiki", systemImage: "book.closed").font(.footnote.weight(.semibold)).foregroundStyle(Palette.ink2)
+        Label("Wiki", systemImage: "book.closed")
+          .font(.caption.weight(.bold))
+          .foregroundStyle(Swatch.topic(model.slug).ink)
+          .padding(.horizontal, 10)
+          .padding(.vertical, 5)
+          .background(Swatch.topic(model.slug).fill, in: .capsule)
         Text(model.title)
-          .font(.serif(34, .semibold, relativeTo: .largeTitle))
+          .font(.display(34, .heavy, relativeTo: .largeTitle))
           .foregroundStyle(Palette.ink)
           .padding(.top, 8)
           .accessibilityAddTraits(.isHeader)
@@ -170,7 +337,9 @@ struct WikiPageView: View {
           section("Linked topics") {
             FlowLayout(spacing: 8) {
               ForEach(backlinks, id: \.self) { slug in
-                Chip(label: Format.topicTitle(model.titles[slug] ?? slug)) { router.push(.wiki(slug)) }
+                Chip(label: Format.topicTitle(model.titles[slug] ?? slug), dot: Swatch.topic(slug).fill) {
+                  router.push(.wiki(slug))
+                }
               }
             }
           }
