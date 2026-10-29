@@ -2,12 +2,17 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from supertokens_python.framework.fastapi import get_middleware
 
 import app.logging_setup  # noqa: F401  — configures stdlib + structlog
 from app.api import ask, auth, chats, devices, ingest, items, search, wiki
 from app.auth.rate_limit import close_redis
+from app.auth.supertokens import init_supertokens
+from app.config import get_settings
 from app.db.session import get_engine
 from app.queue import close_arq_pool
+
+init_supertokens(get_settings())
 
 
 @asynccontextmanager
@@ -24,6 +29,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+# SuperTokens' /auth routes, and the 401s from verify_session().
+app.add_middleware(get_middleware())
 
 
 @app.get("/healthz", tags=["meta"])

@@ -29,6 +29,35 @@ services:
       timeout: 3s
       retries: 10
 
+  # SuperTokens core: users, password hashes and sessions. It keeps its tables in
+  # the `supertokens` schema of the same database. Its port is bound to localhost
+  # only, for an api run on the host. API_KEYS must match SUPERTOKENS_API_KEY in
+  # ../.env; like POSTGRES_*, compose reads it from your shell or backend/.env.
+  supertokens:
+    image: registry.supertokens.io/supertokens/supertokens-postgresql:12.4.1
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3567:3567"
+    environment:
+      POSTGRESQL_CONNECTION_URI: postgresql://${POSTGRES_USER:-memory}:${POSTGRES_PASSWORD:-memory}@postgres:5432/${POSTGRES_DB:-memory_dump}
+      POSTGRESQL_TABLE_SCHEMA: supertokens
+      API_KEYS: ${SUPERTOKENS_API_KEY:-}
+      # 15-minute access tokens, refresh tokens that expire after 30 days unused.
+      ACCESS_TOKEN_VALIDITY: 900
+      REFRESH_TOKEN_VALIDITY: 43200
+      # Argon2id for new passwords, like the hashes imported from before; the
+      # core's default is bcrypt.
+      PASSWORD_HASHING_ALG: ARGON2
+      DISABLE_TELEMETRY: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3567/hello"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   api:
     build: .
     restart: unless-stopped
@@ -38,6 +67,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      supertokens:
         condition: service_healthy
     ports:
       - "8000:8000"

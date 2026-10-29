@@ -16,7 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import CITEXT, JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 EMBED_DIM = 1024  # voyage-3-large
@@ -27,36 +27,13 @@ class Base(DeclarativeBase):
 
 
 class User(Base):
+    """The app's side of an account. SuperTokens owns the email, password and
+    sessions; `id` is the SuperTokens user ID, and every owned row hangs off it."""
+
     __tablename__ = "users"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    # CITEXT so login is case-insensitive without us having to lowercase
-    # every comparison.
-    email: Mapped[str] = mapped_column(CITEXT(), nullable=False, unique=True)
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     display_name: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-
-class RefreshToken(Base):
-    __tablename__ = "refresh_tokens"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    # sha256(refresh_token) — we never store the raw token so a DB leak
-    # doesn't grant active sessions.
-    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    user_agent: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

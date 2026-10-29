@@ -10,8 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-
-PASSWORD = "super-secret-pw-123"
+from tests.conftest import signup, unique_email
 
 
 @pytest.fixture
@@ -20,19 +19,10 @@ def client() -> Iterator[TestClient]:
         yield c
 
 
-def _signup(client: TestClient) -> dict[str, str]:
-    resp = client.post(
-        "/auth/signup",
-        json={"email": f"chat-{uuid.uuid4().hex[:10]}@example.com", "password": PASSWORD},
-    )
-    assert resp.status_code == 201, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
 @pytest.fixture
 def two_users(client: TestClient) -> Iterator[tuple[dict[str, str], dict[str, str]]]:
-    a = _signup(client)
-    b = _signup(client)
+    a = signup(client, unique_email("chat"))
+    b = signup(client, unique_email("chat"))
     yield a, b
     client.delete("/auth/me", headers=a)
     client.delete("/auth/me", headers=b)

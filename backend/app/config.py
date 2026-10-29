@@ -1,17 +1,19 @@
 from functools import lru_cache
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Secret used to sign access JWTs. Generate with:
-    #   openssl rand -hex 32
-    jwt_secret: str = Field(alias="JWT_SECRET")
-    jwt_access_ttl_min: int = 15
-    jwt_refresh_ttl_days: int = 30
+    # SuperTokens core: the docker-compose service, or a managed deployment's
+    # connection URI. The API key must match the core's API_KEYS.
+    supertokens_connection_uri: str = "http://supertokens:3567"
+    supertokens_api_key: str = ""
+    # Public address of this API. SuperTokens serves sign-in, sign-up and
+    # refresh under {api_domain}/auth, and its user dashboard at
+    # {api_domain}/auth/dashboard.
+    api_domain: str = "http://localhost:8000"
     allow_signup: bool = True
 
     # Per-user rate limits applied to the spend-heavy endpoints (Claude +

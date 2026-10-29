@@ -26,9 +26,9 @@ dependencies = [
     "python-slugify>=8.0",
     "tenacity>=9.0",
     "structlog>=24.4",
-    "argon2-cffi>=23.1",
+    "supertokens-python>=0.31.4,<0.32",
+    # APNs provider tokens (app/notifications.py).
     "pyjwt[crypto]>=2.10",
-    "email-validator>=2.2",
 ]
 
 [project.optional-dependencies]
