@@ -31,30 +31,11 @@ build/
 *.swo
 .DS_Store
 
-# Node / Expo
-node_modules/
-.expo/
-.expo-shared/
+# Logs
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
-# Build artefacts
-ios/build/
-android/app/build/
-android/build/
-android/.gradle/
-
-# Expo prebuild output (regenerate with `expo prebuild`)
-apps/mobile/ios/
-apps/mobile/android/
+# App binaries
 *.ipa
-*.apk
-*.aab
-
-# EAS
-.easignore
 
 # APNs keys and other local secrets
 secrets/
