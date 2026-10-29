@@ -58,7 +58,7 @@ The simulator reaches the local backend at `http://localhost:8000`.
 
 ### Ingest pipeline (per-item, async)
 
-`POST /ingest` (`app/api/ingest.py`) inserts an `Item` row with `status="pending"` and enqueues `ingest_item` on arq. The worker in `app/workers/ingest.py` runs the full pipeline:
+`POST /ingest` (`app/api/ingest.py`) inserts an `Item` row with `status="pending"` and enqueues `ingest_item` on arq. `(user_id, url)` is unique, so sharing a saved URL again returns the saved item, re-queued if it had failed; uploads get a `file://<item id>/<filename>` placeholder URL so files with the same name stay separate. The worker in `app/workers/ingest.py` runs the full pipeline:
 
 1. `app/extractors/` — per-source extractor selected by `get_extractor(source)`. `source` is detected from the URL (`youtube` / `twitter` / `instagram` / `webpage`).
 2. `app/ai/analyze.py` — Claude (`CLAUDE_ANALYSIS_MODEL`, Haiku by default) returns title, summary, tags, and the **lexical anchors**: `people`, `handles`, `brands_products`, `topics`. These anchors are persisted as Postgres `ARRAY(Text)` columns AND folded into the text that gets embedded — they're what makes proper-noun queries work.
@@ -82,7 +82,7 @@ If you add a new source type, the work is: new extractor in `app/extractors/`, r
 2. **BM25**: Postgres `tsvector` full-text over the same two tables. The GIN index on the lexical-anchor arrays is what gives proper-noun queries deterministic recall.
 3. **Reciprocal Rank Fusion** merges the two ranked lists.
 4. **Voyage `rerank-2.5`** reorders the top candidates.
-5. `/ask` (`app/ai/ask.py`) feeds the reranked context to Claude (`CLAUDE_ASK_MODEL`, Opus) which must cite as `[item:UUID]` / `[wiki:slug]`. `/search` returns the hits directly.
+5. `/ask` (`app/ai/ask.py`) feeds the reranked context to Claude (`CLAUDE_ASK_MODEL`, Opus) which must cite as `[item:UUID]` / `[wiki:slug]`. `/search` returns the hits directly, minus chunks found only by the dense search whose rerank score is under `_MIN_SCORE` (`app/api/search.py`): nearest neighbours exist even for a query that matches nothing.
 
 If you change the chunking or embedding model, both `items` and `topic_pages` need re-embedding, and `EMBED_DIM` in `app/db/models.py` plus the migration's `Vector(N)` must match.
 
