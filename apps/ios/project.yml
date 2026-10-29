@@ -1,0 +1,122 @@
+# XcodeGen spec. Run `xcodegen` in this folder to (re)generate
+# MemoryDump.xcodeproj, which is gitignored.
+name: MemoryDump
+options:
+  bundleIdPrefix: com.siddharthsingh
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    # Free Personal Team for now: device builds expire after 7 days, and push
+    # is off (see aps-environment below). Swap in the paid team ID later.
+    DEVELOPMENT_TEAM: L53NYQQX76
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+
+targets:
+  MemoryDump:
+    type: application
+    platform: iOS
+    sources:
+      - MemoryDump
+      - Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.siddharthsingh.memorydump
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: MemoryDump/Info.plist
+      properties:
+        CFBundleDisplayName: Memory Dump
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        UIUserInterfaceStyle: Light
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIAppFonts:
+          - Newsreader_400Regular.ttf
+          - Newsreader_500Medium.ttf
+          - Newsreader_600SemiBold.ttf
+        NSMicrophoneUsageDescription: Allow Memory Dump to use the microphone so you can ask questions by voice.
+        NSSpeechRecognitionUsageDescription: Allow Memory Dump to turn your voice into questions.
+        NSLocalNetworkUsageDescription: Memory Dump connects to your self-hosted server on your local network.
+        # Plain http:// to *.local and unqualified hosts, for a server on your Wi-Fi.
+        # Same exception the Expo app had.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        KeychainAccessGroup: $(AppIdentifierPrefix)com.siddharthsingh.memorydump.shared
+    entitlements:
+      path: MemoryDump/MemoryDump.entitlements
+      properties:
+        # Personal Teams can't sign push. With a paid team, add back:
+        #   aps-environment: development
+        com.apple.security.application-groups:
+          - group.com.siddharthsingh.memorydump
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.siddharthsingh.memorydump.shared
+    dependencies:
+      - target: ShareExtension
+    scheme:
+      testTargets:
+        - MemoryDumpTests
+
+  ShareExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - ShareExtension
+      - Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.siddharthsingh.memorydump.share
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: ShareExtension/Info.plist
+      properties:
+        CFBundleDisplayName: Memory Dump
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        KeychainAccessGroup: $(AppIdentifierPrefix)com.siddharthsingh.memorydump.shared
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            # Links, text, images and PDFs; the same rule the Expo extension used.
+            NSExtensionActivationRule: 'SUBQUERY(extensionItems, $extensionItem, SUBQUERY($extensionItem.attachments, $attachment, ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.url" || ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.text" || ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.image" || ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.adobe.pdf" || ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.file-url").@count > 0).@count > 0'
+    entitlements:
+      path: ShareExtension/ShareExtension.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.siddharthsingh.memorydump
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.siddharthsingh.memorydump.shared
+
+  MemoryDumpTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests
+    dependencies:
+      - target: MemoryDump
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.siddharthsingh.memorydump.tests
