@@ -143,19 +143,6 @@ struct Chip: View {
   }
 }
 
-struct TagLabel: View {
-  let label: String
-
-  var body: some View {
-    Text(label)
-      .font(.footnote.weight(.medium))
-      .foregroundStyle(Palette.ink2)
-      .padding(.horizontal, 9)
-      .padding(.vertical, 4)
-      .background(Palette.fill, in: .capsule)
-  }
-}
-
 struct Eyebrow: View {
   let text: String
   let color: Color

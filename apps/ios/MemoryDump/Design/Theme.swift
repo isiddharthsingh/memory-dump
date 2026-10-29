@@ -107,7 +107,7 @@ extension Font {
     .custom(weight.rawValue, size: size, relativeTo: style)
   }
 
-  static let readingTitle = display(30, .heavy, relativeTo: .largeTitle)
+  static let readingTitle = display(32, .heavy, relativeTo: .largeTitle)
   static let readingBody = serif(18)
   static let cardTitle = display(16, .bold, relativeTo: .headline)
 }

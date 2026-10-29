@@ -10,6 +10,7 @@ final class ItemReaderModel {
   private(set) var fullBlocks: [MarkdownBlock] = []
   /// Set when the body is long: the first part, cut at a paragraph or sentence.
   private(set) var previewBlocks: [MarkdownBlock]?
+  private(set) var readMinutes = 0
   var retrying = false
 
   private static let previewMaxChars = 1200
@@ -59,6 +60,7 @@ final class ItemReaderModel {
     // Extractors put one newline between paragraphs; markdown would join them.
     body = body.map { $0.split(separator: "\n").joined(separator: "\n\n") }
     fullBlocks = body.map(MarkdownBlocks.parse) ?? []
+    readMinutes = body.map { max(1, ($0.split(whereSeparator: \.isWhitespace).count + 115) / 230) } ?? 0
     previewBlocks = body.flatMap(Self.preview).map(MarkdownBlocks.parse)
   }
 
@@ -76,6 +78,7 @@ final class ItemReaderModel {
   }
 }
 
+
 struct ItemReaderView: View {
   @Environment(Router.self) private var router
   @Environment(\.dismiss) private var dismiss
@@ -84,6 +87,11 @@ struct ItemReaderView: View {
   @State private var expanded = false
   @State private var noteOpen = false
   @State private var confirmDelete = false
+  /// Status bar plus navigation bar, which the hero runs underneath.
+  @State private var topInset: CGFloat = 0
+  /// The bars' fade would wash out the hero; it's needed only once text
+  /// scrolls up under them.
+  @State private var heroUnderBars = true
 
   private static let maxTags = 3
 
@@ -105,7 +113,8 @@ struct ItemReaderView: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(Palette.bg)
+    .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topInset = $0 }
+    .background(Palette.ground)
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(.hidden, for: .tabBar)
     .task { await model.load() }
@@ -115,83 +124,45 @@ struct ItemReaderView: View {
   private func reader(_ it: ItemDetail) -> some View {
     let title = it.title ?? Format.domain(it.url)
     let note = it.shareText ?? model.reader.note
-    let tags = it.tags ?? []
+    let style = ItemCardView.style(source: it.source, url: it.url, hasImage: it.thumbnailUrl != nil)
+    let isPost = if case .post = style { true } else { false }
+    // A tweet's text is its card, so it isn't repeated as the article.
+    let tweetInHero = it.source == "twitter" && model.reader.bodySection == "Tweet"
     return ScrollView {
       VStack(alignment: .leading, spacing: 0) {
-        if let thumb = it.thumbnailUrl, let url = URL(string: thumb) {
-          AsyncImage(url: url) { $0.resizable().scaledToFill() } placeholder: { Palette.fill }
-            .frame(height: 200)
-            .frame(maxWidth: .infinity)
-            .clipShape(.rect(cornerRadius: 16))
-            .padding(.bottom, 16)
-        }
-        HStack(spacing: 8) {
-          SourceThumb(source: it.source, url: it.url, size: 20)
-          Text(Format.sourceMeta(it.url, it.source)).font(.footnote.weight(.medium)).foregroundStyle(Palette.ink2)
-        }
-        Text(title)
-          .font(.readingTitle)
-          .foregroundStyle(Palette.ink)
-          .padding(.top, 10)
-          .accessibilityAddTraits(.isHeader)
-        Group {
-          if let author = it.people?.first {
-            Text("By \(Text(author).fontWeight(.semibold)) · Saved \(Format.relativeTime(it.createdAt))")
-          } else {
-            Text("Saved \(Format.relativeTime(it.createdAt))")
-          }
-        }
-        .font(.subheadline)
-        .foregroundStyle(Palette.ink2)
-        .padding(.top, 8)
-        if !tags.isEmpty {
-          FlowLayout(spacing: 6) {
-            ForEach(tags.prefix(Self.maxTags), id: \.self) { TagLabel(label: Format.humanizeTag($0)) }
-            if tags.count > Self.maxTags { TagLabel(label: "+\(tags.count - Self.maxTags)") }
-          }
-          .padding(.top, 12)
-        }
+        ReaderHero(
+          item: it, style: style, author: model.reader.author,
+          postText: tweetInHero ? model.reader.body ?? title : title, topInset: topInset
+        ) { open(it) }
 
-        status(it).padding(.top, 20)
-
-        if let note {
-          Button {
-            noteOpen = true
-          } label: {
-            VStack(alignment: .leading, spacing: 6) {
-              Eyebrow("Your note", color: Swatch.mint.ink)
-              Text(note).font(.body.weight(.medium)).foregroundStyle(Palette.ink).frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(16)
-            .background(Swatch.mint.fill, in: .rect(cornerRadius: 18))
-          }
-          .buttonStyle(.plain)
-          .accessibilityHint("Edit your note")
-          .padding(.top, 20)
+        if !isPost {
+          Text(title)
+            .font(.readingTitle)
+            .foregroundStyle(Palette.ink)
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+            .accessibilityAddTraits(.isHeader)
+          byline(it)
         }
-
-        if let summary = it.summary {
-          VStack(alignment: .leading, spacing: 6) {
-            Label("Summary", systemImage: "sparkles").font(.footnote.weight(.semibold)).foregroundStyle(Palette.accent)
-            Text(summary).font(.serif(17)).foregroundStyle(Palette.inkReading).lineSpacing(5)
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(16)
-          .background(Palette.accentSoft, in: .rect(cornerRadius: 14))
-          .padding(.top, 20)
-        }
-
-        if it.status == "ready" {
-          article.padding(.top, 24)
-        }
-
-        connections.padding(.top, 8)
-        details(it).padding(.top, 8)
+        tags(it.tags ?? []).padding(.top, isPost ? 18 : 14)
+        status(it).padding(.horizontal, 16).padding(.top, 20)
+        if let note { noteCard(note) }
+        if let summary = it.summary { gist(summary) }
+        if it.status == "ready", !tweetInHero { article }
+        connections
+        details(it)
       }
-      .padding(.horizontal, 24)
-      .padding(.top, 8)
-      .padding(.bottom, 32)
+      .padding(.bottom, 24)
     }
+    // The hero runs to the top edge, so the status bar picks its text color
+    // from the hero rather than from the ground above it.
+    .ignoresSafeArea(edges: .top)
+    .contentMargins(.top, topInset, for: .scrollIndicators)
+    .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top < 150 } action: {
+      heroUnderBars = $1
+    }
+    .scrollEdgeEffectHidden(heroUnderBars, for: .top)
+    .safeAreaBar(edge: .bottom) { actionBar(it, title: title) }
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
         Menu("More actions", systemImage: "ellipsis") {
@@ -199,21 +170,8 @@ struct ItemReaderView: View {
           ShareLink(item: it.url, subject: Text(title)) { Label("Share", systemImage: "square.and.arrow.up") }
           Button("Delete", systemImage: "trash", role: .destructive) { confirmDelete = true }
         }
-      }
-      ToolbarItemGroup(placement: .bottomBar) {
-        Button {
-          if let url = URL(string: it.url) { openURL(url) }
-        } label: {
-          Label("Open original", systemImage: "arrow.up.right.square").labelStyle(.titleAndIcon)
-        }
-        .disabled(Format.isUploadedFile(it.url))
-        Spacer()
-        Button("Add a note", systemImage: "square.and.pencil") { noteOpen = true }
-        Button("Ask about this item", systemImage: "sparkles") {
-          router.ask("What are the key ideas in “\(title)”?")
-        }
-        .tint(Palette.accent)
-        ShareLink(item: it.url, subject: Text(title)) { Label("Share", systemImage: "square.and.arrow.up") }
+        // The app's ink tint vanishes on the dark post card while it is under the bar.
+        .tint(isPost && heroUnderBars ? .white : nil)
       }
     }
     .confirmationDialog("Delete this item?", isPresented: $confirmDelete, titleVisibility: .visible) {
@@ -223,6 +181,44 @@ struct ItemReaderView: View {
     }
     .sheet(isPresented: $noteOpen) {
       NoteEditor(itemId: it.id, title: title) { await model.load() }
+    }
+  }
+
+  private func open(_ it: ItemDetail) {
+    if let url = URL(string: it.url) { openURL(url) }
+  }
+
+  /// "By Dana Whitlock · Saved 3 days ago"; a video names its channel.
+  private func byline(_ it: ItemDetail) -> some View {
+    let saved = "Saved \(Format.relativeTime(it.createdAt))"
+    let name = (model.reader.author ?? it.people?.first).map {
+      Text($0).fontWeight(.semibold).foregroundStyle(Palette.ink)
+    }
+    return Group {
+      if let name, it.source == "youtube" {
+        Text("\(name) · \(saved)")
+      } else if let name {
+        Text("By \(name) · \(saved)")
+      } else {
+        Text(saved)
+      }
+    }
+    .font(.subheadline)
+    .foregroundStyle(Palette.ink2)
+    .padding(.horizontal, 20)
+    .padding(.top, 10)
+  }
+
+  /// Tags in their topic colors, like the Wiki tiles.
+  @ViewBuilder private func tags(_ tags: [String]) -> some View {
+    if !tags.isEmpty {
+      FlowLayout(spacing: 8) {
+        ForEach(tags.prefix(Self.maxTags), id: \.self) {
+          Pill(label: Format.humanizeTag($0), fill: Swatch.topic($0).fill)
+        }
+        if tags.count > Self.maxTags { Pill(label: "+\(tags.count - Self.maxTags)") }
+      }
+      .padding(.horizontal, 20)
     }
   }
 
@@ -244,80 +240,230 @@ struct ItemReaderView: View {
         Text("Summarizing and filing this link. It’ll be ready in a moment.")
           .font(.subheadline).foregroundStyle(Palette.ink2)
       }
+      .padding(.horizontal, 4)
     }
   }
 
-  @ViewBuilder private var article: some View {
-    if !model.fullBlocks.isEmpty && !model.reader.isStub {
-      VStack(alignment: .leading, spacing: 16) {
+  /// The note as a mint sticky, tilted like a note pinned to a board.
+  private func noteCard(_ note: String) -> some View {
+    Button {
+      noteOpen = true
+    } label: {
+      VStack(alignment: .leading, spacing: 8) {
+        HStack {
+          Eyebrow("Your note", color: Swatch.mint.ink)
+          Spacer()
+          Image(systemName: "square.and.pencil").font(.footnote.weight(.semibold)).foregroundStyle(Swatch.mint.ink)
+        }
+        Text(note)
+          .font(.display(19, .semibold, relativeTo: .body))
+          .foregroundStyle(Palette.ink)
+          .multilineTextAlignment(.leading)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .padding(EdgeInsets(top: 16, leading: 18, bottom: 18, trailing: 18))
+      .background(Swatch.mint.fill, in: .rect(cornerRadius: 22))
+      .shadow(color: Palette.ink.opacity(0.08), radius: 8, y: 6)
+      .rotationEffect(.degrees(-1.5))
+    }
+    .buttonStyle(PressableCardStyle())
+    .accessibilityHint("Edit your note")
+    .padding(.horizontal, 22)
+    .padding(.top, 24)
+  }
+
+  private func gist(_ summary: String) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Label("The gist", systemImage: "sparkle").font(.footnote.weight(.bold)).foregroundStyle(Palette.accent)
+      Text(summary).font(.body).foregroundStyle(Palette.inkReading).lineSpacing(4)
+    }
+    .padding(EdgeInsets(top: 18, leading: 20, bottom: 20, trailing: 20))
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Palette.card, in: .rect(cornerRadius: 24))
+    .padding(.horizontal, 16)
+    .padding(.top, 22)
+  }
+
+  /// The extracted text on a white sheet, cut short when it is long.
+  private var article: some View {
+    let readable = !model.fullBlocks.isEmpty && !model.reader.isStub
+    return VStack(alignment: .leading, spacing: 12) {
+      Eyebrow(readable ? articleLabel : "The article")
+      if readable {
         MarkdownView(blocks: model.previewBlocks != nil && !expanded ? model.previewBlocks! : model.fullBlocks)
         if model.previewBlocks != nil {
-          Button(expanded ? "Show less" : "Continue reading") { expanded.toggle() }
-            .buttonStyle(.bordered)
-            .tint(Palette.ink)
-            .frame(maxWidth: .infinity)
+          Button {
+            expanded.toggle()
+          } label: {
+            Text(expanded ? "Show less" : "Continue reading")
+              .font(.subheadline.weight(.bold))
+              .foregroundStyle(.white)
+              .frame(maxWidth: .infinity, minHeight: 46)
+              .background(Palette.ink, in: .capsule)
+          }
+          .buttonStyle(PressableCardStyle())
+          .padding(.top, 4)
         }
+      } else {
+        Text("There’s no readable version of this page. It may be paywalled or behind a bot wall. Open the original to read it.")
+          .font(.callout)
+          .foregroundStyle(Palette.ink2)
       }
-    } else {
-      Text("There’s no readable version of this page. It may be paywalled or behind a bot wall. Open the original to read it.")
-        .font(.callout)
-        .foregroundStyle(Palette.ink2)
+    }
+    .padding(20)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Palette.card, in: .rect(cornerRadius: 24))
+    .padding(.horizontal, 16)
+    .padding(.top, 16)
+  }
+
+  private var articleLabel: String {
+    switch model.reader.bodySection {
+    case "Transcript": "Transcript"
+    case "Description", "Summary": "Description"
+    default: model.item?.source == "reddit" ? "The post" : "The article · \(model.readMinutes) min read"
     }
   }
 
   @ViewBuilder private var connections: some View {
     if let related = model.related {
       if !related.inWiki.isEmpty {
-        group("In your wiki") {
-          ForEach(related.inWiki) { tp in
-            Button { router.push(.wiki(tp.slug)) } label: {
-              LinkRow(title: Format.topicTitle(tp.title)) { WikiTile(slug: tp.slug) }
+        section("In your wiki") {
+          LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+            ForEach(related.inWiki) { tp in
+              Button { router.push(.wiki(tp.slug)) } label: { TopicTile(page: tp) }
+                .buttonStyle(PressableCardStyle())
             }
-            .buttonStyle(.plain)
           }
+          .padding(.horizontal, 16)
         }
       }
       if !related.related.isEmpty {
-        group("Related") {
-          ForEach(related.related.prefix(5)) { r in
-            Button { router.push(.item(r.id)) } label: {
-              LinkRow(title: r.title ?? Format.domain(r.url), subtitle: Format.sourceMeta(r.url, r.source)) {
-                SourceThumb(source: r.source, url: r.url, thumbnailURL: r.thumbnailUrl, size: 40)
+        section("More like this") {
+          ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 10) {
+              ForEach(related.related.prefix(5)) { r in
+                let card = MiniCard(item: r)
+                Button { router.push(.item(r.id)) } label: { card }
+                  .buttonStyle(PressableCardStyle())
+                  .accessibilityLabel("\(card.title), \(card.meta)")
               }
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
           }
         }
       }
     }
   }
 
-  /// What the analyzer pulled out, as chips.
+  /// What the analyzer pulled out, as pills.
   @ViewBuilder private func details(_ it: ItemDetail) -> some View {
     let people = it.people ?? []
     let mentions = (it.handles ?? []) + (it.brandsProducts ?? [])
     let topics = (it.topics ?? []).map(Format.humanizeTag)
     if !(people.isEmpty && mentions.isEmpty && topics.isEmpty) {
-      group(nil) {
-        ForEach([("People", people), ("Mentioned", mentions), ("Topics", topics)], id: \.0) { label, values in
-          if !values.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-              Eyebrow(label)
-              FlowLayout(spacing: 6) { ForEach(values, id: \.self) { TagLabel(label: $0) } }
+      section("Pulled from this save") {
+        VStack(alignment: .leading, spacing: 16) {
+          ForEach([("People", people), ("Mentioned", mentions), ("Topics", topics)], id: \.0) { label, values in
+            if !values.isEmpty {
+              VStack(alignment: .leading, spacing: 8) {
+                Eyebrow(label)
+                FlowLayout(spacing: 6) {
+                  ForEach(values, id: \.self) {
+                    Pill(label: $0, fill: Palette.ground, initials: label == "People" ? Format.initials($0) : nil)
+                  }
+                }
+              }
             }
-            .padding(.bottom, 8)
           }
         }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.card, in: .rect(cornerRadius: 24))
+        .padding(.horizontal, 16)
       }
     }
   }
 
-  private func group<Content: View>(_ title: String?, @ViewBuilder content: () -> Content) -> some View {
+  private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
     VStack(alignment: .leading, spacing: 12) {
-      Divider().padding(.bottom, 8)
-      if let title { Eyebrow(title) }
+      Text(title)
+        .font(.display(22, .heavy, relativeTo: .title2))
+        .foregroundStyle(Palette.ink)
+        .padding(.horizontal, 20)
+        .accessibilityAddTraits(.isHeader)
       content()
     }
-    .padding(.top, 16)
+    .padding(.top, 30)
+  }
+
+  /// One floating bar: open the original (or watch it), then note, Ask and
+  /// Share. Uploaded files can't be reopened, so Ask takes the wide slot.
+  private func actionBar(_ it: ItemDetail, title: String) -> some View {
+    let uploaded = Format.isUploadedFile(it.url)
+    let ask = { router.ask("What are the key ideas in “\(title)”?") }
+    return HStack(spacing: 4) {
+      if uploaded {
+        wide("Ask about this", symbol: "sparkle", fill: Palette.accent, action: ask)
+      } else {
+        wide(openLabel(it.source), symbol: it.source == "youtube" ? "play.fill" : "arrow.up.right", fill: Palette.ink) {
+          open(it)
+        }
+      }
+      Button("Add a note", systemImage: "square.and.pencil") { noteOpen = true }
+        .buttonStyle(BarIconStyle())
+      if !uploaded {
+        Button("Ask about this item", systemImage: "sparkle", action: ask)
+          .buttonStyle(BarIconStyle(tint: Palette.accent, fill: Palette.accentSoft))
+      }
+      ShareLink(item: it.url, subject: Text(title)) { Label("Share", systemImage: "square.and.arrow.up") }
+        .buttonStyle(BarIconStyle())
+    }
+    .padding(6)
+    .background(Palette.card, in: .capsule)
+    .shadow(color: Palette.ink.opacity(0.14), radius: 15, y: 10)
+    .padding(.horizontal, 16)
+    .padding(.bottom, 8)
+  }
+
+  private func wide(_ label: String, symbol: String, fill: Color, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      Label(label, systemImage: symbol)
+        .font(.subheadline.weight(.bold))
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, minHeight: 52)
+        .background(fill, in: .capsule)
+    }
+    .buttonStyle(PressableCardStyle())
+  }
+
+  private func openLabel(_ source: String) -> String {
+    switch source {
+    case "youtube": "Watch on YouTube"
+    case "twitter": "Open on X"
+    case "reddit": "Open on Reddit"
+    case "instagram": "Open on Instagram"
+    default: "Open original"
+    }
+  }
+}
+
+/// A round icon button in the reader's action bar.
+private struct BarIconStyle: ButtonStyle {
+  var tint = Palette.ink2
+  var fill = Color.clear
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .labelStyle(.iconOnly)
+      .font(.title3)
+      .foregroundStyle(tint)
+      .frame(width: 58, height: 52)
+      .background(fill, in: .capsule)
+      .contentShape(.capsule)
+      .opacity(configuration.isPressed ? 0.6 : 1)
   }
 }
