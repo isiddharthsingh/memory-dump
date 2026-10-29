@@ -180,6 +180,7 @@ struct SaveLinkSheet: View {
       await onSaved()
       dismiss()
     } catch {
+      Haptics.error()
       self.error = "Couldn’t save: \(error.localizedDescription)"
     }
   }
@@ -253,6 +254,7 @@ struct NoteEditor: View {
       await onSaved()
       dismiss()
     } catch {
+      Haptics.error()
       self.error = error.localizedDescription
     }
   }

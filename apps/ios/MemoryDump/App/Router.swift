@@ -21,7 +21,9 @@ final class Router {
   /// A question to put in the Ask box ("Ask about this").
   var askDraft: String?
 
+  /// Every item, topic and source opens through here, so this is where they tap.
   func push(_ route: Route) {
+    Haptics.tap()
     switch tab {
     case .library: libraryPath.append(route)
     case .wiki: wikiPath.append(route)

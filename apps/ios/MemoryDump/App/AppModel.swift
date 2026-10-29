@@ -61,6 +61,7 @@ final class AppModel {
   }
 
   private func finishSignIn(_ session: Session, server: String) {
+    Haptics.success()
     store.setServerURL(server)
     store.save(session)
     self.session = session

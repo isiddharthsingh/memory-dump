@@ -134,5 +134,6 @@ struct SignInView: View {
     } catch {
       self.error = error.localizedDescription
     }
+    if error != nil { Haptics.error() }
   }
 }

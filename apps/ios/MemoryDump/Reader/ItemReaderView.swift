@@ -218,7 +218,7 @@ struct ItemReaderView: View {
     }
     .confirmationDialog("Delete this item?", isPresented: $confirmDelete, titleVisibility: .visible) {
       Button("Delete", role: .destructive) {
-        Task { if await model.delete() { Haptics.success(); dismiss() } }
+        Task { if await model.delete() { Haptics.success(); dismiss() } else { Haptics.error() } }
       }
     }
     .sheet(isPresented: $noteOpen) {

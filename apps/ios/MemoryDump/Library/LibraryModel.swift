@@ -87,6 +87,7 @@ final class LibraryModel {
   }
 
   func setFilter(_ f: Filter) async {
+    Haptics.selection()
     filter = filter == f ? .all : f
     items = []
     loaded = false

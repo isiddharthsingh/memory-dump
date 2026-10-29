@@ -17,10 +17,7 @@ struct ItemRowView: View {
   }
 
   var body: some View {
-    Button {
-      Haptics.tap()
-      onOpen()
-    } label: {
+    Button(action: onOpen) {
       HStack(alignment: .top, spacing: 14) {
         SourceThumb(source: item.source, url: item.url, thumbnailURL: item.thumbnailUrl, failed: item.isFailed)
         VStack(alignment: .leading, spacing: 3) {

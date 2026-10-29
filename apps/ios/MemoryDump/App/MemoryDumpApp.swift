@@ -91,6 +91,7 @@ private struct MainTabs: View {
       }
     }
     .tint(Palette.ink)
+    .onChange(of: router.tab) { Haptics.selection() }
     // Above the stacks, so pushed screens get it too.
     .environment(\.openURL, OpenURLAction { router.open($0) })
   }
