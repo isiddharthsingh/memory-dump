@@ -3,6 +3,7 @@ import SwiftUI
 struct LibraryView: View {
   @Environment(AppModel.self) private var app
   @Environment(Router.self) private var router
+  @Environment(\.horizontalSizeClass) private var sizeClass
   @State private var model = LibraryModel()
   @State private var query = ""
   @State private var noteTarget: ItemSummary?
@@ -13,6 +14,8 @@ struct LibraryView: View {
 
   var body: some View {
     content
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(Palette.ground)
       .navigationTitle("Library")
       .navigationSubtitle(model.subtitle ?? "")
       .searchable(text: $query, prompt: "Search your library")
@@ -51,76 +54,79 @@ struct LibraryView: View {
   @ViewBuilder private var content: some View {
     if model.searchActive && query.count >= 2 {
       SearchResultsView(query: model.searchQuery, hits: model.hits, isSearching: model.isSearching, error: model.searchError)
-    } else if !model.loaded {
-      ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-    } else if let error = model.error, model.items.isEmpty {
-      ErrorNotice(title: "Couldn’t load your library", detail: error.localizedDescription) {
-        Task { await model.reload() }
-      }
-      .padding(20)
-      .frame(maxHeight: .infinity, alignment: .top)
-    } else if model.items.isEmpty && model.filter == .all {
-      ContentUnavailableView {
-        Label("Your library is empty", systemImage: "books.vertical")
-      } description: {
-        Text("Share any link to Memory Dump from another app, or tap + to paste one.")
-      }
     } else {
-      list
+      wall
     }
   }
 
-  private var list: some View {
-    List {
-      Section {
-        chips
-          .listRowInsets(EdgeInsets())
-          .listRowSeparator(.hidden)
-        if model.filter == .all {
-          Rediscover(pool: model.pool)
-            .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
-            .listRowSeparator(.hidden)
+  /// Date sections, each a two-column wall of cards. The scroll view is there
+  /// from the first frame, with loading and empty states inside it: swapping
+  /// it in after the search bar attached left the large title half collapsed.
+  private var wall: some View {
+    ScrollView {
+      LazyVStack(alignment: .leading, spacing: 12) {
+        if !model.loaded {
+          ProgressView().frame(maxWidth: .infinity).padding(.top, 120)
+        } else if let error = model.error, model.items.isEmpty {
+          ErrorNotice(title: "Couldn’t load your library", detail: error.localizedDescription) {
+            Task { await model.reload() }
+          }
+          .padding(.top, 4)
+        } else if model.items.isEmpty && model.filter == .all {
+          ContentUnavailableView {
+            Label("Your library is empty", systemImage: "books.vertical")
+          } description: {
+            Text("Share any link to Memory Dump from another app, or tap + to paste one.")
+          }
+          .padding(.top, 60)
+        } else {
+          cards
         }
       }
-      if model.items.isEmpty {
-        Text("Nothing saved matches this filter.")
-          .font(.callout)
-          .foregroundStyle(Palette.ink2)
-          .frame(maxWidth: .infinity)
-          .padding(.vertical, 32)
-          .listRowSeparator(.hidden)
-      }
-      ForEach(model.sections) { section in
-        Section {
-          ForEach(section.items) { item in
-            ItemRowView(
-              item: item,
-              onOpen: { router.push(.item(item.id)) },
-              onNote: { noteTarget = item },
-              onRetry: { Task { await model.retry(item) } },
-              onDelete: { Task { await model.delete(item) } }
-            )
-            .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 12, trailing: 20))
-            .onAppear {
-              if item.id == model.items.last?.id { Task { await model.loadMore() } }
-            }
-          }
-        } header: {
-          HStack {
-            Text(section.title).font(.title3.bold()).foregroundStyle(Palette.ink)
-            Spacer()
-            Text(Format.plural(section.items.count, "item")).font(.footnote).foregroundStyle(Palette.ink3)
-          }
-          .textCase(nil)
-        }
-      }
-      if model.isLoadingMore {
-        ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden)
-      }
+      .padding(.horizontal, 16)
+      .padding(.bottom, 24)
     }
-    .listStyle(.plain)
     .scrollDismissesKeyboard(.immediately)
     .refreshable { await model.refreshAll() }
+  }
+
+  @ViewBuilder private var cards: some View {
+    chips.padding(.horizontal, -16)
+    if model.filter == .all {
+      Rediscover(pool: model.pool)
+    }
+    if model.items.isEmpty {
+      Text("Nothing saved matches this filter.")
+        .font(.callout)
+        .foregroundStyle(Palette.ink2)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 32)
+    }
+    ForEach(model.sections) { section in
+      HStack(alignment: .firstTextBaseline) {
+        Text(section.title).font(.display(21, .heavy, relativeTo: .title2)).foregroundStyle(Palette.ink)
+        Spacer()
+        Text(Format.plural(section.items.count, "item")).font(.footnote).foregroundStyle(Palette.ink3)
+      }
+      .padding(.top, 8)
+      .accessibilityAddTraits(.isHeader)
+      // iPad and other wide layouts get three columns.
+      Masonry(items: section.items, columns: sizeClass == .regular ? 3 : 2, estimate: ItemCardView.estimatedHeight) { item in
+        ItemCardView(
+          item: item,
+          onOpen: { router.push(.item(item.id)) },
+          onNote: { noteTarget = item },
+          onRetry: { Task { await model.retry(item) } },
+          onDelete: { Task { await model.delete(item) } }
+        )
+        .onAppear {
+          if item.id == model.items.last?.id { Task { await model.loadMore() } }
+        }
+      }
+    }
+    if model.isLoadingMore {
+      ProgressView().frame(maxWidth: .infinity).padding(.vertical, 12)
+    }
   }
 
   private var chips: some View {
@@ -129,7 +135,7 @@ struct LibraryView: View {
         Chip(label: "All", selected: model.filter == .all) { Task { await model.setFilter(.all) } }
         if model.sources.count > 1 {
           ForEach(model.sources, id: \.self) { s in
-            Chip(label: "\(Format.sourceKind(s).label)s", selected: model.filter == .source(s)) {
+            Chip(label: "\(Format.sourceKind(s).label)s", dot: Palette.sourceDot(s), selected: model.filter == .source(s)) {
               Task { await model.setFilter(.source(s)) }
             }
           }
@@ -140,8 +146,8 @@ struct LibraryView: View {
           }
         }
       }
-      .padding(.horizontal, 20)
-      .padding(.vertical, 6)
+      .padding(.horizontal, 16)
+      .padding(.vertical, 2)
     }
   }
 }

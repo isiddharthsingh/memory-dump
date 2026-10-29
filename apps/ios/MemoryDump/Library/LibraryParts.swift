@@ -13,29 +13,33 @@ struct Rediscover: View {
       Button {
         router.push(.item(pick.id))
       } label: {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
           VStack(alignment: .leading, spacing: 4) {
             Text("Rediscover · \(Self.savedLabel(pick.createdAt).lowercased())")
-              .font(.footnote.weight(.semibold)).foregroundStyle(Palette.accent)
+              .font(.caption.weight(.bold)).foregroundStyle(Swatch.butter.ink)
             Text(pick.title ?? Format.domain(pick.url))
-              .font(.cardTitle).foregroundStyle(Palette.ink).lineLimit(2)
-            Text(Format.sourceMeta(pick.url, pick.source)).font(.footnote).foregroundStyle(Palette.ink3)
+              .font(.display(19, .bold)).foregroundStyle(Palette.ink).lineLimit(2)
+              .multilineTextAlignment(.leading)
           }
           Spacer(minLength: 0)
-          Button("Shuffle", systemImage: "shuffle") {
+          Button {
             Haptics.selection()
             exclude = pick.id
             round += 1
+          } label: {
+            Image(systemName: "shuffle")
+              .font(.callout.weight(.bold))
+              .foregroundStyle(Swatch.butter.fill)
+              .frame(width: 44, height: 44)
+              .background(Palette.ink, in: .circle)
           }
-          .labelStyle(.iconOnly)
-          .buttonStyle(.bordered)
-          .buttonBorderShape(.circle)
-          .tint(Palette.ink)
+          .buttonStyle(.plain)
+          .accessibilityLabel("Shuffle")
         }
-        .padding(16)
-        .background(Palette.accentSoft, in: .rect(cornerRadius: 16))
+        .padding(EdgeInsets(top: 14, leading: 18, bottom: 14, trailing: 14))
+        .background(Swatch.butter.fill, in: .rect(cornerRadius: 24))
       }
-      .buttonStyle(.plain)
+      .buttonStyle(PressableCardStyle())
       .accessibilityLabel("Rediscover: \(pick.title ?? Format.domain(pick.url))")
     }
   }
@@ -47,12 +51,7 @@ struct Rediscover: View {
 
   /// Deterministic 0..1 value from a string (FNV-1a), so the pick is stable.
   static func seeded(_ key: String) -> Double {
-    var h: UInt32 = 0x811C_9DC5
-    for unit in key.utf16 {
-      h ^= UInt32(unit)
-      h = h &* 0x0100_0193
-    }
-    return Double(h) / 4_294_967_296
+    Double(Format.fnv1a(key)) / 4_294_967_296
   }
 
   /// Weight is age in days plus 1, so brand-new items still have a chance.
@@ -99,33 +98,33 @@ struct SearchResultsView: View {
         } label: {
           HStack(alignment: .top, spacing: 12) {
             if hit.kind == "item" {
-              SourceThumb(source: Self.source(of: hit.url), url: hit.url, size: 44)
+              SourceThumb(source: Format.source(ofURL: hit.url), url: hit.url, size: 44)
             } else {
-              WikiTile(size: 44)
+              WikiTile(slug: hit.slug, size: 44)
             }
             VStack(alignment: .leading, spacing: 3) {
-              Text(title(of: hit)).font(.headline).foregroundStyle(Palette.ink).lineLimit(2)
+              Text(title(of: hit)).font(.cardTitle).foregroundStyle(Palette.ink).lineLimit(2)
               Text(hit.snippet).font(.subheadline).foregroundStyle(Palette.ink2).lineLimit(2)
             }
+            Spacer(minLength: 0)
           }
+          .padding(12)
+          .background(Palette.card, in: .rect(cornerRadius: 18))
           .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableCardStyle())
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
       }
       .listStyle(.plain)
+      .scrollContentBackground(.hidden)
     }
   }
 
   private func title(of hit: SearchHit) -> String {
     if hit.kind == "item" { return hit.title ?? hit.url.map(Format.domain) ?? "Saved item" }
     return Format.topicTitle(hit.title ?? hit.slug ?? "")
-  }
-
-  private static func source(of url: String?) -> String {
-    let host = url.map(Format.domain) ?? ""
-    if host.contains(/(^|\.)youtube\.com$|^youtu\.be$/) { return "youtube" }
-    if host.contains(/(^|\.)(x|twitter)\.com$/) { return "twitter" }
-    return "web"
   }
 }
 

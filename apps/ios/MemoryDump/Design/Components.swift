@@ -9,30 +9,29 @@ struct SourceThumb: View {
   let source: String
   let url: String?
   var thumbnailURL: String?
-  var failed = false
   var size: CGFloat = 56
 
   var body: some View {
     let shape = RoundedRectangle(cornerRadius: size >= 48 ? 12 : 8)
     Group {
-      if let thumbnailURL, !failed, let url = URL(string: thumbnailURL) {
+      if let thumbnailURL, let url = URL(string: thumbnailURL) {
         AsyncImage(url: url) { image in
           image.resizable().scaledToFill()
         } placeholder: {
           Palette.fill
         }
-      } else if failed {
-        Image(systemName: "link")
-          .font(.system(size: size * 0.36, weight: .medium))
-          .foregroundStyle(Palette.failed)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .background(Palette.failedSoft)
       } else if source == "youtube" || source == "twitter" {
         Image(systemName: Format.sourceKind(source).symbol)
           .font(.system(size: size * 0.32, weight: .semibold))
           .foregroundStyle(.white)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .background(Palette.ink)
+          .background(source == "youtube" ? Palette.video : Palette.ink)
+      } else if source == "instagram" {
+        Image(systemName: Format.sourceKind(source).symbol)
+          .font(.system(size: size * 0.34, weight: .semibold))
+          .foregroundStyle(Swatch.lilac.ink)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .background(Swatch.lilac.fill)
       } else if let url, let letter = Format.domain(url).first, !Format.isUploadedFile(url) {
         Text(String(letter).uppercased())
           .font(.serif(size * 0.44, .medium))
@@ -54,17 +53,19 @@ struct SourceThumb: View {
 
 struct StatusBadge: View {
   let status: String
+  /// For dark cards: butter on a translucent wash.
+  var onDark = false
 
   var body: some View {
     HStack(spacing: 6) {
-      Circle().fill(Palette.processingDot).frame(width: 7, height: 7)
+      Circle().fill(onDark ? Swatch.butter.fill : Palette.processingDot).frame(width: 7, height: 7)
       Text(status == "pending" ? "Saving…" : "Analyzing…")
         .font(.footnote.weight(.semibold))
-        .foregroundStyle(Palette.processing)
+        .foregroundStyle(onDark ? Swatch.butter.fill : Palette.processing)
     }
     .padding(.horizontal, 8)
     .padding(.vertical, 3)
-    .background(Palette.processingSoft, in: .capsule)
+    .background(onDark ? Swatch.butter.fill.opacity(0.16) : Palette.processingSoft, in: .capsule)
   }
 }
 
@@ -92,23 +93,34 @@ struct ErrorNotice: View {
   }
 }
 
+/// A white pill, ink when selected. `dot` marks a source or topic color;
+/// `symbol` puts an accent icon in front, for suggested questions.
 struct Chip: View {
   let label: String
   var count: Int?
+  var dot: Color?
+  var symbol: String?
   var selected = false
   let action: () -> Void
 
   var body: some View {
     Button(action: action) {
-      HStack(spacing: 4) {
+      HStack(spacing: 7) {
+        if let dot {
+          Circle().fill(dot).frame(width: 10, height: 10)
+            .overlay { Circle().strokeBorder(Palette.ink.opacity(0.18)) }
+        }
+        if let symbol { Image(systemName: symbol).font(.footnote.weight(.semibold)).foregroundStyle(Palette.accent) }
         Text(label)
         if let count { Text("\(count)").foregroundStyle(selected ? .white.opacity(0.7) : Palette.ink3) }
       }
-      .font(.subheadline.weight(.medium))
+      .font(.subheadline.weight(.semibold))
       .foregroundStyle(selected ? .white : Palette.ink)
-      .padding(.horizontal, 12)
-      .padding(.vertical, 7)
-      .background(selected ? Palette.ink : Palette.fill, in: .capsule)
+      .padding(.horizontal, 14)
+      .frame(minHeight: 40)
+      .background(selected ? Palette.ink : Palette.card, in: .capsule)
+      .overlay { Capsule().strokeBorder(selected ? .clear : Palette.hairline) }
+      .contentShape(.capsule)
     }
     .buttonStyle(.plain)
   }
@@ -129,26 +141,76 @@ struct TagLabel: View {
 
 struct Eyebrow: View {
   let text: String
+  let color: Color
 
-  init(_ text: String) { self.text = text }
+  init(_ text: String, color: Color = Palette.ink2) {
+    self.text = text
+    self.color = color
+  }
 
   var body: some View {
     Text(text.uppercased())
       .font(.caption.weight(.semibold))
       .tracking(0.6)
-      .foregroundStyle(Palette.ink2)
+      .foregroundStyle(color)
   }
 }
 
+/// A topic's icon, in the topic's own color when the slug is known.
 struct WikiTile: View {
+  var slug: String?
   var size: CGFloat = 40
 
   var body: some View {
+    let swatch = slug.map(Swatch.topic)
     Image(systemName: "book.closed")
-      .font(.system(size: size * 0.42))
-      .foregroundStyle(Palette.accent)
+      .font(.system(size: size * 0.42, weight: .semibold))
+      .foregroundStyle(swatch?.ink ?? Palette.accent)
       .frame(width: size, height: size)
-      .background(Palette.accentSoft, in: .rect(cornerRadius: 8))
+      .background(swatch?.fill ?? Palette.accentSoft, in: .rect(cornerRadius: size >= 40 ? 12 : 8))
+  }
+}
+
+/// Cards shrink a little under the finger.
+struct PressableCardStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .scaleEffect(configuration.isPressed ? 0.97 : 1)
+      .animation(.snappy(duration: 0.18), value: configuration.isPressed)
+  }
+}
+
+/// Columns of cards, each item going to the shortest column, so a wall of
+/// mixed heights stays level. `estimate` guesses a card's height before layout.
+struct Masonry<Item: Identifiable, Content: View>: View {
+  let items: [Item]
+  var columns = 2
+  let estimate: (Item) -> CGFloat
+  @ViewBuilder let content: (Item) -> Content
+  var spacing: CGFloat = 10
+
+  var body: some View {
+    let split = Self.split(items, columns: columns, estimate: estimate)
+    HStack(alignment: .top, spacing: spacing) {
+      ForEach(split.indices, id: \.self) { c in
+        LazyVStack(spacing: spacing) {
+          ForEach(split[c]) { content($0) }
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+      }
+    }
+  }
+
+  static func split(_ items: [Item], columns: Int = 2, estimate: (Item) -> CGFloat) -> [[Item]] {
+    var split = [[Item]](repeating: [], count: max(columns, 1))
+    var heights = [CGFloat](repeating: 0, count: split.count)
+    for item in items {
+      // min(by:) returns the first of equal heights, so ties go left.
+      let c = heights.indices.min { heights[$0] < heights[$1] }!
+      split[c].append(item)
+      heights[c] += estimate(item)
+    }
+    return split
   }
 }
 

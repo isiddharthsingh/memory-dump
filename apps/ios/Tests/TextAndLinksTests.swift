@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import MemoryDump
@@ -118,5 +119,41 @@ import Testing
     let v = Rediscover.seeded("abc#0")
     #expect(v == Rediscover.seeded("abc#0"))
     #expect((0..<1).contains(v))
+  }
+}
+
+@Suite struct MoodboardTests {
+  struct Card: Identifiable {
+    let id: Int
+    let height: CGFloat
+  }
+
+  @Test func masonryPutsEachCardInTheShorterColumn() {
+    let cards = [Card(id: 0, height: 200), Card(id: 1, height: 100), Card(id: 2, height: 100), Card(id: 3, height: 50)]
+    let columns = Masonry<Card, EmptyView>.split(cards, estimate: \.height)
+    #expect(columns.map { $0.map(\.id) } == [[0, 3], [1, 2]])
+  }
+
+  @Test func masonrySpreadsAcrossThreeColumns() {
+    let cards = (0..<4).map { Card(id: $0, height: 100) }
+    let columns = Masonry<Card, EmptyView>.split(cards, columns: 3, estimate: \.height)
+    #expect(columns.map { $0.map(\.id) } == [[0, 3], [1], [2]])
+  }
+
+  @Test func sourceComesFromTheHost() {
+    #expect(Format.source(ofURL: "https://www.youtube.com/watch?v=1") == "youtube")
+    #expect(Format.source(ofURL: "https://youtu.be/1") == "youtube")
+    #expect(Format.source(ofURL: "https://x.com/a/status/1") == "twitter")
+    #expect(Format.source(ofURL: "https://notyoutube.com/x") == "web")
+    #expect(Format.source(ofURL: nil) == "web")
+  }
+
+  @Test func topicColorIsStablePerSlug() {
+    #expect(Swatch.topic("sourdough") == Swatch.topic("sourdough"))
+  }
+
+  @Test func topicColorsSpreadAcrossThePalette() {
+    let slugs = ["sourdough", "espresso", "fermentation", "vector-search", "indie-app-marketing", "knife-skills"]
+    #expect(Set(slugs.map(Swatch.topic)).count >= 4)
   }
 }
