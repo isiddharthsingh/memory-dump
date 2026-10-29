@@ -123,11 +123,11 @@ private struct ToastView: View {
         Text(toast.message).font(.callout.weight(.medium)).multilineTextAlignment(.leading)
         Spacer(minLength: 0)
       }
-      .foregroundStyle(.white)
+      .foregroundStyle(Palette.onInk)
       .padding(.horizontal, 16)
       .padding(.vertical, 14)
       .background(toast.ok ? Palette.ink : Palette.failed, in: .rect(cornerRadius: 16))
-      .shadow(color: .black.opacity(0.1), radius: 24, y: 8)
+      .shadow(color: Palette.shadow(0.1), radius: 24, y: 8)
     }
     .buttonStyle(.plain)
     .accessibilityHint("Tap to dismiss.")

@@ -54,7 +54,7 @@ struct ReaderHero: View {
     // Decorative, so a fixed size: it would outgrow the card at large text sizes.
     Text(Format.domain(item.url).prefix(1).uppercased())
       .font(.custom(Font.SerifWeight.medium.rawValue, fixedSize: 120))
-      .foregroundStyle(Palette.ink.opacity(0.85))
+      .foregroundStyle(Palette.onPastel.opacity(0.85))
       .frame(maxWidth: .infinity)
       .frame(height: Self.plainHeight)
       .padding(.top, topInset)
@@ -83,7 +83,7 @@ struct ReaderHero: View {
         if let author {
           Text(Format.initials(author.replacing(/^u\//, with: "")))
             .font(.subheadline.weight(.heavy))
-            .foregroundStyle(Palette.ink)
+            .foregroundStyle(Palette.onPastel)
             .frame(width: 40, height: 40)
             .background(Swatch.topic(author).fill, in: .circle)
             .accessibilityHidden(true)
@@ -97,7 +97,7 @@ struct ReaderHero: View {
         Spacer(minLength: 0)
         Text(item.source == "twitter" ? "X" : "r/")
           .font(.footnote.weight(.heavy))
-          .foregroundStyle(Palette.ink)
+          .foregroundStyle(Palette.onPastel)
           .frame(width: 30, height: 30)
           .background(.white, in: .circle)
           .accessibilityHidden(true)
@@ -120,10 +120,12 @@ struct ReaderHero: View {
     }
     .padding(EdgeInsets(top: topInset + 18, leading: 22, bottom: 24, trailing: 22))
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Palette.ink, in: Self.shape)
+    .background(Palette.post, in: Self.shape)
+    // Only round the bottom curve: the rest of the card runs off the screen edges.
+    .overlay { Self.shape.strokeBorder(Palette.postEdge).mask(alignment: .bottom) { Rectangle().frame(height: 40) } }
   }
 
-  /// A white label stuck on the card at a slight angle, naming the source.
+  /// A card-colored label stuck on the card at a slight angle, naming the source.
   private var sticker: some View {
     HStack(spacing: 7) {
       Circle().fill(Palette.sourceDot(item.source)).frame(width: 9, height: 9)
@@ -133,8 +135,8 @@ struct ReaderHero: View {
     .foregroundStyle(Palette.ink)
     .padding(.horizontal, 13)
     .frame(minHeight: 34)
-    .background(.white, in: .capsule)
-    .shadow(color: Palette.ink.opacity(0.15), radius: 6, y: 4)
+    .background(Palette.card, in: .capsule)
+    .shadow(color: Palette.shadow(0.15), radius: 6, y: 4)
     .rotationEffect(.degrees(-3))
   }
 
@@ -166,7 +168,7 @@ struct MiniCard: View {
         VStack(alignment: .leading, spacing: 8) {
           Text(item.source == "twitter" ? "X" : "r/")
             .font(.caption2.weight(.heavy))
-            .foregroundStyle(Palette.ink)
+            .foregroundStyle(Palette.onPastel)
             .frame(width: 22, height: 22)
             .background(.white, in: .circle)
           Text(title).font(.display(15, .semibold, relativeTo: .subheadline)).foregroundStyle(.white).lineLimit(5)
@@ -174,7 +176,8 @@ struct MiniCard: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.ink)
+        .background(Palette.post)
+        .overlay { RoundedRectangle(cornerRadius: 20).strokeBorder(Palette.postEdge) }
       } else {
         VStack(alignment: .leading, spacing: 0) {
           band(style)
@@ -213,7 +216,7 @@ struct MiniCard: View {
           } else if case .article = style {
             Text(Format.domain(item.url).prefix(1).uppercased())
               .font(.custom(Font.SerifWeight.medium.rawValue, fixedSize: 44))
-              .foregroundStyle(Palette.ink.opacity(0.85))
+              .foregroundStyle(Palette.onPastel.opacity(0.85))
           }
         }
       }
@@ -227,9 +230,11 @@ struct MiniCard: View {
 }
 
 /// A rounded label for tags and extracted names; people get their initials.
+/// On a topic pastel, pass `Palette.onPastel` as the ink.
 struct Pill: View {
   let label: String
   var fill: Color = Palette.card
+  var ink: Color = Palette.ink
   var initials: String?
 
   var body: some View {
@@ -237,7 +242,7 @@ struct Pill: View {
       if let initials {
         Text(initials)
           .font(.caption2.weight(.heavy))
-          .foregroundStyle(.white)
+          .foregroundStyle(Palette.onInk)
           .frame(width: 26, height: 26)
           .background(Palette.ink, in: .circle)
           .accessibilityHidden(true)
@@ -246,7 +251,7 @@ struct Pill: View {
       Text(label).lineLimit(1)
     }
     .font(.subheadline.weight(.semibold))
-    .foregroundStyle(Palette.ink)
+    .foregroundStyle(ink)
     .padding(.leading, initials == nil ? 14 : 4)
     .padding(.trailing, 14)
     .frame(minHeight: 34)

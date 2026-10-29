@@ -123,7 +123,7 @@ private struct FeaturedTopicTile: View {
         }
         Text(Format.topicTitle(page.title))
           .font(.display(34, .heavy, relativeTo: .largeTitle))
-          .foregroundStyle(Palette.ink)
+          .foregroundStyle(Palette.onPastel)
           .lineLimit(3)
           .minimumScaleFactor(0.6)
           .multilineTextAlignment(.leading)
@@ -161,7 +161,7 @@ private struct SourceFan: View {
       .padding(10)
       .frame(width: 72, height: 92)
       .background(note.fill, in: .rect(cornerRadius: 14))
-      .shadow(color: Palette.ink.opacity(0.14), radius: 8, y: 6)
+      .shadow(color: Palette.shadow(0.14), radius: 8, y: 6)
       .rotationEffect(.degrees(14))
       .offset(x: 66, y: 26)
     }
@@ -181,14 +181,14 @@ private struct SourceFan: View {
     .frame(width: 72, height: 92)
     .background(Palette.card)
     .clipShape(.rect(cornerRadius: 14))
-    .shadow(color: Palette.ink.opacity(0.14), radius: 8, y: 6)
+    .shadow(color: Palette.shadow(0.14), radius: 8, y: 6)
   }
 }
 
 struct TopicTile: View {
   let page: TopicPageSummary
 
-  private static let dots = [Palette.video, Palette.ink, Palette.card]
+  private static let dots = [Palette.video, Palette.post, Palette.card]
 
   var body: some View {
     let swatch = Swatch.topic(page.slug)
@@ -196,7 +196,7 @@ struct TopicTile: View {
     VStack(alignment: .leading, spacing: 4) {
       Text(Format.topicTitle(page.title))
         .font(.display(22, .heavy))
-        .foregroundStyle(Palette.ink)
+        .foregroundStyle(Palette.onPastel)
         .lineLimit(3)
         .minimumScaleFactor(0.8)
         .multilineTextAlignment(.leading)

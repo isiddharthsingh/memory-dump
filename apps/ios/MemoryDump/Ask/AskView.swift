@@ -66,7 +66,7 @@ private struct DrawerSlide<Chat: View, History: View>: View {
           }
         )
         .overlay {
-          Color.black.opacity(0.18 * progress)
+          Palette.scrim.opacity(progress)
             .ignoresSafeArea()
             .contentShape(.rect)
             .allowsHitTesting(drawer.isOpen)
@@ -283,7 +283,7 @@ struct AskView: View {
       } label: {
         Image(systemName: model.isStreaming ? "stop.fill" : "arrow.up")
           .font(.system(size: model.isStreaming ? 14 : 17, weight: .bold))
-          .foregroundStyle(.white)
+          .foregroundStyle(Palette.onInk)
           .frame(width: 40, height: 40)
           .background(
             model.isStreaming ? Palette.ink : model.canSend ? Palette.accent : Palette.hairlineStrong, in: .circle)
@@ -294,8 +294,9 @@ struct AskView: View {
     .padding(.leading, 8)
     .padding(.trailing, 6)
     .padding(.vertical, 6)
-    .background(Palette.card, in: .rect(cornerRadius: 26))
-    .shadow(color: Palette.ink.opacity(0.10), radius: 16, y: 6)
+    .background(Palette.raised, in: .rect(cornerRadius: 26))
+    .overlay { RoundedRectangle(cornerRadius: 26).strokeBorder(Palette.raisedEdge) }
+    .shadow(color: Palette.shadow(0.10), radius: 16, y: 6)
     .padding(.horizontal, 12)
     .padding(.bottom, 8)
   }
@@ -311,7 +312,7 @@ private struct AskTurnView: View {
     VStack(alignment: .leading, spacing: 16) {
       Text(turn.question)
         .font(.body.weight(.medium))
-        .foregroundStyle(.white)
+        .foregroundStyle(Palette.onInk)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(
@@ -379,10 +380,10 @@ private struct AskTurnView: View {
         if isWiki {
           VStack(alignment: .leading, spacing: 8) {
             Text("Wiki")
-              .font(.caption2.weight(.heavy)).foregroundStyle(Palette.ink)
+              .font(.caption2.weight(.heavy)).foregroundStyle(Palette.onPastel)
               .padding(.horizontal, 7).padding(.vertical, 3)
               .background(.white, in: .capsule)
-            Text(title).font(.display(19, .heavy)).foregroundStyle(Palette.ink).lineLimit(3)
+            Text(title).font(.display(19, .heavy)).foregroundStyle(Palette.onPastel).lineLimit(3)
               .minimumScaleFactor(0.8)
             Spacer(minLength: 0)
           }
@@ -390,7 +391,7 @@ private struct AskTurnView: View {
           .background(swatch.fill)
         } else {
           VStack(alignment: .leading, spacing: 0) {
-            (isVideo ? Palette.video : isPost ? Palette.ink : Palette.sand)
+            (isVideo ? Palette.video : isPost ? Palette.post : Palette.sand)
               .frame(height: 40)
               .overlay {
                 if isVideo || isPost {
@@ -409,10 +410,10 @@ private struct AskTurnView: View {
       }
       .frame(width: 124, height: 124, alignment: .topLeading)
       .clipShape(.rect(cornerRadius: 18))
-      .shadow(color: Palette.ink.opacity(0.10), radius: 8, y: 4)
+      .shadow(color: Palette.shadow(0.10), radius: 8, y: 4)
       .overlay(alignment: .topLeading) {
         Text("\(source.n)")
-          .font(.caption.weight(.heavy)).foregroundStyle(.white)
+          .font(.caption.weight(.heavy)).foregroundStyle(Palette.onInk)
           .frame(width: 22, height: 22)
           .background(Palette.ink, in: .circle)
           .offset(x: -6, y: -6)

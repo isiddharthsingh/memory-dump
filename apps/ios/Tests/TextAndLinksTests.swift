@@ -185,3 +185,58 @@ import Testing
     #expect(Set(slugs.map(Swatch.topic)).count >= 4)
   }
 }
+
+@Suite struct DarkModeTests {
+  private func hex(_ color: Color, _ style: UIUserInterfaceStyle) -> UInt32 {
+    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+    UIColor(color).resolvedColor(with: UITraitCollection(userInterfaceStyle: style)).getRed(&r, green: &g, blue: &b, alpha: &a)
+    return UInt32((r * 255).rounded()) << 16 | UInt32((g * 255).rounded()) << 8 | UInt32((b * 255).rounded())
+  }
+
+  /// WCAG contrast of two colors in one mode.
+  private func contrast(_ a: Color, _ b: Color, _ style: UIUserInterfaceStyle) -> Double {
+    func luminance(_ c: Color) -> Double {
+      let v = hex(c, style)
+      let f = { (x: UInt32) -> Double in
+        let c = Double(x) / 255
+        return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+      }
+      return 0.2126 * f(v >> 16 & 0xFF) + 0.7152 * f(v >> 8 & 0xFF) + 0.0722 * f(v & 0xFF)
+    }
+    let (x, y) = (luminance(a), luminance(b))
+    return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+  }
+
+  /// UIKit gets the color through UIColor(_:), as the navigation bar titles do,
+  /// and must still see both values.
+  @Test func paletteResolvesPerMode() {
+    #expect(hex(Palette.ground, .light) == 0xF0EEE9)
+    #expect(hex(Palette.ground, .dark) == 0x121211)
+    #expect(hex(Palette.ink, .light) == 0x17171B)
+    #expect(hex(Palette.ink, .dark) == 0xF2F0EB)
+    #expect(hex(Swatch.butter.fill, .dark) == 0xE3C65E)
+    #expect(hex(Palette.onPastel, .dark) == hex(Palette.onPastel, .light))
+  }
+
+  @Test func textReadsInDark() {
+    for text in [Palette.ink, Palette.ink2, Palette.ink3, Palette.inkReading, Palette.accent, Palette.failed, Palette.ready] {
+      #expect(contrast(text, Palette.card, .dark) >= 4.5)
+      #expect(contrast(text, Palette.ground, .dark) >= 4.5)
+    }
+    for fill in [Palette.ink, Palette.accent, Palette.failed] {
+      #expect(contrast(Palette.onInk, fill, .dark) >= 4.5)
+      #expect(contrast(Palette.onInk, fill, .light) >= 4.5)
+    }
+    #expect(contrast(Palette.processing, Palette.processingSoft, .dark) >= 4.5)
+    #expect(contrast(Palette.failed, Palette.failedSoft, .dark) >= 4.5)
+  }
+
+  @Test func pastelsKeepDarkTextInBothModes() {
+    for swatch in [Swatch.butter, .salmon, .mint, .sky, .lilac, .pink] {
+      for style in [UIUserInterfaceStyle.light, .dark] {
+        #expect(contrast(Palette.onPastel, swatch.fill, style) >= 4.5)
+        #expect(contrast(swatch.ink, swatch.fill, style) >= 4.5)
+      }
+    }
+  }
+}

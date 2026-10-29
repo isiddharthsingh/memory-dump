@@ -21,7 +21,7 @@ struct SettingsView: View {
           Section {
             HStack(spacing: 14) {
               Text(Format.initials(user.displayName ?? user.email))
-                .font(.title3.weight(.semibold)).foregroundStyle(.white)
+                .font(.title3.weight(.semibold)).foregroundStyle(Palette.onInk)
                 .frame(width: 56, height: 56)
                 .background(Palette.ink, in: .circle)
               VStack(alignment: .leading, spacing: 2) {

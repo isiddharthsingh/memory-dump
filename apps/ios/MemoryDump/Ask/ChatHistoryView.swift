@@ -41,6 +41,8 @@ struct ChatHistoryView: View {
           ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         }
       }
+      // The whole drawer, whichever of the states above is showing.
+      .containerBackground(Palette.bg, for: .navigation)
       .navigationTitle("History")
       .navigationBarTitleDisplayMode(.inline)
       .alert(
@@ -64,13 +66,14 @@ struct ChatHistoryView: View {
     return List {
       ForEach(sections, id: \.title) { section in
         Section {
-          ForEach(section.values) { chat in row(chat) }
+          ForEach(section.values) { chat in row(chat).listRowBackground(Palette.bg) }
         } header: {
           Text(section.title).font(.footnote.weight(.semibold)).foregroundStyle(Palette.ink2).textCase(nil)
         }
       }
     }
     .listStyle(.plain)
+    .scrollContentBackground(.hidden)
     .refreshable { await model.loadHistory() }
     .searchable(text: $query, isPresented: $searching, prompt: "Search chats")
     .overlay {

@@ -21,7 +21,7 @@ struct SourceThumb: View {
           .font(.system(size: size * 0.32, weight: .semibold))
           .foregroundStyle(.white)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .background(source == "youtube" ? Palette.video : Palette.ink)
+          .background(source == "youtube" ? Palette.video : Palette.post)
       } else if source == "instagram" {
         Image(systemName: Format.sourceKind(source).symbol)
           .font(.system(size: size * 0.34, weight: .semibold))
@@ -156,7 +156,7 @@ struct ErrorNotice: View {
   }
 }
 
-/// A white pill, ink when selected. `dot` marks a source or topic color;
+/// A card-colored pill, ink when selected. `dot` marks a source or topic color;
 /// `symbol` puts an accent icon in front, for suggested questions.
 struct Chip: View {
   let label: String
@@ -175,10 +175,10 @@ struct Chip: View {
         }
         if let symbol { Image(systemName: symbol).font(.footnote.weight(.semibold)).foregroundStyle(Palette.accent) }
         Text(label)
-        if let count { Text("\(count)").foregroundStyle(selected ? .white.opacity(0.7) : Palette.ink3) }
+        if let count { Text("\(count)").foregroundStyle(selected ? Palette.onInk.opacity(0.7) : Palette.ink3) }
       }
       .font(.subheadline.weight(.semibold))
-      .foregroundStyle(selected ? .white : Palette.ink)
+      .foregroundStyle(selected ? Palette.onInk : Palette.ink)
       .padding(.horizontal, 14)
       .padding(.vertical, 8)
       .frame(minHeight: 40)

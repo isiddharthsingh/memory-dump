@@ -215,7 +215,7 @@ struct ItemReaderView: View {
     if !tags.isEmpty {
       FlowLayout(spacing: 8) {
         ForEach(tags.prefix(Self.maxTags), id: \.self) {
-          Pill(label: Format.humanizeTag($0), fill: Swatch.topic($0).fill)
+          Pill(label: Format.humanizeTag($0), fill: Swatch.topic($0).fill, ink: Palette.onPastel)
         }
         if tags.count > Self.maxTags { Pill(label: "+\(tags.count - Self.maxTags)") }
       }
@@ -258,13 +258,13 @@ struct ItemReaderView: View {
         }
         Text(note)
           .font(.display(19, .semibold, relativeTo: .body))
-          .foregroundStyle(Palette.ink)
+          .foregroundStyle(Palette.onPastel)
           .multilineTextAlignment(.leading)
           .frame(maxWidth: .infinity, alignment: .leading)
       }
       .padding(EdgeInsets(top: 16, leading: 18, bottom: 18, trailing: 18))
       .background(Swatch.mint.fill, in: .rect(cornerRadius: 22))
-      .shadow(color: Palette.ink.opacity(0.08), radius: 8, y: 6)
+      .shadow(color: Palette.shadow(0.08), radius: 8, y: 6)
       .rotationEffect(.degrees(-1.5))
     }
     .buttonStyle(PressableCardStyle())
@@ -298,7 +298,7 @@ struct ItemReaderView: View {
           } label: {
             Text(expanded ? "Show less" : "Continue reading")
               .font(.subheadline.weight(.bold))
-              .foregroundStyle(.white)
+              .foregroundStyle(Palette.onInk)
               .frame(maxWidth: .infinity, minHeight: 46)
               .background(Palette.ink, in: .capsule)
           }
@@ -421,8 +421,9 @@ struct ItemReaderView: View {
         .buttonStyle(BarIconStyle())
     }
     .padding(6)
-    .background(Palette.card, in: .capsule)
-    .shadow(color: Palette.ink.opacity(0.14), radius: 15, y: 10)
+    .background(Palette.raised, in: .capsule)
+    .overlay { Capsule().strokeBorder(Palette.raisedEdge) }
+    .shadow(color: Palette.shadow(0.14), radius: 15, y: 10)
     .padding(.horizontal, 16)
     .padding(.bottom, 8)
   }
@@ -433,7 +434,7 @@ struct ItemReaderView: View {
         .font(.subheadline.weight(.bold))
         .lineLimit(1)
         .minimumScaleFactor(0.8)
-        .foregroundStyle(.white)
+        .foregroundStyle(Palette.onInk)
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, minHeight: 52)
         .background(fill, in: .capsule)

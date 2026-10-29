@@ -98,7 +98,7 @@ struct ItemCardView: View {
       HStack(spacing: 8) {
         Text(item.source == "twitter" ? "X" : "r/")
           .font(.caption.weight(.heavy))
-          .foregroundStyle(Palette.ink)
+          .foregroundStyle(Palette.onPastel)
           .frame(width: 24, height: 24)
           .background(.white, in: .circle)
         Text(meta).font(.caption).foregroundStyle(.white.opacity(0.75)).lineLimit(1)
@@ -111,7 +111,8 @@ struct ItemCardView: View {
     }
     .padding(14)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Palette.ink, in: .rect(cornerRadius: 22))
+    .background(Palette.post, in: .rect(cornerRadius: 22))
+    .overlay { RoundedRectangle(cornerRadius: 22).strokeBorder(Palette.postEdge) }
   }
 
   private var reel: some View {
@@ -121,7 +122,7 @@ struct ItemCardView: View {
         .clipShape(.rect(cornerRadius: 16))
         .padding([.horizontal, .top], 8)
       VStack(alignment: .leading, spacing: 4) {
-        Text(title).font(.cardTitle).foregroundStyle(Palette.ink).lineLimit(3)
+        Text(title).font(.cardTitle).foregroundStyle(Palette.onPastel).lineLimit(3)
         if item.isBusy {
           StatusBadge(status: item.status)
         } else {
@@ -177,7 +178,7 @@ struct ItemCardView: View {
       Image(systemName: Format.sourceKind(item.source).symbol)
         .font(.title3.weight(.semibold))
         .foregroundStyle(Swatch.sky.ink)
-      Text(title).font(.cardTitle).foregroundStyle(Palette.ink).lineLimit(4)
+      Text(title).font(.cardTitle).foregroundStyle(Palette.onPastel).lineLimit(4)
       if item.isBusy {
         StatusBadge(status: item.status)
       } else {
@@ -240,14 +241,14 @@ struct ItemCardView: View {
   }
 }
 
-/// The white play button over video and reel thumbnails.
+/// The white play button over video and reel thumbnails, the same in both modes.
 struct PlayBadge: View {
   let size: CGFloat
 
   var body: some View {
     Image(systemName: "play.fill")
       .font(.system(size: size * 0.4))
-      .foregroundStyle(Palette.ink)
+      .foregroundStyle(Palette.onPastel)
       .offset(x: size * 0.04)
       .frame(width: size, height: size)
       .background(.white, in: .circle)

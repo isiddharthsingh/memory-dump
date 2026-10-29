@@ -70,9 +70,10 @@ struct SignInView: View {
           Task { await submit() }
         } label: {
           Group {
-            if busy { ProgressView().tint(.white) } else { Text(creating ? "Create account" : "Sign in") }
+            if busy { ProgressView().tint(Palette.onInk) } else { Text(creating ? "Create account" : "Sign in") }
           }
           .font(.headline)
+          .foregroundStyle(Palette.onInk)
           .frame(maxWidth: .infinity, minHeight: 50)
         }
         .buttonStyle(.borderedProminent)

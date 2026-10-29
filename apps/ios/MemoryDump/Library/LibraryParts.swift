@@ -18,7 +18,7 @@ struct Rediscover: View {
             Text("Rediscover · \(Self.savedLabel(pick.createdAt).lowercased())")
               .font(.caption.weight(.bold)).foregroundStyle(Swatch.butter.ink)
             Text(pick.title ?? Format.domain(pick.url))
-              .font(.display(19, .bold)).foregroundStyle(Palette.ink).lineLimit(2)
+              .font(.display(19, .bold)).foregroundStyle(Palette.onPastel).lineLimit(2)
               .multilineTextAlignment(.leading)
           }
           Spacer(minLength: 0)
@@ -31,7 +31,7 @@ struct Rediscover: View {
               .font(.callout.weight(.bold))
               .foregroundStyle(Swatch.butter.fill)
               .frame(width: 44, height: 44)
-              .background(Palette.ink, in: .circle)
+              .background(Palette.onPastel, in: .circle)
           }
           .buttonStyle(.plain)
           .accessibilityLabel("Shuffle")

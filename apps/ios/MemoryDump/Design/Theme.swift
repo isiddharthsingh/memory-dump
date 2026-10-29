@@ -4,33 +4,66 @@ import UIKit
 /// "Moodboard" tokens: white cards on a warm grey ground, each source and
 /// topic with its own pastel, and one ink-blue accent for links, citations and
 /// AI output. Status colors are kept for item state.
+///
+/// Each color has a dark value too. In dark the ground is a warm near-black,
+/// cards sit a step lighter, ink turns off-white, and the accent turns
+/// periwinkle so it still reads on black.
 enum Palette {
-  static let bg = Color(hex: 0xFFFFFF)
-  static let ground = Color(hex: 0xF0EEE9)
-  static let card = Color(hex: 0xFFFFFF)
-  static let fill = Color(hex: 0xEDEAE3)
-  static let surfaceMuted = Color(hex: 0xF7F6F2)
-  static let hairline = Color(hex: 0xE8E6E0)
-  static let hairlineStrong = Color(hex: 0xD9D6CE)
+  static let bg = Color(light: 0xFFFFFF, dark: 0x121211)
+  static let ground = Color(light: 0xF0EEE9, dark: 0x121211)
+  static let card = Color(light: 0xFFFFFF, dark: 0x1E1E1C)
+  /// Bars and fields that float over the page, a step above cards in dark.
+  static let raised = Color(light: 0xFFFFFF, dark: 0x242422)
+  /// The edge of a raised bar, which a shadow alone can't show on black.
+  static let raisedEdge = Color(dynamic: { $0.isDark ? .white.withAlphaComponent(0.07) : .clear })
+  static let fill = Color(light: 0xEDEAE3, dark: 0x2A2A27)
+  static let surfaceMuted = Color(light: 0xF7F6F2, dark: 0x191918)
+  static let hairline = Color(light: 0xE8E6E0, dark: 0x2E2E2B)
+  static let hairlineStrong = Color(light: 0xD9D6CE, dark: 0x3C3B37)
 
-  static let ink = Color(hex: 0x17171B)
-  static let ink2 = Color(hex: 0x5B5B63)
-  static let ink3 = Color(hex: 0x6A6A72)
-  static let inkReading = Color(hex: 0x1F1F23)
+  static let ink = Color(light: 0x17171B, dark: 0xF2F0EB)
+  /// Text and icons on an ink, accent or failed fill.
+  static let onInk = Color(light: 0xFFFFFF, dark: 0x121211)
+  /// Text on a topic pastel, which stays light in both modes.
+  static let onPastel = Color(hex: 0x17171B)
+  static let ink2 = Color(light: 0x5B5B63, dark: 0xB3B1AA)
+  static let ink3 = Color(light: 0x6A6A72, dark: 0xA3A19A)
+  static let inkReading = Color(light: 0x1F1F23, dark: 0xE6E4DE)
 
-  static let accent = Color(hex: 0x2B4ACB)
-  static let accentSoft = Color(hex: 0xEEF1FC)
+  /// Post cards: ink in light, black in dark, where `postEdge` outlines them.
+  static let post = Color(light: 0x17171B, dark: 0x000000)
+  static let postEdge = Color(dynamic: { $0.isDark ? .white.withAlphaComponent(0.1) : .clear })
 
-  static let video = Color(hex: 0xFF6B4A)
-  static let sand = Color(hex: 0xEAD7AE)
-  static let fresh = Color(hex: 0x1F9D6B)
+  static let accent = Color(light: 0x2B4ACB, dark: 0x8FA3FF)
+  static let accentSoft = Color(light: 0xEEF1FC, dark: 0x252B47)
 
-  static let processing = Color(hex: 0x9A5B00)
-  static let processingDot = Color(hex: 0xD98A0B)
-  static let processingSoft = Color(hex: 0xFFF5E5)
-  static let failed = Color(hex: 0xC42B2B)
-  static let failedSoft = Color(hex: 0xFDEDED)
-  static let ready = Color(hex: 0x1F7A47)
+  static let video = Color(light: 0xFF6B4A, dark: 0xE8603F)
+  static let sand = Color(light: 0xEAD7AE, dark: 0xC9B78F)
+  static let fresh = Color(light: 0x1F9D6B, dark: 0x3CC48C)
+
+  static let processing = Color(light: 0x9A5B00, dark: 0xF2B24C)
+  static let processingDot = Color(light: 0xD98A0B, dark: 0xF2B24C)
+  static let processingSoft = Color(light: 0xFFF5E5, dark: 0x3A2A10)
+  static let failed = Color(light: 0xC42B2B, dark: 0xFF8A80)
+  static let failedSoft = Color(light: 0xFDEDED, dark: 0x3D1A18)
+  static let ready = Color(light: 0x1F7A47, dark: 0x4CC27E)
+
+  private static var shadows: [Double: Color] = [:]
+
+  /// A drop shadow: soft ink in light; in dark a grey shadow vanishes, so it
+  /// is black and stronger. Kept per opacity, so a view gets the same color
+  /// on every render.
+  static func shadow(_ opacity: Double) -> Color {
+    if let shadow = shadows[opacity] { return shadow }
+    let shadow = Color(dynamic: {
+      $0.isDark ? .black.withAlphaComponent(min(1, opacity * 3.5)) : UIColor(hex: 0x17171B).withAlphaComponent(opacity)
+    })
+    shadows[opacity] = shadow
+    return shadow
+  }
+
+  /// What covers the page behind a drawer.
+  static let scrim = Color(dynamic: { .black.withAlphaComponent($0.isDark ? 0.55 : 0.18) })
 
   /// The dot that marks a source in filters and cards.
   static func sourceDot(_ source: String) -> Color {
@@ -44,17 +77,19 @@ enum Palette {
   }
 }
 
-/// A pastel fill and the darker ink that reads on it.
+/// A pastel fill and the darker ink that reads on it. In dark the pastels dim
+/// about 12% so they don't glare, and their inks deepen to match; titles on
+/// them use `Palette.onPastel`.
 struct Swatch: Hashable {
   let fill: Color
   let ink: Color
 
-  static let butter = Swatch(fill: Color(hex: 0xFFE27A), ink: Color(hex: 0x5C4D0A))
-  static let salmon = Swatch(fill: Color(hex: 0xFFC2B3), ink: Color(hex: 0x6B2A1C))
-  static let mint = Swatch(fill: Color(hex: 0xB5EBD3), ink: Color(hex: 0x1F5641))
-  static let sky = Swatch(fill: Color(hex: 0xBFDDFF), ink: Color(hex: 0x1D3F66))
-  static let lilac = Swatch(fill: Color(hex: 0xCDBDFF), ink: Color(hex: 0x3A3352))
-  static let pink = Swatch(fill: Color(hex: 0xFFC6E0), ink: Color(hex: 0x6B2347))
+  static let butter = Swatch(fill: Color(light: 0xFFE27A, dark: 0xE3C65E), ink: Color(light: 0x5C4D0A, dark: 0x3D3205))
+  static let salmon = Swatch(fill: Color(light: 0xFFC2B3, dark: 0xE8A797), ink: Color(light: 0x6B2A1C, dark: 0x4F1C11))
+  static let mint = Swatch(fill: Color(light: 0xB5EBD3, dark: 0x93D1B6), ink: Color(light: 0x1F5641, dark: 0x133D2D))
+  static let sky = Swatch(fill: Color(light: 0xBFDDFF, dark: 0x9EC3EE), ink: Color(light: 0x1D3F66, dark: 0x11304F))
+  static let lilac = Swatch(fill: Color(light: 0xCDBDFF, dark: 0xAE9DEB), ink: Color(light: 0x3A3352, dark: 0x2A2342))
+  static let pink = Swatch(fill: Color(light: 0xFFC6E0, dark: 0xE6A6C3), ink: Color(light: 0x6B2347, dark: 0x4D1731))
 
   private static let topics: [Swatch] = [.butter, .salmon, .mint, .sky, .lilac, .pink]
 
@@ -72,12 +107,36 @@ struct Swatch: Hashable {
 }
 
 extension Color {
-  init(hex: UInt32) {
-    self.init(
-      red: Double((hex >> 16) & 0xFF) / 255,
-      green: Double((hex >> 8) & 0xFF) / 255,
-      blue: Double(hex & 0xFF) / 255)
+  nonisolated init(hex: UInt32) {
+    self.init(uiColor: UIColor(hex: hex))
   }
+
+  /// A color that follows light and dark mode, in SwiftUI and in UIKit through `UIColor(_:)`.
+  nonisolated init(light: UInt32, dark: UInt32) {
+    let light = UIColor(hex: light)
+    let dark = UIColor(hex: dark)
+    self.init(dynamic: { $0.isDark ? dark : light })
+  }
+
+  /// UIKit can resolve a dynamic color on any thread, so the provider is
+  /// Sendable and never tied to the main actor.
+  nonisolated init(dynamic provider: @escaping @Sendable (UITraitCollection) -> UIColor) {
+    self.init(uiColor: UIColor(dynamicProvider: provider))
+  }
+}
+
+extension UIColor {
+  nonisolated convenience init(hex: UInt32) {
+    self.init(
+      red: CGFloat((hex >> 16) & 0xFF) / 255,
+      green: CGFloat((hex >> 8) & 0xFF) / 255,
+      blue: CGFloat(hex & 0xFF) / 255,
+      alpha: 1)
+  }
+}
+
+extension UITraitCollection {
+  nonisolated var isDark: Bool { userInterfaceStyle == .dark }
 }
 
 /// Bricolage Grotesque is for headings and cards, Newsreader for things you

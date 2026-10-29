@@ -29,7 +29,7 @@ struct LibraryView: View {
           } label: {
             Text(Format.initials(app.session?.user.displayName ?? app.session?.user.email ?? "").nilIfEmpty ?? "?")
               .font(.footnote.weight(.semibold))
-              .foregroundStyle(.white)
+              .foregroundStyle(Palette.onInk)
               .frame(width: 32, height: 32)
               .background(Palette.ink, in: .circle)
           }
