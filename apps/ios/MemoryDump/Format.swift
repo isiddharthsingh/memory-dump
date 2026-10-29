@@ -2,8 +2,10 @@ import Foundation
 
 /// Display helpers, ported from the Expo app's lib/format.ts.
 enum Format {
-  /// "https://www.karpathy.github.io/2019/..." → "karpathy.github.io"
+  /// "https://www.karpathy.github.io/2019/..." → "karpathy.github.io". Uploaded
+  /// files give their name: "file://<id>/report.pdf" → "report.pdf".
   static func domain(_ url: String) -> String {
+    if isUploadedFile(url) { return url.split(separator: "/").last.map(String.init) ?? url }
     let host = url.firstMatch(of: /^[a-z]+:\/\/([^\/?#]+)/.ignoresCase()).map { String($0.1) } ?? url
     return host.replacing(/^www\./.ignoresCase(), with: "")
   }
@@ -31,7 +33,7 @@ enum Format {
     }
   }
 
-  /// "karpathy.github.io · Article". Shared files are stored as `file://<name>`
+  /// "karpathy.github.io · Article". Shared files are stored as `file://<id>/<name>`
   /// with the name as their title, so they get only the kind.
   static func sourceMeta(_ url: String, _ source: String) -> String {
     let kind = sourceKind(source).label
@@ -96,7 +98,7 @@ enum Format {
     return letters.uppercased()
   }
 
-  /// Shared PDFs and images are stored as `file://<name>` and deleted once processed.
+  /// Shared PDFs and images are stored as `file://<id>/<name>` and deleted once processed.
   static func isUploadedFile(_ url: String) -> Bool { url.hasPrefix("file://") }
 
   /// The worker stores exception text; show people what happened instead.

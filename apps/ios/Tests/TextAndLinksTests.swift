@@ -51,6 +51,8 @@ import Testing
 @Suite struct FormatTests {
   @Test func domainAndPath() {
     #expect(Format.domain("https://www.karpathy.github.io/2019/04/25/recipe/") == "karpathy.github.io")
+    #expect(Format.domain("file://3f2a9c1e-0000-4000-8000-000000000000/report.pdf") == "report.pdf")
+    #expect(Format.domain("file://notes.png") == "notes.png")
     #expect(Format.path("https://a.com/") == "")
     #expect(Format.path("https://a.com/x/y?q=1") == "/x/y")
   }
