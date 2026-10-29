@@ -15,11 +15,7 @@ struct SourceThumb: View {
     let shape = RoundedRectangle(cornerRadius: size >= 48 ? 12 : 8)
     Group {
       if let thumbnailURL, let url = URL(string: thumbnailURL) {
-        AsyncImage(url: url) { image in
-          image.resizable().scaledToFill()
-        } placeholder: {
-          Palette.fill
-        }
+        CachedImage(url: url) { Palette.fill }
       } else if source == "youtube" || source == "twitter" {
         Image(systemName: Format.sourceKind(source).symbol)
           .font(.system(size: size * 0.32, weight: .semibold))
@@ -61,10 +57,60 @@ struct ThumbnailFill: View {
     fallback
       .overlay {
         if let url, let image = URL(string: url) {
-          AsyncImage(url: image) { $0.resizable().scaledToFill() } placeholder: { fallback }
+          CachedImage(url: image) { fallback }
         }
       }
       .clipped()
+  }
+}
+
+/// AsyncImage that keeps what it downloads on disk and shows it from there,
+/// so thumbnails still show with no connection. Fills and crops like
+/// `.resizable().scaledToFill()`.
+struct CachedImage<Placeholder: View>: View {
+  let url: URL
+  @ViewBuilder let placeholder: Placeholder
+  @State private var image: UIImage?
+
+  var body: some View {
+    Group {
+      if let image {
+        Image(uiImage: image).resizable().scaledToFill()
+      } else {
+        placeholder
+      }
+    }
+    .task(id: url) {
+      guard let (data, response) = try? await ImageCache.session.data(from: url) else { return }
+      // Under this cache policy a cached error would come back forever.
+      if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+        ImageCache.forget(url)
+        return
+      }
+      image = await UIImage(data: data)?.byPreparingForDisplay()
+    }
+  }
+}
+
+enum ImageCache {
+  private static let cache = URLCache(
+    memoryCapacity: 32 << 20, diskCapacity: 300 << 20,
+    directory: URL.cachesDirectory.appending(path: "Thumbnails"))
+
+  /// A thumbnail doesn't change once saved, so a stored copy is always used.
+  static let session: URLSession = {
+    let config = URLSessionConfiguration.default
+    config.urlCache = cache
+    config.requestCachePolicy = .returnCacheDataElseLoad
+    return URLSession(configuration: config)
+  }()
+
+  static func forget(_ url: URL) {
+    cache.removeCachedResponse(for: URLRequest(url: url))
+  }
+
+  static func clear() {
+    cache.removeAllCachedResponses()
   }
 }
 

@@ -75,6 +75,7 @@ final class AppModel {
   /// Nothing from an account stays on the phone after it signs out.
   private static func forgetSavedCopies() {
     SavedResponses.shared.clear()
+    ImageCache.clear()
   }
 
   private func base(from server: String) throws -> URL {
