@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     # volume).
     uploads_dir: str = "/uploads"
 
+    # APNs token auth. Create the .p8 key under Certificates, IDs & Profiles →
+    # Keys with "Apple Push Notifications service" enabled. Leave the path
+    # empty to skip pushes.
+    apns_key_path: str = ""
+    apns_key_id: str = ""
+    apns_team_id: str = ""
+    apns_topic: str = "com.siddharthsingh.memorydump"
+
     log_level: str = "INFO"
 
     @property

@@ -16,7 +16,7 @@ dependencies = [
     "alembic>=1.13",
     "arq>=0.26",
     "redis>=5.2",
-    "httpx>=0.27",
+    "httpx[http2]>=0.27",
     "anthropic>=0.40",
     "voyageai>=0.3",
     "yt-dlp>=2024.12.13",
@@ -27,7 +27,7 @@ dependencies = [
     "tenacity>=9.0",
     "structlog>=24.4",
     "argon2-cffi>=23.1",
-    "pyjwt>=2.10",
+    "pyjwt[crypto]>=2.10",
     "email-validator>=2.2",
 ]
 

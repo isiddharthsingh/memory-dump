@@ -157,7 +157,10 @@ class Device(Base):
         nullable=False,
         index=True,
     )
-    expo_push_token: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    # Hex APNs device token, and which APNs host it belongs to: Xcode builds
+    # get sandbox tokens, TestFlight/App Store builds get production ones.
+    push_token: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    apns_env: Mapped[str] = mapped_column(String(16), nullable=False, server_default="production")
     platform: Mapped[str | None] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(

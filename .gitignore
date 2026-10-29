@@ -56,6 +56,10 @@ apps/mobile/android/
 # EAS
 .easignore
 
+# APNs keys and other local secrets
+secrets/
+*.p8
+
 # Local data / dumps
 data/
 postgres-data/

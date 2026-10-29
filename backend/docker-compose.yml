@@ -62,6 +62,8 @@ services:
     volumes:
       - .:/app
       - uploads:/uploads
+      # APNs .p8 key (gitignored). Point APNS_KEY_PATH at /run/secrets/<file>.
+      - ../secrets:/run/secrets:ro
 
 volumes:
   postgres-data:

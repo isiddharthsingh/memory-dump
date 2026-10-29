@@ -1,7 +1,7 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +14,8 @@ router = APIRouter(prefix="/devices", tags=["devices"])
 
 
 class DeviceRegister(BaseModel):
-    expo_push_token: str
+    push_token: str = Field(pattern=r"^[0-9a-f]{64,200}$")
+    apns_env: Literal["sandbox", "production"]
     platform: str | None = None
 
 
@@ -24,19 +25,24 @@ async def register_device(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> dict[str, str]:
-    # expo_push_token is unique globally — same physical device can only
+    # push_token is unique globally — same physical device can only
     # belong to one user at a time. On conflict (e.g. user A logged out and
     # user B logged in on the same phone) we transfer ownership.
     stmt = (
         insert(Device)
         .values(
             user_id=current_user.id,
-            expo_push_token=body.expo_push_token,
+            push_token=body.push_token,
+            apns_env=body.apns_env,
             platform=body.platform,
         )
         .on_conflict_do_update(
-            index_elements=["expo_push_token"],
-            set_={"user_id": current_user.id, "platform": body.platform},
+            index_elements=["push_token"],
+            set_={
+                "user_id": current_user.id,
+                "apns_env": body.apns_env,
+                "platform": body.platform,
+            },
         )
         .returning(Device.id)
     )
