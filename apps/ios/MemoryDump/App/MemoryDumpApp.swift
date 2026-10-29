@@ -47,6 +47,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
 struct RootView: View {
   @Environment(AppModel.self) private var app
+  @AppStorage(Appearance.key) private var appearance = Appearance.system
 
   var body: some View {
     Group {
@@ -66,6 +67,9 @@ struct RootView: View {
     }
     .animation(.snappy, value: app.toast)
     .tint(Palette.accent)
+    // On the scene rather than preferredColorScheme, which doesn't go back
+    // to the iPhone's setting once it has been set.
+    .onChange(of: appearance, initial: true) { old, new in Appearance.apply(new, animated: old != new) }
   }
 }
 

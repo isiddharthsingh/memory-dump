@@ -139,6 +139,50 @@ extension UITraitCollection {
   nonisolated var isDark: Bool { userInterfaceStyle == .dark }
 }
 
+/// The app's own light or dark setting, or the iPhone's. Kept in
+/// UserDefaults under `key` and set on each scene, so every window in it,
+/// with its sheets and alerts, follows it, including windows made later.
+enum Appearance: String, CaseIterable, Identifiable {
+  case system, light, dark
+
+  static let key = "appearance"
+
+  var id: Self { self }
+
+  var label: String {
+    switch self {
+    case .system: "System"
+    case .light: "Light"
+    case .dark: "Dark"
+    }
+  }
+
+  var style: UIUserInterfaceStyle {
+    switch self {
+    case .system: .unspecified
+    case .light: .light
+    case .dark: .dark
+    }
+  }
+
+  static func apply(_ appearance: Appearance, animated: Bool) {
+    for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+      let set = {
+        if appearance == .system {
+          scene.traitOverrides.remove(UITraitUserInterfaceStyle.self)
+        } else {
+          scene.traitOverrides.userInterfaceStyle = appearance.style
+        }
+      }
+      if animated, let window = scene.keyWindow {
+        UIView.transition(with: window, duration: 0.3, options: .transitionCrossDissolve, animations: set)
+      } else {
+        set()
+      }
+    }
+  }
+}
+
 /// Bricolage Grotesque is for headings and cards, Newsreader for things you
 /// read, and the system face for things you do.
 extension Font {

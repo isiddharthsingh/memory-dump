@@ -239,4 +239,11 @@ import Testing
       }
     }
   }
+
+  @Test func appearanceMapsToTheWindowStyle() {
+    #expect(Appearance.system.style == .unspecified)
+    #expect(Appearance.light.style == .light)
+    #expect(Appearance.dark.style == .dark)
+    #expect(Appearance(rawValue: "dark") == .dark)
+  }
 }
