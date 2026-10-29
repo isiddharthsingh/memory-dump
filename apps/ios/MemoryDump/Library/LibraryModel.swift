@@ -49,6 +49,7 @@ final class LibraryModel {
   }
 
   var subtitle: String? {
+    if APIClient.shared.isOffline { return Format.offline }
     guard filter == .all, !items.isEmpty else { return nil }
     let failed = items.filter(\.isFailed).count
     var s = hasMore ? "\(items.count)+ saved" : "\(items.count) saved"
@@ -62,6 +63,8 @@ final class LibraryModel {
   func appeared() async {
     if !loadedExtras {
       loadedExtras = true
+      tags = (try? await APIClient.saved.tags()) ?? []
+      pool = (try? await APIClient.saved.listItems(limit: Self.poolSize, status: "ready")) ?? []
       async let t: Void = loadTags()
       async let p: Void = loadPool()
       async let r: Void = reload()
@@ -90,6 +93,12 @@ final class LibraryModel {
   func reload() async {
     let count = max(Self.pageSize, items.count)
     let requested = filter
+    // First load of this filter: last time's copy while the server is asked.
+    if !loaded, let page = try? await fetch(limit: count, offset: 0, from: .saved), requested == filter {
+      items = Self.dedupe(page)
+      hasMore = page.count == count
+      loaded = true
+    }
     do {
       let page = try await fetch(limit: count, offset: 0)
       guard requested == filter else { return }
@@ -120,7 +129,9 @@ final class LibraryModel {
     }
   }
 
-  private func fetch(limit: Int, offset: Int) async throws -> [ItemSummary] {
+  private func fetch(limit: Int, offset: Int, from api: APIClient = .shared) async throws
+    -> [ItemSummary]
+  {
     switch filter {
     case .all: try await api.listItems(limit: limit, offset: offset)
     case .source(let s): try await api.listItems(limit: limit, offset: offset, source: s)
@@ -149,6 +160,8 @@ final class LibraryModel {
       Haptics.success()
       items.removeAll { $0.id == item.id }
       pool.removeAll { $0.id == item.id }
+      // Replaces the saved lists too, which still have it for offline use.
+      await refreshAll()
     } catch {
       Haptics.error()
     }

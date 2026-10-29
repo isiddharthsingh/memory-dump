@@ -2,6 +2,9 @@ import Foundation
 
 /// Display helpers, ported from the Expo app's lib/format.ts.
 enum Format {
+  /// Subtitle for a list showing its saved copy because the server is out of reach.
+  static let offline = "Offline · showing your saved copy"
+
   /// "https://www.karpathy.github.io/2019/..." → "karpathy.github.io". Uploaded
   /// files give their name: "file://<id>/report.pdf" → "report.pdf".
   static func domain(_ url: String) -> String {

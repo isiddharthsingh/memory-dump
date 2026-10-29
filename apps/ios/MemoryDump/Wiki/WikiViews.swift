@@ -10,7 +10,10 @@ struct WikiListView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .background(Palette.ground)
       .navigationTitle("Wiki")
-      .navigationSubtitle(pages.map { $0.isEmpty ? "" : "\(Format.plural($0.count, "topic")), written from your saves" } ?? "")
+      .navigationSubtitle(
+        APIClient.shared.isOffline
+          ? Format.offline
+          : pages.map { $0.isEmpty ? "" : "\(Format.plural($0.count, "topic")), written from your saves" } ?? "")
       .task { await load() }
   }
 
@@ -68,6 +71,7 @@ struct WikiListView: View {
   }
 
   private func load() async {
+    if pages == nil { pages = try? await APIClient.saved.wiki() }
     do {
       pages = try await APIClient.shared.wiki()
       error = nil
@@ -230,26 +234,37 @@ final class WikiPageModel {
   var title: String { page.map { Format.topicTitle($0.title) } ?? "" }
 
   func load() async {
+    if page == nil, let saved = try? await APIClient.saved.wikiPage(slug) {
+      show(saved, list: (try? await APIClient.saved.wiki()) ?? [])
+    }
     do {
       async let pageResult = APIClient.shared.wikiPage(slug)
       // The list gives wikilinks and linked topics their real titles.
       async let list = try? APIClient.shared.wiki()
       let page = try await pageResult
-      titles = Dictionary((await list ?? []).map { ($0.slug, $0.title) }, uniquingKeysWith: { a, _ in a })
-      self.page = page
-      order = LinkRewriter.citationOrder(page.bodyMd, sourceIds: page.sourceItemIds ?? [])
-      blocks = MarkdownBlocks.parse(
-        LinkRewriter.wiki(page.bodyMd, title: title, order: order, titles: titles))
+      show(page, list: await list ?? [])
       error = nil
-      await loadSources()
     } catch {
       if page == nil { self.error = error }
     }
+    await loadSources()
   }
 
+  private func show(_ page: TopicPageDetail, list: [TopicPageSummary]) {
+    titles = Dictionary(list.map { ($0.slug, $0.title) }, uniquingKeysWith: { a, _ in a })
+    self.page = page
+    order = LinkRewriter.citationOrder(page.bodyMd, sourceIds: page.sourceItemIds ?? [])
+    blocks = MarkdownBlocks.parse(
+      LinkRewriter.wiki(page.bodyMd, title: title, order: order, titles: titles))
+  }
+
+  /// Saved copies first, so the cards fill in at once, then the server's.
   private func loadSources() async {
-    for id in order where sources[id] == nil {
-      guard let uuid = UUID(uuidString: id) else { continue }
+    let missing = order.filter { sources[$0] == nil }.compactMap { id in UUID(uuidString: id).map { (id, $0) } }
+    for (id, uuid) in missing {
+      if let item = try? await APIClient.saved.item(uuid) { sources[id] = item }
+    }
+    for (id, uuid) in missing {
       if let item = try? await APIClient.shared.item(uuid) { sources[id] = item }
     }
   }

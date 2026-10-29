@@ -19,6 +19,7 @@ final class ItemReaderModel {
   init(id: UUID) { self.id = id }
 
   func load() async {
+    if item == nil, let saved = try? await APIClient.saved.item(id) { apply(saved) }
     do {
       let item = try await APIClient.shared.item(id)
       apply(item)

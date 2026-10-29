@@ -43,6 +43,7 @@ final class AskModel {
   }
 
   func loadHistory() async {
+    if history == nil { history = try? await APIClient.saved.chats() }
     for chat in unsaved.values { upload(chat) }
     let result = await afterWrites { () async -> Result<[ChatSummary], Error> in
       do { return .success(try await APIClient.shared.chats()) } catch { return .failure(error) }
@@ -125,12 +126,10 @@ final class AskModel {
       self?.unsaved[id] = nil
       return true
     }.value
-    if deleted {
-      Haptics.success()
-    } else {
-      Haptics.error()
-      await loadHistory()
-    }
+    deleted ? Haptics.success() : Haptics.error()
+    // The server's list either way; it also replaces the saved copy History
+    // shows offline, which still has a deleted chat.
+    await loadHistory()
   }
 
   private func run(chat: UUID, turn: UUID, question: String) {
