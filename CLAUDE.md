@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Two deployables in one repo:
 
 - `backend/` — FastAPI + Postgres (pgvector) + Redis + arq workers. Python 3.12. Run via `docker compose` from `backend/`. `.env` lives at the repo root and is loaded by both `api` and `worker` services.
-- `apps/mobile/` — Expo (iOS + Android) with `expo-router` file-based routing and an `expo-share-intent` share extension. Talks to the backend over HTTPS with a bearer token configured in the in-app Settings tab.
+- `apps/ios/` — native SwiftUI app (iOS 26+) plus a Share Extension. Talks to the backend over HTTPS; the server address and session live in the shared Keychain, set from the sign-in screen and Settings.
 
 `docs/architecture.md` is the canonical condensed design doc; the README has the smoke-test curl recipes and the API table.
 
@@ -35,22 +35,23 @@ Worker entry point: `arq app.workers.worker.WorkerSettings` (the `worker` compos
 
 `pytest-asyncio` is in `asyncio_mode = "auto"` — don't decorate async tests with `@pytest.mark.asyncio`.
 
-## Mobile — commands
+## iOS — commands
 
 ```bash
-cd apps/mobile
-npm install
-npx expo prebuild                                       # generates ios/ and android/
-npx eas build --profile development --platform ios      # or android — needed for share extension
-npx expo start --dev-client                             # then open the dev client on device
+cd apps/ios
+xcodegen                                                # project.yml → MemoryDump.xcodeproj (gitignored)
+open MemoryDump.xcodeproj                               # set your team under Signing, run on a device
 
-npm run typecheck                                       # tsc --noEmit
-npm run lint                                            # eslint app components lib
+# simulator build and tests (pass -parallel-testing-enabled NO, or xcodebuild clones simulators and stalls)
+xcodebuild -project MemoryDump.xcodeproj -scheme MemoryDump -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
+xcodebuild test -project MemoryDump.xcodeproj -scheme MemoryDump -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -parallel-testing-enabled NO
 ```
 
-**Expo Go cannot host the iOS Share Extension or Android send-target** — a dev build (EAS or local `expo run:*`) is required to test sharing. The dev server alone is not enough.
+`project.yml` is the source of truth for targets, entitlements and Info.plist keys; edit it and re-run `xcodegen` instead of changing the generated project in Xcode. `DEVELOPMENT_TEAM` is the free Personal Team (`L53NYQQX76`) until a paid account exists: device installs expire after 7 days, and the app's `aps-environment` entitlement is left out because Personal Teams can't sign push. With a paid team, change the ID and add `aps-environment: development` back under the app target's entitlements.
 
-Server URL + bearer token are configured at runtime in the app's Settings tab and persisted via `expo-secure-store` (`lib/settings.ts`), not via build-time env vars.
+Three targets: `MemoryDump` (app), `ShareExtension`, `MemoryDumpTests` (Swift Testing). `Shared/` is compiled into both the app and the extension: the API client, models, Keychain session store and the offline share queue. The two processes share state through App Group `group.com.siddharthsingh.memorydump` (queue files, lock file) and a Keychain access group (session, server URL).
+
+The simulator reaches the local backend at `http://localhost:8000`.
 
 ## Architecture — the parts that span multiple files
 
@@ -86,7 +87,13 @@ If you change the chunking or embedding model, both `items` and `topic_pages` ne
 
 ### Auth
 
-Single-user bearer token. `app/deps.py:require_token` is attached to every router except `/healthz` and uses `secrets.compare_digest`. The token comes from `MEMORY_DUMP_API_TOKEN` in `.env`. On mobile it's stored in `expo-secure-store` and attached by `apps/mobile/lib/api.ts`.
+Single-user bearer token. `app/deps.py:require_token` is attached to every router except `/healthz` and uses `secrets.compare_digest`. The token comes from `MEMORY_DUMP_API_TOKEN` in `.env`. On iOS the session is stored in the shared Keychain (`apps/ios/Shared/SessionStore.swift`) and attached by `apps/ios/Shared/APIClient.swift`.
+
+Refresh tokens rotate, and reusing a revoked one revokes every session for that user (`app/api/auth.py` `refresh`). The app and the share extension can both refresh, so `SessionStore.refresh` holds a `flock()` on a file in the App Group and re-reads the Keychain after taking it. Keep that lock if you touch refresh.
+
+### Push
+
+`app/notifications.py` sends straight to APNs over HTTP/2 with a token-based `.p8` key (`APNS_KEY_PATH`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC` in `.env`; the worker mounts `secrets/` at `/run/secrets`). With no key path, pushes are skipped. The iOS app can't receive them until it is signed by a paid team with the `aps-environment` entitlement (see iOS — commands). Each `devices` row stores the hex token and `apns_env` (`sandbox` for Xcode builds, `production` for TestFlight/App Store), which picks the APNs host. Tokens APNs reports as gone (410 / BadDeviceToken) are deleted.
 
 ### DB & migrations
 
@@ -99,6 +106,7 @@ All Claude/Voyage model IDs are env-overridable in `app/config.py` (`CLAUDE_ANAL
 ## Conventions specific to this repo
 
 - Backend lint: `ruff` with `select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC"]`, line length 100, `E501` ignored. Target `py312` syntax (use `X | Y` unions, `list[...]`, `from __future__ import annotations` where helpful).
-- Mobile API client is **zod-validated** (`apps/mobile/lib/api.ts`) — when adding/changing a backend response shape, update the zod schema or runtime parsing will fail in the app.
-- `expo-router` file-based routing: `app/(tabs)/*` are the tab screens, `app/item/[id].tsx` and `app/wiki/[slug].tsx` are dynamic routes. The share-intent handler is wired up once in `app/_layout.tsx` via `lib/useIncomingShare.ts`.
+- iOS response types are `Codable` structs in `apps/ios/Shared/Models.swift`, decoded with `convertFromSnakeCase` — when adding/changing a backend response shape, update the struct or decoding will fail in the app.
+- iOS navigation: three tabs (Library, Wiki, Ask), each a `NavigationStack` whose path lives in `Router`; `Route.item` / `Route.wiki` are the detail screens. In-app links use `memorydump://wiki/<slug>` and `memorydump://cite/item:<id>`; `LinkRewriter` turns `[[slug]]` and `[item:<id>]` tokens into them and `Router.open` handles them.
+- Swift 6 with main-actor default isolation. Closures handed to system APIs that call back on other queues (NSItemProvider, AVAudioEngine, Speech) must be `@Sendable` or built in a `nonisolated` function, or they trap at runtime.
 - Logs are structlog JSON (`app/logging_setup.py`) — don't add `print()` in worker or API code.

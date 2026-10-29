@@ -7,8 +7,8 @@ research citations lives in the `plans/` directory used during planning.
 
 ```
                        ┌──────────────────────┐
-   iOS / Android       │  Expo app             │
-   Share Sheet ──URL──▶│   • Inbox             │
+   iOS                 │  SwiftUI app          │
+   Share Sheet ──URL──▶│   • Library           │
                        │   • Item detail       │
                        │   • Wiki (browse)     │
                        │   • Ask (chat)        │
