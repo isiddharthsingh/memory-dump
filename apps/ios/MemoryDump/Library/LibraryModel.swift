@@ -160,21 +160,28 @@ final class LibraryModel {
     let q = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard q.count >= 2 else {
       searchQuery = ""
+      hits = []
+      isSearching = false
+      searchError = nil
       return
     }
     try? await Task.sleep(for: .milliseconds(250))
     guard !Task.isCancelled else { return }
     searchQuery = q
     isSearching = true
-    defer { isSearching = false }
+    searchError = nil
+    // Each keystroke cancels the previous search. URLSession reports that as
+    // URLError(.cancelled), not CancellationError, so check the task instead,
+    // and leave the state to the newer search.
     do {
       let result = try await api.search(q)
       guard !Task.isCancelled else { return }
       hits = Self.dedupe(result)
-      searchError = nil
     } catch {
-      if !(error is CancellationError) { searchError = error }
+      guard !Task.isCancelled else { return }
+      searchError = error
     }
+    isSearching = false
   }
 
   // MARK: Helpers

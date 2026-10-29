@@ -35,7 +35,7 @@ struct LibraryView: View {
       }
       .task { await model.appeared() }
       .task { await model.pollWhileBusy() }
-      .task(id: query) { await model.search(query) }
+      .task(id: query.trimmingCharacters(in: .whitespacesAndNewlines)) { await model.search(query) }
       .onChange(of: app.libraryVersion) { Task { await model.reload() } }
       .sheet(item: $noteTarget) { item in
         NoteEditor(itemId: item.id, title: item.title ?? Format.domain(item.url)) {
