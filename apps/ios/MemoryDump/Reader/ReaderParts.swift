@@ -242,7 +242,8 @@ struct Pill: View {
           .background(Palette.ink, in: .circle)
           .accessibilityHidden(true)
       }
-      Text(label)
+      // One line, cut short when it's wider than the row it sits in.
+      Text(label).lineLimit(1)
     }
     .font(.subheadline.weight(.semibold))
     .foregroundStyle(Palette.ink)

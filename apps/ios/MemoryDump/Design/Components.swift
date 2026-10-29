@@ -180,10 +180,13 @@ struct Chip: View {
       .font(.subheadline.weight(.semibold))
       .foregroundStyle(selected ? .white : Palette.ink)
       .padding(.horizontal, 14)
+      .padding(.vertical, 8)
       .frame(minHeight: 40)
-      .background(selected ? Palette.ink : Palette.card, in: .capsule)
-      .overlay { Capsule().strokeBorder(selected ? .clear : Palette.hairline) }
-      .contentShape(.capsule)
+      // A capsule on one line; a label long enough to wrap keeps round corners
+      // instead of turning into a stadium.
+      .background(selected ? Palette.ink : Palette.card, in: .rect(cornerRadius: 20))
+      .overlay { RoundedRectangle(cornerRadius: 20).strokeBorder(selected ? .clear : Palette.hairline) }
+      .contentShape(.rect(cornerRadius: 20))
     }
     .buttonStyle(.plain)
   }
@@ -295,16 +298,22 @@ struct FlowLayout: Layout {
   func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
     for row in arrange(width: bounds.width, subviews: subviews) {
       var x = bounds.minX
-      for index in row.indices {
-        let size = subviews[index].sizeThatFits(.unspecified)
-        subviews[index].place(at: CGPoint(x: x, y: bounds.minY + row.y), proposal: .unspecified)
+      for (index, size) in zip(row.indices, row.sizes) {
+        subviews[index].place(at: CGPoint(x: x, y: bounds.minY + row.y), proposal: ProposedViewSize(size))
         x += size.width + spacing
       }
     }
   }
 
+  /// Its natural size, or wrapped to the row when it's wider than the row.
+  private func size(of view: LayoutSubview, in width: CGFloat) -> CGSize {
+    let ideal = view.sizeThatFits(.unspecified)
+    return ideal.width <= width ? ideal : view.sizeThatFits(ProposedViewSize(width: width, height: nil))
+  }
+
   private struct Row {
     var indices: [Int] = []
+    var sizes: [CGSize] = []
     var y: CGFloat = 0
     var width: CGFloat = 0
     var height: CGFloat = 0
@@ -313,12 +322,13 @@ struct FlowLayout: Layout {
   private func arrange(width: CGFloat, subviews: Subviews) -> [Row] {
     var rows: [Row] = [Row()]
     for (i, view) in subviews.enumerated() {
-      let size = view.sizeThatFits(.unspecified)
+      let size = size(of: view, in: width)
       if rows[rows.count - 1].width + size.width > width, !rows[rows.count - 1].indices.isEmpty {
         let last = rows[rows.count - 1]
         rows.append(Row(y: last.y + last.height + spacing))
       }
       rows[rows.count - 1].indices.append(i)
+      rows[rows.count - 1].sizes.append(size)
       rows[rows.count - 1].width += size.width + spacing
       rows[rows.count - 1].height = max(rows[rows.count - 1].height, size.height)
     }

@@ -150,6 +150,14 @@ import Testing
     #expect(columns.map { $0.map(\.id) } == [[0, 3], [1], [2]])
   }
 
+  /// A chip longer than its row wraps inside it instead of running off the edge.
+  @Test func flowLayoutWrapsAChipWiderThanTheRow() {
+    let row = CGSize(width: 200, height: CGFloat.infinity)
+    let long = UIHostingController(rootView: FlowLayout { Chip(label: "What do I know about LLM Knowledge Base Systems?") {} })
+    let short = UIHostingController(rootView: FlowLayout { Chip(label: "Short") {} })
+    #expect(long.sizeThatFits(in: row).height > short.sizeThatFits(in: row).height)
+  }
+
   @Test func sourceComesFromTheHost() {
     #expect(Format.source(ofURL: "https://www.youtube.com/watch?v=1") == "youtube")
     #expect(Format.source(ofURL: "https://youtu.be/1") == "youtube")
