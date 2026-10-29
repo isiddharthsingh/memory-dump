@@ -16,8 +16,9 @@ Two deployables in one repo:
 All commands assume `cd backend` unless noted. The compose file mounts `.` into the containers, so code changes hot-reload.
 
 ```bash
-docker compose up --build              # full stack (postgres + redis + api + worker)
-docker compose up postgres redis       # infra only, then run api/worker on host
+docker compose up --build              # full stack (postgres + redis + supertokens + api + worker)
+docker compose up postgres redis supertokens   # infra only, then run api/worker on host
+                                       # with SUPERTOKENS_CONNECTION_URI=http://localhost:3567
 
 docker compose exec api alembic upgrade head            # migrations (also runs at api startup)
 docker compose exec api alembic revision -m "msg" --autogenerate
@@ -91,9 +92,13 @@ If you change the chunking or embedding model, both `items` and `topic_pages` ne
 
 ### Auth
 
-Multi-user email and password: `/auth/signup`, `/auth/login`, `/auth/refresh`, `/auth/logout` and `GET`/`DELETE /auth/me` in `app/api/auth.py`. Passwords are Argon2id (`app/auth/passwords.py`). A session is a 15-minute access JWT signed with `JWT_SECRET` plus a 30-day refresh token that the server keeps only as a sha256 (`refresh_tokens`); the lifetimes are `jwt_access_ttl_min` and `jwt_refresh_ttl_days` in `app/config.py`. Owner-scoped routes depend on `app/deps.py:get_current_user` and filter by `user_id`, so no user sees another's items, wiki, chats or devices (`tests/test_ownership.py`, `tests/test_chats.py`). `DELETE /auth/me` relies on `ON DELETE CASCADE` foreign keys to remove everything the user owns. `/ingest` and `/ask` are rate-limited per user per hour in Redis (`app/auth/rate_limit.py`).
+SuperTokens (self-hosted core, `supertokens-python` SDK) owns accounts, passwords and sessions. The core is the `supertokens` compose service, keeping its tables in the `supertokens` schema of the same database; `app/auth/supertokens.py` initialises the SDK with the Session, EmailPassword and Dashboard recipes, and `app.main` adds its middleware. SuperTokens serves its own routes under `/auth` (`signup`, `signin`, `signout`, `session/refresh`, and the user dashboard at `/auth/dashboard`); `GET`/`DELETE /auth/me` in `app/api/auth.py` sit beside them. The app uses header-based sessions: it sends `st-auth-mode: header`, reads the `st-access-token` and `st-refresh-token` response headers, and sends `Authorization: Bearer`. Access tokens last 15 minutes and refresh tokens expire after 30 days unused (`ACCESS_TOKEN_VALIDITY` / `REFRESH_TOKEN_VALIDITY` on the core service), and the core hashes passwords with Argon2id (`PASSWORD_HASHING_ALG`). The core's `API_KEYS` must match `SUPERTOKENS_API_KEY`. Passwords must be 10 to 100 characters (`_validate_password`); with `ALLOW_SIGNUP=false` sign-up answers a `GENERAL_ERROR` the app shows as is.
 
-Refresh tokens rotate, and reusing a revoked one revokes every session for that user (`refresh` in `app/api/auth.py`). On iOS the session is stored in the shared Keychain (`apps/ios/Shared/SessionStore.swift`) and attached by `apps/ios/Shared/APIClient.swift`, which refreshes once after a 401. The app and the share extension can both refresh, so `SessionStore.refresh` holds a `flock()` on a file in the App Group and re-reads the Keychain after taking it. Keep that lock if you touch refresh.
+The app's `users` table holds only `id` (the SuperTokens user ID), `display_name` and `created_at`; the email and password live in SuperTokens. The EmailPassword `sign_up` override creates the `users` row for every new login, including ones made from the dashboard, and the optional `name` sign-up field becomes `display_name`. Migration `0006_supertokens` imported the pre-SuperTokens accounts into the core with their Argon2 hashes and their old ids as external user IDs, so it needs the core running.
+
+Owner-scoped routes depend on `app/deps.py:get_current_user`, which runs SuperTokens' `verify_session()` and loads the `users` row, and filter by `user_id`, so no user sees another's items, wiki, chats or devices (`tests/test_ownership.py`, `tests/test_chats.py`). `DELETE /auth/me` deletes the row, relying on `ON DELETE CASCADE` foreign keys to remove everything the user owns, then deletes the SuperTokens user and its sessions. Deleting a user from the dashboard removes only the login; the library stays until the row is deleted. `/ingest` and `/ask` are rate-limited per user per hour in Redis (`app/auth/rate_limit.py`).
+
+SuperTokens rotates refresh tokens, and a refresh token used again after its replacement has been used ends the session (theft detection). On iOS the session is stored in the shared Keychain (`apps/ios/Shared/SessionStore.swift`) and attached by `apps/ios/Shared/APIClient.swift`, which refreshes once after a 401; `AuthAPI` there speaks SuperTokens' header-based protocol directly. The official SuperTokens iOS SDK isn't used: its URL protocol buffers whole responses and drops upload bodies, which would break `/ask/stream` and file uploads. The app and the share extension can both refresh, so `SessionStore.refresh` holds a `flock()` on a file in the App Group and re-reads the Keychain after taking it. Keep that lock if you touch refresh.
 
 ### Push
 

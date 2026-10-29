@@ -33,30 +33,42 @@ memory-dump/
 ## Backend — quickstart
 
 ```bash
-cp .env.example .env             # fill in MEMORY_DUMP_API_TOKEN + AI keys
+cp .env.example .env             # fill in the AI keys
 cd backend
 docker compose up --build
 ```
 
-Migrations run automatically at api startup. Smoke test:
+This starts Postgres, Redis, the SuperTokens core (accounts and sessions), the
+api and the worker. Migrations run automatically at api startup. Smoke test:
 
 ```bash
 curl http://localhost:8000/healthz                                       # {"status":"ok"}
 
+# sign up; the access token comes back in the st-access-token header
+TOKEN=$(curl -s -D - -o /dev/null -X POST http://localhost:8000/auth/signup \
+  -H "st-auth-mode: header" -H "Content-Type: application/json" \
+  -d '{"formFields":[{"id":"email","value":"me@example.com"},{"id":"password","value":"a-long-pass-123"}]}' \
+  | awk 'tolower($1)=="st-access-token:" {print $2}' | tr -d '\r')
+
 curl -X POST http://localhost:8000/ingest \
-  -H "Authorization: Bearer $MEMORY_DUMP_API_TOKEN" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
 
 # poll until ready
-curl -s -H "Authorization: Bearer $MEMORY_DUMP_API_TOKEN" \
+curl -s -H "Authorization: Bearer $TOKEN" \
   http://localhost:8000/items | jq '.[0].status'
 
 curl -X POST http://localhost:8000/ask \
-  -H "Authorization: Bearer $MEMORY_DUMP_API_TOKEN" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"question":"what music video did I save?"}'
 ```
+
+Access tokens last 15 minutes; `POST /auth/session/refresh` with
+`Authorization: Bearer <st-refresh-token>` gets a new pair. To manage users,
+open <http://localhost:8000/auth/dashboard>; it shows the command for creating
+the first dashboard login.
 
 Voyage's free tier caps you at 3 requests/min — add a payment method on
 the Voyage dashboard if you plan to ingest more than a couple of items
@@ -93,6 +105,12 @@ Push needs a paid Apple Developer account. Once you have one, set
 | Method | Path                  | Purpose                                 |
 |--------|-----------------------|-----------------------------------------|
 | GET    | `/healthz`            | liveness (no auth)                      |
+| POST   | `/auth/signup`        | create an account (SuperTokens, no auth) |
+| POST   | `/auth/signin`        | sign in (SuperTokens, no auth)          |
+| POST   | `/auth/session/refresh` | new tokens for the refresh token      |
+| POST   | `/auth/signout`       | end this session                        |
+| GET    | `/auth/me`            | the signed-in account                   |
+| DELETE | `/auth/me`            | delete the account and everything in it |
 | POST   | `/ingest`             | submit a URL                            |
 | GET    | `/items`              | list (filter by `status`, `tag`, `source`) |
 | GET    | `/items/tags`         | tag counts for the chip filter         |
@@ -108,7 +126,10 @@ Push needs a paid Apple Developer account. Once you have one, set
 | GET    | `/wiki`               | list topic pages                        |
 | GET    | `/wiki/{slug}`        | topic page markdown                     |
 
-All endpoints except `/healthz` require `Authorization: Bearer <MEMORY_DUMP_API_TOKEN>`.
+Everything except `/healthz`, sign-up, sign-in and refresh takes
+`Authorization: Bearer <access token>`. Send `st-auth-mode: header` with sign-up
+and sign-in so the tokens come back as `st-access-token` and `st-refresh-token`
+response headers.
 
 ## Architecture
 
