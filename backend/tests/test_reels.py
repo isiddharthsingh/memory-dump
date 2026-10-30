@@ -9,8 +9,10 @@ import contextlib
 import io
 import json
 import logging
+import os
+import pwd
 import subprocess
-import sys
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +22,7 @@ import httpx
 import pytest
 from PIL import Image
 
+from app import sandbox
 from app.ai import analyze as analyze_module
 from app.ai.analyze import analyze
 from app.config import get_settings
@@ -30,6 +33,15 @@ from app.extractors.instagram import InstagramExtractor
 URL = "https://www.instagram.com/reel/DfH83beRoH0/"
 
 
+def _jpeg() -> str:
+    out = io.BytesIO()
+    Image.new("RGB", (8, 8), "navy").save(out, "JPEG")
+    return base64.b64encode(out.getvalue()).decode("ascii")
+
+
+JPEG = _jpeg()
+
+
 def _reel(**values: Any) -> reel.Reel:
     return reel.Reel(
         **{
@@ -37,7 +49,7 @@ def _reel(**values: Any) -> reel.Reel:
             "handle": "arjay_the_dev",
             "caption": "Lean 4 vs $12 server?\n\nThis one was crazy ngl.",
             "thumbnail_url": "https://scontent.cdninstagram.com/cover.jpg",
-            "frames": ["ZnJhbWU="],
+            "frames": [JPEG],
             "transcript": "Somebody used mathematical proofs.",
             **values,
         }
@@ -68,7 +80,7 @@ async def test_a_reel_becomes_sections_with_its_transcript_and_frames(
         "Arjay McCandless (@arjay_the_dev)",
     )
     assert c.thumbnail_url == "https://scontent.cdninstagram.com/cover.jpg"
-    assert c.frames == ["ZnJhbWU="]
+    assert c.frames == [JPEG]
     # The frames show the video; the cover would only repeat one of them.
     assert "image_b64" not in c.extra
 
@@ -192,15 +204,56 @@ def test_the_parent_reads_only_a_whole_reel_of_the_right_shape(tmp_path: Path) -
     file.write_text('{"frames": ["ZnJh')
     assert reel.read(tmp_path) is None
     # The child reads what anyone can post, so what it writes is checked: at
-    # most FRAMES frames go on to Claude, and nothing of the wrong type.
-    whole = asdict(_reel(frames=["ZnJhbWU="] * 20))
+    # most FRAMES frames go on to Claude, each a JPEG of bounded size, text of
+    # bounded length, and nothing of the wrong type.
+    whole = asdict(_reel(frames=[JPEG] * 20))
     file.write_text(json.dumps(whole))
     assert len(reel.read(tmp_path).frames) == reel.FRAMES  # type: ignore[union-attr]
-    for wrong in ({"frames": [7]}, {"frames": "ZnJhbWU="}, {"caption": ["x"]}, {"extra": 1}):
+    huge = base64.b64encode(b"\xff\xd8" + bytes(reel.MAX_FRAME_BYTES)).decode("ascii")
+    for wrong in (
+        {"frames": [7]},
+        {"frames": JPEG},
+        {"frames": ["ZnJhbWU="]},
+        {"frames": ["not base64!"]},
+        {"frames": [huge]},
+        {"caption": ["x"]},
+        {"caption": "x" * (reel.MAX_TEXT["caption"] + 1)},
+        {"thumbnail_url": "/v1/items/abc/thumbnail"},
+        {"extra": 1},
+    ):
         file.write_text(json.dumps(whole | wrong))
-        assert reel.read(tmp_path) is None, wrong
+        assert reel.read(tmp_path) is None, str(wrong)[:60]
     file.write_text("[]")
     assert reel.read(tmp_path) is None
+
+
+def test_the_parent_reads_neither_a_link_a_pipe_nor_too_much(tmp_path: Path) -> None:
+    file = tmp_path / "reel.json"
+    elsewhere = tmp_path / "elsewhere.json"
+    elsewhere.write_text(json.dumps(asdict(_reel())))
+    file.symlink_to(elsewhere)
+    assert reel.read(tmp_path) is None
+    file.unlink()
+    # A pipe nobody writes to would block an ordinary read for good.
+    os.mkfifo(file)
+    assert reel.read(tmp_path) is None
+    file.unlink()
+    # Whole and well formed, but bigger than any real reel's.
+    file.write_text(json.dumps(asdict(_reel())) + " " * reel.MAX_FILE_BYTES)
+    assert reel.read(tmp_path) is None
+    # Nested too deep for the parser, which raises RecursionError.
+    file.write_text('{"frames": ' + "[" * 100_000 + "]" * 100_000 + "}")
+    assert reel.read(tmp_path) is None
+
+
+async def test_a_folder_that_cant_be_set_up_falls_back_to_the_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def full(*_: Any) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "chmod", full)
+    assert await reel.fetch(URL, timeout_s=5) is None
 
 
 def _running() -> int:
@@ -225,13 +278,6 @@ async def test_the_child_gets_no_secrets_and_is_killed_when_it_takes_too_long(
     assert _running() == 0
 
 
-def _child(path: Path, script: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stands in for `python -m app.extractors.reel <url> <folder>`."""
-    path.write_text(f"#!/bin/sh\n{script}\n")
-    path.chmod(0o755)
-    monkeypatch.setattr(sys, "executable", str(path))
-
-
 def _alive(pid: int) -> bool:
     try:
         return Path(f"/proc/{pid}/stat").read_text().split()[2] != "Z"
@@ -240,35 +286,47 @@ def _alive(pid: int) -> bool:
 
 
 async def test_a_child_out_of_time_still_gives_the_frames_it_wrote(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    child_script: Callable[[str], Path],
 ) -> None:
     # It starts a helper (as yt-dlp starts ffmpeg), writes the frames, then
     # transcribes forever.
-    partial = json.dumps(asdict(reel.Reel(None, "a", "cap", None, ["ZnJhbWU="], None)))
-    helper = tmp_path / "helper.pid"
-    script = (
-        f"sleep 30 &\necho $! > {helper}\nprintf '%s' '{partial}' > \"$4/reel.json\"\nexec sleep 30"
+    partial = json.dumps(asdict(reel.Reel(None, "a", "cap", None, [JPEG], None)))
+    folder = child_script(
+        'sleep 30 &\necho $! > "$(dirname "$0")/helper.pid"\n'
+        f"printf '%s' '{partial}' > \"$4/reel.json\"\nexec sleep 30"
     )
-    _child(tmp_path / "child.sh", script, monkeypatch)
     got = await reel.fetch(URL, timeout_s=1)
-    assert got == reel.Reel(None, "a", "cap", None, ["ZnJhbWU="], None)
+    assert got == reel.Reel(None, "a", "cap", None, [JPEG], None)
     # The helper went with it.
-    assert not _alive(int(helper.read_text()))
+    assert not _alive(int((folder / "helper.pid").read_text()))
 
 
 async def test_a_reel_that_fails_is_a_warning_but_a_post_without_video_is_not(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    child_script: Callable[[str], Path], caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger=reel.__name__)
-    child = tmp_path / "child.sh"
-    _child(child, "echo 'login required' >&2\nexit 1", monkeypatch)
+    child_script("echo 'login required' >&2\nexit 1")
     assert await reel.fetch(URL, timeout_s=5) is None
-    _child(child, f"echo 'the post has no video' >&2\nexit {reel.NO_VIDEO}", monkeypatch)
+    child_script(f"echo 'the post has no video' >&2\nexit {reel.NO_VIDEO}")
     assert await reel.fetch(URL, timeout_s=5) is None
     assert [(r.levelno, r.getMessage()) for r in caplog.records if r.name == reel.__name__] == [
         (logging.WARNING, "reel: login required"),
         (logging.INFO, "reel: the post has no video"),
     ]
+
+
+async def test_the_child_runs_as_the_sandbox_user_in_a_folder_of_its_own(
+    child_script: Callable[[str], Path], caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger=reel.__name__)
+    # It may write in its folder but not move it: that is in one it can't change.
+    child_script(
+        'id -u >&2\ntouch "$4/mine" || echo "cannot write" >&2\n'
+        'mv "$4" "$4.moved" 2>/dev/null && echo moved >&2\nexit 1'
+    )
+    assert await reel.fetch(URL, timeout_s=5) is None
+    uid = pwd.getpwnam(sandbox.USER).pw_uid
+    assert [r.getMessage() for r in caplog.records if r.name == reel.__name__] == [f"reel: {uid}"]
 
 
 def _answer(**data: Any) -> SimpleNamespace:

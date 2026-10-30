@@ -7,8 +7,12 @@ accounts the way the app does: SuperTokens' /auth/signup, header-based tokens.
 
 import asyncio
 import os
+import shutil
+import sys
+import tempfile
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -50,6 +54,26 @@ def jobs(monkeypatch: pytest.MonkeyPatch) -> Iterator[Jobs]:
         if function == "ingest_file":
             for ext in set(_MIME_TO_EXT.values()):
                 asyncio.run(get_storage().delete(f"{item_id}.{ext}"))
+
+
+@pytest.fixture
+def child_script(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[str], Path]]:
+    """Points `sys.executable` at a shell script with the given body, standing
+    in for the child a module starts (`python -m …`); returns the script's
+    folder. Children run as the sandbox user, so the folder is one it can run
+    from and write in: pytest's own are root's alone."""
+    folder = Path(tempfile.mkdtemp(prefix="child-"))
+    folder.chmod(0o777)
+    script = folder / "child.sh"
+
+    def write(body: str) -> Path:
+        script.write_text(f"#!/bin/sh\n{body}\n")
+        script.chmod(0o755)
+        monkeypatch.setattr(sys, "executable", str(script))
+        return folder
+
+    yield write
+    shutil.rmtree(folder, ignore_errors=True)
 
 
 def unique_email(prefix: str = "test") -> str:

@@ -6,9 +6,12 @@ import asyncio
 import contextlib
 import gzip
 import io
+import logging
 import os
+import pwd
+import sys
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -22,13 +25,14 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from voyageai.error import InvalidRequestError, RateLimitError
 
-from app import kv, thumbnails
+from app import kv, sandbox, thumbnails
 from app.ai import clients, embed
 from app.ai.clients import _Breaker
 from app.api import search as search_api
 from app.auth.rate_limit import is_auth_path, take
 from app.config import get_settings
 from app.errors import ProviderUnavailable, is_transient
+from app.extractors import reel
 from app.extractors.webpage import NotPublic, TooLarge, _CappedClient
 from app.main import app
 from app.storage import LocalStorage
@@ -272,6 +276,59 @@ async def test_thumbnails_are_drawn_in_a_child_killed_when_it_takes_too_long(
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", no_processes)
     assert await thumbnails.draw(png.getvalue(), "image/png") is None
+
+
+async def test_children_run_as_the_sandbox_user_and_cant_read_the_workers_environment() -> None:
+    probe = (
+        "import os\n"
+        "print(os.getuid())\n"
+        "for pid in (os.getppid(), 1):\n"
+        "    try:\n"
+        "        open(f'/proc/{pid}/environ', 'rb').read()\n"
+        "        print('read', pid)\n"
+        "    except PermissionError:\n"
+        "        pass\n"
+    )
+    child = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", probe, stdout=asyncio.subprocess.PIPE, **sandbox.credentials()
+    )
+    out, _ = await child.communicate()
+    assert out.decode().split() == [str(pwd.getpwnam(sandbox.USER).pw_uid)]
+
+
+async def test_without_the_sandbox_user_no_child_starts_as_root(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def missing(name: str) -> None:
+        raise KeyError(name)
+
+    monkeypatch.setattr(pwd, "getpwnam", missing)
+    with pytest.raises(PermissionError):
+        sandbox.credentials()
+    # Neither child starts, and neither save fails over it.
+    caplog.set_level(logging.WARNING)
+    assert await thumbnails.draw(b"png", "image/png") is None
+    assert await reel.fetch("https://www.instagram.com/reel/abc/", timeout_s=5) is None
+    assert sum("PermissionError" in r.getMessage() for r in caplog.records) == 2
+
+
+async def test_a_thumbnail_child_is_sandboxed_and_only_a_bounded_jpeg_is_kept(
+    child_script: Callable[[str], Path], caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger=thumbnails.__name__)
+    child_script("cat > /dev/null\nid -u >&2\nexit 1")
+    assert await thumbnails.draw(b"png", "image/png") is None
+    uid = str(pwd.getpwnam(sandbox.USER).pw_uid)
+    assert [r.getMessage() for r in caplog.records if r.name == thumbnails.__name__] == [uid]
+    child_script("cat > /dev/null\nprintf '\\377\\330a jpeg'")
+    assert await thumbnails.draw(b"png", "image/png") == b"\xff\xd8a jpeg"
+    # Whatever a child taken over by a decoder bug sends back.
+    child_script("cat > /dev/null\nprintf 'not a jpeg'")
+    assert await thumbnails.draw(b"png", "image/png") is None
+    child_script(
+        f"cat > /dev/null\nprintf '\\377\\330'\nhead -c {thumbnails.MAX_JPEG_BYTES} /dev/zero"
+    )
+    assert await thumbnails.draw(b"png", "image/png") is None
 
 
 async def test_a_bucket_allows_its_allowance_then_says_how_long_to_wait() -> None:
