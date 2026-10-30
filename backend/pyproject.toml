@@ -22,6 +22,8 @@ dependencies = [
     "anthropic>=0.40",
     "voyageai>=0.3",
     "yt-dlp>=2024.12.13",
+    # Transcripts of Instagram reels (app/extractors/reel.py).
+    "faster-whisper>=1.2",
     "youtube-transcript-api>=0.6.3",
     "trafilatura>=1.12",
     "selectolax>=0.3.25",

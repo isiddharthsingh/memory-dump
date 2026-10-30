@@ -15,6 +15,8 @@ class ExtractedContent:
     author: str | None = None
     site_name: str | None = None
     extra: dict[str, str] = field(default_factory=dict)
+    # Base64 JPEGs taken through a video, for the analysis to look at.
+    frames: list[str] = field(default_factory=list)
 
 
 def flatten(text: str | None) -> str:

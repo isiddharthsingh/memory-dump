@@ -25,6 +25,12 @@ RUN uv pip install --system -r pyproject.toml \
          uv pip install --system -r pyproject.toml --extra dev; \
        fi
 
+# The Whisper model reels are transcribed with (WHISPER_MODEL in
+# app/extractors/reel.py), kept in the image so none waits on a download.
+ENV HF_HOME=/opt/huggingface
+RUN python -c "import faster_whisper; faster_whisper.download_model('base')"
+ENV HF_HUB_OFFLINE=1
+
 COPY . .
 
 ENV PYTHONPATH=/app
