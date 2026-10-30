@@ -1,6 +1,7 @@
 import uuid
 from typing import Annotated
 
+import structlog
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from supertokens_python.recipe.session import SessionContainer
@@ -26,10 +27,15 @@ async def get_current_user(
     except ValueError:
         user_id = None
     user = await session.get(User, user_id) if user_id else None
+    # Ends the read, so the request holds no pooled connection while it waits
+    # on Claude or Voyage; its next query opens a new transaction.
+    await session.commit()
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User no longer exists",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    # Logs and token usage from here on carry the user.
+    structlog.contextvars.bind_contextvars(user_id=str(user.id))
     return user

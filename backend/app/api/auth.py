@@ -12,6 +12,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from supertokens_python.asyncio import delete_user, get_user
 
@@ -54,6 +55,9 @@ async def delete_me(
     call fails the row deletion rolls back. No tombstone — bring your own
     backup.
     """
+    # A big library cascades through a lot of rows: more than the usual
+    # statement timeout allows.
+    await session.execute(text("SET LOCAL statement_timeout = '5min'"))
     await session.delete(current_user)
     await session.flush()
     await delete_user(str(current_user.id))
