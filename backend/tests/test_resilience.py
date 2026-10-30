@@ -2,11 +2,14 @@
 storage and thumbnails. Run via `docker compose exec api pytest tests/test_resilience.py`
 (the slot and bucket tests use the stack's Redis)."""
 
+import asyncio
+import contextlib
 import gzip
 import io
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -222,8 +225,53 @@ def test_thumbnails_scale_images_draw_a_pdfs_first_page_and_skip_the_rest() -> N
     width, height = page.size
     assert 900 < width < 1200 and height == width * 3 // 4
 
+    # A photo stored sideways is turned upright, after it's shrunk.
+    sideways = io.BytesIO()
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    Image.new("RGB", (2400, 1200), "green").save(sideways, "JPEG", exif=exif)
+    upright = Image.open(io.BytesIO(thumbnails.make(sideways.getvalue(), "image/jpeg") or b""))
+    assert upright.size == (600, 1200)
+
+    # Over MAX_PIXELS, it isn't decoded: a few KB of PNG would be 64 MP.
+    bomb = io.BytesIO()
+    Image.new("1", (8000, 8000)).save(bomb, "PNG")
+    assert thumbnails.make(bomb.getvalue(), "image/png") is None
     assert thumbnails.make(b"not an image", "image/png") is None
     assert thumbnails.make(b"%PDF-1.4 cut short", "application/pdf") is None
+
+
+async def test_thumbnails_are_drawn_in_a_child_killed_when_it_takes_too_long(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def drawing() -> int:
+        """Children still running `python -m app.thumbnails` (Linux: /proc)."""
+        found = 0
+        for proc in Path("/proc").glob("[0-9]*"):
+            with contextlib.suppress(OSError):
+                found += b"app.thumbnails" in (proc / "cmdline").read_bytes()
+        return found
+
+    # The child gets none of the worker's secrets.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
+    assert "ANTHROPIC_API_KEY" not in thumbnails.child_env()
+
+    png = io.BytesIO()
+    Image.new("RGB", (2400, 1600), "navy").save(png, "PNG")
+    jpeg = await thumbnails.draw(png.getvalue(), "image/png")
+    assert Image.open(io.BytesIO(jpeg or b"")).size == (1200, 800)
+    assert await thumbnails.draw(b"not an image", "image/png") is None
+    # Python alone takes longer than this to start, so the child is still
+    # starting when the time is up: it is killed, not left to finish.
+    monkeypatch.setattr(thumbnails, "TIMEOUT_S", 0.01)
+    assert await thumbnails.draw(png.getvalue(), "image/png") is None
+    assert drawing() == 0
+
+    async def no_processes(*_: Any, **__: Any) -> None:
+        raise BlockingIOError("Resource temporarily unavailable")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", no_processes)
+    assert await thumbnails.draw(png.getvalue(), "image/png") is None
 
 
 async def test_a_bucket_allows_its_allowance_then_says_how_long_to_wait() -> None:

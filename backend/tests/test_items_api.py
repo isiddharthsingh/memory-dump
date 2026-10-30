@@ -209,3 +209,24 @@ def test_chunked_bodies_over_the_cap_are_413(client: TestClient, auth: dict[str,
         "/v1/ingest", content=chunks(), headers={**auth, "Content-Type": "application/json"}
     )
     assert resp.status_code == 413
+
+
+def test_uploads_over_5_mb_are_refused_before_they_are_stored(
+    client: TestClient, auth: dict[str, str], jobs: Jobs
+) -> None:
+    from app.api.ingest import MAX_UPLOAD_BYTES
+
+    assert MAX_UPLOAD_BYTES == 5 * 1024 * 1024
+    # One byte over, which BodyLimit lets through for the route to refuse,
+    # and well over, which BodyLimit refuses before reading it.
+    details = []
+    for size in (MAX_UPLOAD_BYTES + 1, 2 * MAX_UPLOAD_BYTES):
+        big = PNG + bytes(size - len(PNG))
+        resp = client.post(
+            "/v1/ingest/file", files={"file": ("big.png", big, "image/png")}, headers=auth
+        )
+        assert resp.status_code == 413, resp.text
+        details.append(resp.json()["detail"])
+    assert details[0] == "Files up to 5 MB can be saved"
+    assert details[1].startswith("Request body over")
+    assert jobs == []
