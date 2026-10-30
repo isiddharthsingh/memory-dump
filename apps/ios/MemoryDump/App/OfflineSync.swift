@@ -34,6 +34,11 @@ enum OfflineSync {
         if page.count < LibraryModel.pageSize { break }
       }
       let ids = Set(items.map(\.id))
+      // Deleted since the last walk, here or on another device: drop the copies too.
+      for id in manifest.items.keys where !ids.contains(id) {
+        saves.remove("/items/\(id.lower)", user: user)
+        saves.remove("/items/\(id.lower)/related", user: user)
+      }
       manifest.items = manifest.items.filter { ids.contains($0.key) }
       for item in items where manifest.items[item.id] != item.status {
         manifest.items[item.id] = try await fetch(api) { try await api.item(item.id).status }
@@ -41,6 +46,16 @@ enum OfflineSync {
 
       let pages = try await live(api) { try await api.wiki() }
       let slugs = Set(pages.map(\.slug))
+      // The list holds only the 100 most recently updated pages, so a page
+      // missing from it may still exist: drop its copy only on a 404.
+      for slug in manifest.wiki.keys where !slugs.contains(slug) {
+        do {
+          _ = try await live(api) { try await api.wikiPage(slug) }
+        } catch APIError.http(404, _) {
+          saves.remove("/wiki/\(slug)", user: user)
+        } catch APIError.http {
+        }
+      }
       manifest.wiki = manifest.wiki.filter { slugs.contains($0.key) }
       for page in pages where manifest.wiki[page.slug] != page.version {
         manifest.wiki[page.slug] = try await fetch(api) { try await api.wikiPage(page.slug).version }
@@ -48,6 +63,9 @@ enum OfflineSync {
 
       let chats = try await live(api) { try await api.chats() }
       let chatIds = Set(chats.map(\.id))
+      for id in manifest.chats.keys where !chatIds.contains(id) {
+        saves.remove("/chats/\(id.lower)", user: user)
+      }
       manifest.chats = manifest.chats.filter { chatIds.contains($0.key) }
       for chat in chats where manifest.chats[chat.id] != chat.updatedAt {
         manifest.chats[chat.id] = try await fetch(api) { try await api.chat(chat.id).updatedAt }
