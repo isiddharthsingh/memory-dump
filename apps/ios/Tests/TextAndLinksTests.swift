@@ -74,6 +74,7 @@ import Testing
   @Test func friendlyErrors() {
     #expect(Format.friendlyIngestError("ConnectError: [Errno -2] Name or service not known") == "Couldn’t reach this site")
     #expect(Format.friendlyIngestError("HTTPStatusError: 403 Forbidden") == "The site blocked access")
+    #expect(Format.friendlyIngestError("NotPublic: 169.254.169.254") == "This link points to a private network")
     #expect(Format.friendlyIngestError("anything", url: "file://a.pdf") == "Couldn’t process this file")
     #expect(Format.friendlyAskError(APIError.http(429, "rate limit")).title == "Hourly limit reached")
     #expect(Format.friendlyAskError(URLError(.notConnectedToInternet)).title == "Can’t reach your server")

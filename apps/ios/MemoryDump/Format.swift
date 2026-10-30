@@ -128,6 +128,8 @@ enum Format {
   static func friendlyIngestError(_ raw: String?, url: String = "") -> String {
     if isUploadedFile(url) { return "Couldn’t process this file" }
     let e = raw ?? ""
+    // The server only fetches addresses on the open internet.
+    if e.hasPrefix("NotPublic") { return "This link points to a private network" }
     if e.contains(/(?i)name or service not known|nodename nor servname|getaddrinfo|connecterror|connection refused/) {
       return "Couldn’t reach this site"
     }
