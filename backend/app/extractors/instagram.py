@@ -70,7 +70,7 @@ class InstagramExtractor:
     @staticmethod
     def _parse_meta(html: str) -> dict[str, str]:
         try:
-            from selectolax.parser import HTMLParser
+            from selectolax.lexbor import LexborHTMLParser as HTMLParser
         except ImportError:
             return {}
         out: dict[str, str] = {}

@@ -113,7 +113,7 @@ class WebpageExtractor:
     @staticmethod
     def _parse_og(html: str) -> dict[str, str]:
         try:
-            from selectolax.parser import HTMLParser
+            from selectolax.lexbor import LexborHTMLParser as HTMLParser
         except ImportError:
             return {}
         tree = HTMLParser(html)
