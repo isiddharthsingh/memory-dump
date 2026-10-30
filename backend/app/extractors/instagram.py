@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import base64
 
-import httpx
-
 from app.extractors.base import ExtractedContent
-from app.extractors.webpage import TIMEOUT, USER_AGENT
+from app.extractors.webpage import TIMEOUT, USER_AGENT, public_client
 
 
 class InstagramExtractor:
@@ -22,7 +20,7 @@ class InstagramExtractor:
     source = "instagram"
 
     async def extract(self, url: str, share_text: str | None = None) -> ExtractedContent:
-        async with httpx.AsyncClient(
+        async with public_client(
             headers={"User-Agent": USER_AGENT},
             timeout=TIMEOUT,
             follow_redirects=True,

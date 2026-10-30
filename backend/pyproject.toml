@@ -17,6 +17,8 @@ dependencies = [
     "arq>=0.26",
     "redis>=5.2",
     "httpx[http2]>=0.27",
+    # Its network backend checks linked pages' addresses (app/extractors/webpage.py).
+    "httpcore>=1.0",
     "anthropic>=0.40",
     "voyageai>=0.3",
     "yt-dlp>=2024.12.13",

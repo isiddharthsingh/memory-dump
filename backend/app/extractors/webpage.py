@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+from typing import Any
 
+import httpcore
 import httpx
 
 from app.extractors.base import ExtractedContent
@@ -36,11 +39,81 @@ JINA_READER = "https://r.jina.ai/"
 TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 
 
+class NotPublic(Exception):
+    """The address isn't on the open internet: this machine, its network, or
+    a cloud metadata service. The app shows the stored `NotPublic: <host>`
+    as its own message."""
+
+
+async def public_address(host: str) -> str:
+    """An address for `host`, when every address it resolves to is public."""
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(host, None) if host else []
+    except OSError as exc:
+        # A name that doesn't resolve fails as it would anywhere else.
+        raise httpcore.ConnectError(f"{host}: {exc}") from exc
+    addresses = [str(info[4][0]).split("%")[0] for info in infos]
+    if not addresses or not all(ipaddress.ip_address(a).is_global for a in addresses):
+        raise NotPublic(host)
+    return addresses[0]
+
+
+class _PublicOnlyBackend(httpcore.AsyncNetworkBackend):
+    """Resolves and checks the host as each connection opens, then connects to
+    the address it checked, so a DNS answer can't change in between."""
+
+    def __init__(self) -> None:
+        self._backend = httpcore.AnyIOBackend()
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,  # noqa: ASYNC109 (httpcore's interface)
+        local_address: str | None = None,
+        socket_options: Any = None,
+    ) -> httpcore.AsyncNetworkStream:
+        address = await public_address(host)
+        return await self._backend.connect_tcp(
+            address, port, timeout, local_address, socket_options
+        )
+
+    async def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,  # noqa: ASYNC109 (httpcore's interface)
+        socket_options: Any = None,
+    ) -> httpcore.AsyncNetworkStream:
+        raise NotPublic(path)
+
+    async def sleep(self, seconds: float) -> None:
+        await self._backend.sleep(seconds)
+
+
+class PublicOnlyTransport(httpx.AsyncHTTPTransport):
+    """Every connection, redirects included, goes only to public addresses.
+    TLS still checks the certificate against the host name."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        # httpx has no public way to pick httpcore's network backend.
+        self._pool = httpcore.AsyncConnectionPool(
+            ssl_context=httpx.create_ssl_context(), network_backend=_PublicOnlyBackend()
+        )
+
+
+def public_client(**kwargs: Any) -> httpx.AsyncClient:
+    """The HTTP client every extractor fetches with. Anyone who can sign up
+    picks the URLs, so it only reaches public addresses, and no proxy from the
+    environment connects for it."""
+    return httpx.AsyncClient(transport=PublicOnlyTransport(), trust_env=False, **kwargs)
+
+
 class WebpageExtractor:
     source = "web"
 
     async def extract(self, url: str, share_text: str | None = None) -> ExtractedContent:
-        async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+        async with public_client(timeout=TIMEOUT, follow_redirects=True) as client:
             direct = await _fetch_direct(client, url)
             if direct is not None:
                 return await self._from_html(direct, url, share_text)

@@ -6,7 +6,7 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 
 from app.extractors.base import ExtractedContent
-from app.extractors.webpage import TIMEOUT, USER_AGENT
+from app.extractors.webpage import TIMEOUT, USER_AGENT, public_client
 
 MAX_COMMENTS = 10
 MAX_COMMENT_CHARS = 600
@@ -31,7 +31,7 @@ class RedditExtractor:
 
     async def extract(self, url: str, share_text: str | None = None) -> ExtractedContent:
         try:
-            async with httpx.AsyncClient(
+            async with public_client(
                 headers={"User-Agent": USER_AGENT},
                 timeout=TIMEOUT,
                 follow_redirects=True,
