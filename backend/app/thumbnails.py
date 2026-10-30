@@ -12,12 +12,14 @@ is killed after TIMEOUT_S: an image built to decode into gigabytes, or a PDF
 built to render forever, costs that process and not the worker. It gets none
 of the worker's environment (its keys and passwords) and runs as the sandbox
 user (app/sandbox.py), so a file that exploits a decoder bug finds nothing to
-steal. Images over MAX_PIXELS aren't decoded at all.
+steal, and what it sends back is kept only if it is a JPEG of at most
+MAX_JPEG_BYTES. Images over MAX_PIXELS aren't decoded at all.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import logging
 import sys
@@ -33,6 +35,8 @@ log = logging.getLogger(__name__)
 MAX_PX = 1200
 # 8000 × 6000; Claude, which reads every image first, takes up to 8000 a side.
 MAX_PIXELS = 50_000_000
+# A thumbnail is well under this.
+MAX_JPEG_BYTES = 4 << 20
 TIMEOUT_S = 30
 # Address space for the child: an image at MAX_PIXELS decodes into ~200 MB.
 MEMORY_CAP = 1 << 30
@@ -69,7 +73,7 @@ async def draw(data: bytes, mime: str) -> bytes | None:
         return None
     try:
         async with asyncio.timeout(TIMEOUT_S):
-            jpeg, errors = await child.communicate(data)
+            jpeg, errors = await _exchange(child, data)
     except TimeoutError:
         log.warning("no thumbnail for a %s: drawing it took over %ss", mime, TIMEOUT_S)
         return None
@@ -78,11 +82,35 @@ async def draw(data: bytes, mime: str) -> bytes | None:
         if child.returncode is None:
             child.kill()
             await child.wait()
-    if child.returncode != 0 or not jpeg:
-        reason = errors.decode(errors="replace").strip()[-500:]
+    if child.returncode != 0 or not jpeg or not jpeg.startswith(b"\xff\xd8"):
+        reason = (errors or b"").decode(errors="replace").strip()[-500:]
         log.warning("%s", reason or f"no thumbnail for a {mime}: exit {child.returncode}")
         return None
     return jpeg
+
+
+async def _exchange(
+    child: asyncio.subprocess.Process, data: bytes
+) -> tuple[bytes | None, bytes | None]:
+    """`communicate`, but keeping at most MAX_JPEG_BYTES of what the child
+    draws and sandbox.MAX_ERRORS of what it says."""
+    stdin, stdout, stderr = child.stdin, child.stdout, child.stderr
+    assert stdin and stdout and stderr
+
+    async def feed() -> None:
+        # A child that stops reading closes the pipe on us.
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+            stdin.write(data)
+            await stdin.drain()
+        stdin.close()
+
+    _, jpeg, errors = await asyncio.gather(
+        feed(),
+        sandbox.read_at_most(stdout, MAX_JPEG_BYTES),
+        sandbox.read_at_most(stderr, sandbox.MAX_ERRORS),
+    )
+    await child.wait()
+    return jpeg, errors
 
 
 def child_env() -> dict[str, str]:

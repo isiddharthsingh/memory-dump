@@ -10,8 +10,9 @@ the sandbox user (app/sandbox.py), and is killed after the time it is given,
 with the ffmpeg it and yt-dlp start. The child writes what it has to
 reel.json in a folder of its own inside one the parent owns, its frames first
 and then its transcript, so a reel that takes too long to transcribe still
-gives its caption and frames. yt-dlp runs only its Instagram extractor, which
-talks only to Instagram.
+gives its caption and frames. The parent takes from it only what a reel could
+hold (see `read`). yt-dlp runs only its Instagram extractor, which talks only
+to Instagram.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import json
 import logging
 import os
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -44,6 +46,17 @@ MAX_AUDIO_S = 300
 MAX_BYTES = 50 << 20
 # The child's exit status for a post without a video, such as a photo.
 NO_VIDEO = 2
+# The most the parent takes from the child: a frame's JPEG (one at FRAME_PX is
+# ~100 KB), each text, and the whole file, room for all of them.
+MAX_FRAME_BYTES = 1 << 20
+MAX_TEXT = {
+    "author": 1_000,
+    "handle": 1_000,
+    "caption": 20_000,
+    "thumbnail_url": 4_000,
+    "transcript": 200_000,
+}
+MAX_FILE_BYTES = 16 << 20
 # Whisper base takes ~520 MB; yt-dlp and ffmpeg run under the same cap.
 MEMORY_CAP = 2 << 30
 # Multilingual and quick on a CPU (~16× real time); `small` hears better, in
@@ -99,9 +112,11 @@ async def fetch(url: str, timeout_s: float) -> Reel | None:
             return None
         try:
             async with asyncio.timeout(timeout_s):
-                _, errors = await child.communicate()
+                assert child.stderr
+                errors = await sandbox.read_at_most(child.stderr, sandbox.MAX_ERRORS)
+                await child.wait()
             if child.returncode:
-                reason = errors.decode(errors="replace").strip()[-500:]
+                reason = (errors or b"").decode(errors="replace").strip()[-500:]
                 # A photo has no video. Anything else (Instagram asking to sign
                 # in, Whisper failing) means reels are going unread.
                 level = logging.INFO if child.returncode == NO_VIDEO else logging.WARNING
@@ -123,19 +138,47 @@ def child_env() -> dict[str, str]:
 
 def read(folder: Path) -> Reel | None:
     """What the child wrote to `folder`, or None when it wrote nothing whole.
-    The child reads what anyone can post, so only text goes on, and at most
-    FRAMES frames: one taken over by a decoder bug can't send Claude more."""
+    The child reads what anyone can post, so one taken over by a decoder bug
+    gets no more past here than a reel could hold: a file, not a link or a
+    pipe, of at most MAX_FILE_BYTES; text within MAX_TEXT; an https cover; and
+    at most FRAMES frames, each a JPEG of at most MAX_FRAME_BYTES."""
     try:
-        found = Reel(**json.loads((folder / _FILE).read_text()))
-    except (OSError, ValueError, TypeError):
+        fd = os.open(folder / _FILE, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as file:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return None
+            raw = file.read(MAX_FILE_BYTES + 1)
+    except OSError:
         return None
-    texts = (found.author, found.handle, found.caption, found.thumbnail_url, found.transcript)
-    if not all(text is None or isinstance(text, str) for text in texts):
+    if len(raw) > MAX_FILE_BYTES:
         return None
-    if not isinstance(found.frames, list) or not all(isinstance(f, str) for f in found.frames):
+    try:
+        found = Reel(**json.loads(raw))
+    except (ValueError, TypeError, RecursionError):
+        # RecursionError: nested deeper than the parser goes.
+        return None
+    for name, most in MAX_TEXT.items():
+        text = getattr(found, name)
+        if text is not None and not (isinstance(text, str) and len(text) <= most):
+            return None
+    if found.thumbnail_url is not None and not found.thumbnail_url.startswith("https://"):
+        return None
+    if not isinstance(found.frames, list):
         return None
     found.frames = found.frames[:FRAMES]
+    if not all(_is_jpeg(frame) for frame in found.frames):
+        return None
     return found
+
+
+def _is_jpeg(frame: object) -> bool:
+    if not isinstance(frame, str):
+        return False
+    try:
+        jpeg = base64.b64decode(frame, validate=True)
+    except ValueError:
+        return False
+    return len(jpeg) <= MAX_FRAME_BYTES and jpeg.startswith(b"\xff\xd8")
 
 
 def describe(video: Path, info: dict[str, Any], folder: Path) -> None:

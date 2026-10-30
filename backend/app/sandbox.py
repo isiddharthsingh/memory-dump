@@ -1,6 +1,6 @@
 """The unprivileged user that the children reading untrusted files run as
-(app/thumbnails.py, app/extractors/reel.py), and the environment and memory
-they get.
+(app/thumbnails.py, app/extractors/reel.py), the environment and memory they
+get, and reading what they send back within bounds.
 
 Those children decode what anyone who can sign up uploads or links to, and
 each gets none of the worker's environment. Run as the worker's own user
@@ -13,6 +13,7 @@ one to drop to.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import pwd
 import resource
@@ -21,6 +22,8 @@ from pathlib import Path
 from typing import Any
 
 USER = "sandbox"
+# What is kept of a child's stderr, for the log.
+MAX_ERRORS = 64 << 10
 
 
 def credentials() -> dict[str, Any]:
@@ -56,3 +59,17 @@ def give(path: Path) -> None:
     if owner := credentials():
         os.chown(path, owner["user"], owner["group"])
 
+
+async def read_at_most(stream: asyncio.StreamReader, limit: int) -> bytes | None:
+    """What `stream` gives until it ends, or None when that is over `limit`
+    bytes. What is past the limit is read and dropped, never kept: the child
+    can't fill the worker's memory, nor stall on a full pipe."""
+    kept = bytearray()
+    over = False
+    while chunk := await stream.read(1 << 16):
+        if not over and len(kept) + len(chunk) <= limit:
+            kept += chunk
+        else:
+            over = True
+            kept.clear()
+    return None if over else bytes(kept)
