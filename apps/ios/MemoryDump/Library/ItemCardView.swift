@@ -38,7 +38,7 @@ struct ItemCardView: View {
     case .video: 190
     case .post: 150
     case .reel: 230
-    case .file: 130
+    case .file: item.thumbnailUrl != nil ? 248 : 130
     case .failed: 170
     case .article(let image): image ? 220 : 170
     }
@@ -174,20 +174,24 @@ struct ItemCardView: View {
   }
 
   private var file: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Image(systemName: Format.sourceKind(item.source).symbol)
-        .font(.title3.weight(.semibold))
-        .foregroundStyle(Swatch.sky.ink)
-      Text(title).font(.cardTitle).foregroundStyle(Palette.onPastel).lineLimit(4)
-      if item.isBusy {
-        StatusBadge(status: item.status)
-      } else {
-        Text(meta).font(.caption).foregroundStyle(Swatch.sky.ink).lineLimit(1)
+    VStack(alignment: .leading, spacing: 0) {
+      if item.thumbnailUrl != nil { thumbnail(height: 118, fallback: Swatch.sky.fill) }
+      VStack(alignment: .leading, spacing: 8) {
+        Image(systemName: Format.sourceKind(item.source).symbol)
+          .font(.title3.weight(.semibold))
+          .foregroundStyle(Swatch.sky.ink)
+        Text(title).font(.cardTitle).foregroundStyle(Palette.onPastel).lineLimit(4)
+        if item.isBusy {
+          StatusBadge(status: item.status)
+        } else {
+          Text(meta).font(.caption).foregroundStyle(Swatch.sky.ink).lineLimit(1)
+        }
       }
+      .padding(14)
     }
-    .padding(14)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Swatch.sky.fill, in: .rect(cornerRadius: 22))
+    .background(Swatch.sky.fill)
+    .clipShape(.rect(cornerRadius: 22))
   }
 
   private var failed: some View {

@@ -25,7 +25,9 @@ struct ReaderHero: View {
     case .post: post
     case .video: playable(media(fill: Palette.video, play: true))
     case .reel: playable(media(fill: Swatch.lilac.fill, play: true))
-    case .file: file
+    case .file:
+      // An upload's thumbnail fills the hero like a photo.
+      if item.thumbnailUrl != nil { media(fill: Swatch.sky.fill, play: false) } else { file }
     case .article(true): media(fill: Palette.sand, play: false)
     case .article(false), .failed: monogram
     }

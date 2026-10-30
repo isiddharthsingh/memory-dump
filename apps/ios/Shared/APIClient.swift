@@ -91,6 +91,16 @@ final class APIClient {
     return r.tags
   }
 
+  /// The thumbnail the server keeps for an uploaded image or PDF, at its
+  /// `thumbnail_url`. Not saved here: ImageCache keeps it with the others.
+  func thumbnail(_ path: String) async throws -> (Data, HTTPURLResponse) {
+    try await authorized { token in
+      try self.request(path, token: token)
+    } perform: { req in
+      try await self.http.data(for: req)
+    }
+  }
+
   // MARK: Ingest
 
   /// A share waits in the queue when the server doesn't answer, so it gives up

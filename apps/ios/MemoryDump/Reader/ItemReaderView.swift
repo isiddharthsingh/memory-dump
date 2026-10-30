@@ -45,7 +45,9 @@ final class ItemReaderModel {
   }
 
   func delete() async -> Bool {
-    (try? await APIClient.shared.deleteItem(id)) != nil
+    guard (try? await APIClient.shared.deleteItem(id)) != nil else { return false }
+    ImageCache.forget(item?.thumbnailUrl)
+    return true
   }
 
   private func apply(_ item: ItemDetail) {

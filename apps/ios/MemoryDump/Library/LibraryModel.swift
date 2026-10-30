@@ -164,6 +164,7 @@ final class LibraryModel {
   func delete(_ item: ItemSummary) async {
     do {
       try await api.deleteItem(item.id)
+      ImageCache.forget(item.thumbnailUrl)
       Haptics.success()
       items.removeAll { $0.id == item.id }
       pool.removeAll { $0.id == item.id }

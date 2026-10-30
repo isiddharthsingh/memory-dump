@@ -14,8 +14,8 @@ struct SourceThumb: View {
   var body: some View {
     let shape = RoundedRectangle(cornerRadius: size >= 48 ? 12 : 8)
     Group {
-      if let thumbnailURL, let url = URL(string: thumbnailURL) {
-        CachedImage(url: url) { Palette.fill }
+      if let thumbnailURL {
+        CachedImage(url: thumbnailURL) { Palette.fill }
       } else if source == "youtube" || source == "twitter" {
         Image(systemName: Format.sourceKind(source).symbol)
           .font(.system(size: size * 0.32, weight: .semibold))
@@ -56,8 +56,8 @@ struct ThumbnailFill: View {
   var body: some View {
     fallback
       .overlay {
-        if let url, let image = URL(string: url) {
-          CachedImage(url: image) { fallback }
+        if let url {
+          CachedImage(url: url) { fallback }
         }
       }
       .clipped()
@@ -66,9 +66,10 @@ struct ThumbnailFill: View {
 
 /// AsyncImage that keeps what it downloads on disk and shows it from there,
 /// so thumbnails still show with no connection. Fills and crops like
-/// `.resizable().scaledToFill()`.
+/// `.resizable().scaledToFill()`. `url` is a `thumbnail_url`: a picture on the
+/// web, or a path on our server for one it keeps (an upload's).
 struct CachedImage<Placeholder: View>: View {
-  let url: URL
+  let url: String
   @ViewBuilder let placeholder: Placeholder
   @State private var image: UIImage?
 
@@ -81,12 +82,7 @@ struct CachedImage<Placeholder: View>: View {
       }
     }
     .task(id: url) {
-      guard let (data, response) = try? await ImageCache.session.data(from: url) else { return }
-      // Under this cache policy a cached error would come back forever.
-      if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-        ImageCache.forget(url)
-        return
-      }
+      guard let data = await ImageCache.data(url) else { return }
       image = await UIImage(data: data)?.byPreparingForDisplay()
     }
   }
@@ -105,8 +101,55 @@ enum ImageCache {
     return URLSession(configuration: config)
   }()
 
-  static func forget(_ url: URL) {
-    cache.removeCachedResponse(for: URLRequest(url: url))
+  /// The picture at a `thumbnail_url`, from disk when it's there.
+  static func data(_ thumbnailURL: String) async -> Data? {
+    if isServers(thumbnailURL) { return await serverData(thumbnailURL) }
+    guard let url = URL(string: thumbnailURL),
+      let (data, response) = try? await session.data(from: url)
+    else { return nil }
+    // Under this cache policy a cached error would come back forever.
+    if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+      cache.removeCachedResponse(for: URLRequest(url: url))
+      return nil
+    }
+    return data
+  }
+
+  /// Drops a deleted item's thumbnail: an upload's is the user's own picture.
+  static func forget(_ thumbnailURL: String?) {
+    guard let thumbnailURL, let key = key(thumbnailURL) else { return }
+    cache.removeCachedResponse(for: key)
+  }
+
+  /// Whether a `thumbnail_url` is one the server keeps (an upload's). Only
+  /// that exact path: a link's is the page's own og:image, which can be any
+  /// path, and must never be fetched from our server with the token.
+  private static func isServers(_ thumbnailURL: String) -> Bool {
+    thumbnailURL.wholeMatch(of: /\/items\/[0-9a-f-]{36}\/thumbnail/) != nil
+  }
+
+  private static func key(_ thumbnailURL: String) -> URLRequest? {
+    let url =
+      isServers(thumbnailURL)
+      ? try? APIClient.shared.request(thumbnailURL, token: nil).url : URL(string: thumbnailURL)
+    return url.map { URLRequest(url: $0) }
+  }
+
+  /// One the server keeps, which needs the session's token. Kept by hand, so
+  /// only an image is stored (never a 401, or a captive portal's page), and
+  /// only while the account that asked for it is still signed in.
+  private static func serverData(_ path: String) async -> Data? {
+    guard let key = key(path) else { return nil }
+    // Off the main thread: a lookup can read the disk.
+    let cache = self.cache
+    let saved = await Task.detached { cache.cachedResponse(for: key)?.data }.value
+    if let saved { return saved }
+    let user = SessionStore.shared.current()?.user.id
+    guard let (data, response) = try? await APIClient.shared.thumbnail(path) else { return nil }
+    if response.mimeType?.hasPrefix("image/") == true, SessionStore.shared.current()?.user.id == user {
+      cache.storeCachedResponse(CachedURLResponse(response: response, data: data), for: key)
+    }
+    return data
   }
 
   static func clear() {
