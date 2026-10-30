@@ -17,7 +17,13 @@ RUN pip install uv==0.5.7
 WORKDIR /app
 
 COPY pyproject.toml ./
-RUN uv pip install --system -r pyproject.toml
+# docker-compose.override.yml sets INSTALL_DEV for the api image, so tests,
+# ruff and mypy run in it; production images go without.
+ARG INSTALL_DEV=false
+RUN uv pip install --system -r pyproject.toml \
+    && if [ "$INSTALL_DEV" = "true" ]; then \
+         uv pip install --system -r pyproject.toml --extra dev; \
+       fi
 
 COPY . .
 

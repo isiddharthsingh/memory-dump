@@ -1,3 +1,14 @@
+# The stack as it runs in production:
+#   docker compose -f docker-compose.yml up -d
+# Plain `docker compose up` also merges docker-compose.override.yml, which adds
+# the development conveniences (published database ports, code mounted with
+# reload).
+#
+# Only the API's port is published. Put it behind a TLS-terminating proxy and
+# set FORWARDED_ALLOW_IPS (in ../.env) to the proxy's address so uvicorn takes
+# client addresses from X-Forwarded-For (the sign-in rate limit counts per
+# address). For Postgres, prefer a managed instance with point-in-time
+# recovery over the postgres-data volume.
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -8,39 +19,49 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-memory_dump}
     volumes:
       - postgres-data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-memory} -d ${POSTGRES_DB:-memory_dump}"]
       interval: 5s
       timeout: 3s
       retries: 10
 
+  # The job queue lives here, so: an append-only file synced every second, so
+  # a restart loses at most a second of queued jobs (the reconciler puts back
+  # the rest), and no eviction, so memory pressure fails writes loudly instead
+  # of dropping jobs. Set REDIS_PASSWORD (from your shell or backend/.env, like
+  # POSTGRES_*) and put it in REDIS_URL as redis://:<password>@redis:6379/0.
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    command:
+      - sh
+      - -c
+      - >
+        exec redis-server --appendonly yes --appendfsync everysec
+        --maxmemory-policy noeviction
+        $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}
     volumes:
       - redis-data:/data
-    ports:
-      - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+        - CMD-SHELL
+        - '[ -n "$$REDIS_PASSWORD" ] && export REDISCLI_AUTH="$$REDIS_PASSWORD"; redis-cli ping | grep -q PONG'
       interval: 5s
       timeout: 3s
       retries: 10
 
   # SuperTokens core: users, password hashes and sessions. It keeps its tables in
-  # the `supertokens` schema of the same database. Its port is bound to localhost
-  # only, for an api run on the host. API_KEYS must match SUPERTOKENS_API_KEY in
-  # ../.env; like POSTGRES_*, compose reads it from your shell or backend/.env.
+  # the `supertokens` schema of the same database. API_KEYS must match
+  # SUPERTOKENS_API_KEY in ../.env; like POSTGRES_*, compose reads it from your
+  # shell or backend/.env.
   supertokens:
     image: registry.supertokens.io/supertokens/supertokens-postgresql:12.4.1
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      - "127.0.0.1:3567:3567"
     environment:
       POSTGRESQL_CONNECTION_URI: postgresql://${POSTGRES_USER:-memory}:${POSTGRES_PASSWORD:-memory}@postgres:5432/${POSTGRES_DB:-memory_dump}
       POSTGRESQL_TABLE_SCHEMA: supertokens
@@ -58,11 +79,36 @@ services:
       timeout: 3s
       retries: 20
 
+  # Migrations run once, before the api and worker start, rather than in every
+  # api process (several would race).
+  migrate:
+    build: .
+    restart: "no"
+    env_file:
+      - ../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      supertokens:
+        condition: service_healthy
+    environment:
+      # The key the core was given, from the same place (your shell or
+      # backend/.env), so the two can't disagree.
+      SUPERTOKENS_API_KEY: ${SUPERTOKENS_API_KEY:-}
+    command: ["alembic", "upgrade", "head"]
+
   api:
     build: .
     restart: unless-stopped
     env_file:
       - ../.env
+    environment:
+      SUPERTOKENS_API_KEY: ${SUPERTOKENS_API_KEY:-}
+      # uvicorn worker processes; each has its own database pool
+      # (DB_POOL_SIZE + DB_MAX_OVERFLOW connections).
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      # Where those processes pool their metrics for /metrics.
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,14 +116,24 @@ services:
         condition: service_healthy
       supertokens:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "8000:8000"
-    command: >
-      sh -c "alembic upgrade head &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    command:
+      - sh
+      - -c
+      - >
+        rm -rf "$$PROMETHEUS_MULTIPROC_DIR" && mkdir -p "$$PROMETHEUS_MULTIPROC_DIR" &&
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000
     volumes:
-      - .:/app
       - uploads:/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   worker:
     build: .
@@ -89,12 +145,22 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      SUPERTOKENS_API_KEY: ${SUPERTOKENS_API_KEY:-}
     command: ["arq", "app.workers.worker.WorkerSettings"]
     volumes:
-      - .:/app
       - uploads:/uploads
       # APNs .p8 key (gitignored). Point APNS_KEY_PATH at /run/secrets/<file>.
       - ../secrets:/run/secrets:ro
+    healthcheck:
+      # Fails once the worker stops refreshing its health-check key in Redis.
+      test: ["CMD", "arq", "--check", "app.workers.worker.WorkerSettings"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
 
 volumes:
   postgres-data:

@@ -1,0 +1,40 @@
+# Development additions to docker-compose.yml; `docker compose up` merges this
+# file by itself. Publishes the databases (for running the api or worker on the
+# host, or connecting a client) and mounts the code so changes hot-reload.
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  # Bound to localhost only, for an api run on the host with
+  # SUPERTOKENS_CONNECTION_URI=http://localhost:3567.
+  supertokens:
+    ports:
+      - "127.0.0.1:3567:3567"
+
+  migrate:
+    volumes:
+      - .:/app
+
+  api:
+    # With pytest, ruff and mypy: docker compose exec api pytest
+    build:
+      context: .
+      args:
+        INSTALL_DEV: "true"
+    command:
+      - sh
+      - -c
+      - >
+        rm -rf "$$PROMETHEUS_MULTIPROC_DIR" && mkdir -p "$$PROMETHEUS_MULTIPROC_DIR" &&
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - .:/app
+
+  worker:
+    volumes:
+      - .:/app
