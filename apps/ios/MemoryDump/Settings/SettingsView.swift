@@ -7,8 +7,6 @@ struct SettingsView: View {
   @AppStorage(Appearance.key) private var appearance = Appearance.system
   @State private var health: Bool?
   @State private var checking = false
-  @State private var queued = 0
-  @State private var flushing = false
   @State private var confirmDiscard = false
   @State private var confirmSignOut = false
   @State private var confirmDelete = false
@@ -52,9 +50,10 @@ struct SettingsView: View {
         .listRowBackground(Palette.card)
 
         Section("Saving") {
+          let queued = app.queued.count
           LabeledContent("Offline queue", value: queued == 0 ? "Empty" : Format.plural(queued, "share"))
           if queued > 0 {
-            Button(flushing ? "Sending…" : "Send now") { Task { await sendQueued() } }.disabled(flushing)
+            Button(app.isSendingQueue ? "Sending…" : "Send now") { app.sendQueue() }.disabled(app.isSendingQueue)
             Button("Discard queued shares", role: .destructive) { confirmDiscard = true }
           }
           Button("Notifications") {
@@ -87,11 +86,8 @@ struct SettingsView: View {
           Button("Done") { dismiss() }
         }
       }
-      .confirmationDialog("Discard \(Format.plural(queued, "queued share"))?", isPresented: $confirmDiscard, titleVisibility: .visible) {
-        Button("Discard", role: .destructive) {
-          ShareQueue.clear()
-          queued = ShareQueue.count
-        }
+      .confirmationDialog("Discard \(Format.plural(app.queued.count, "queued share"))?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+        Button("Discard", role: .destructive) { app.discardQueue() }
       } message: {
         Text("They haven’t reached your server yet.")
       }
@@ -111,10 +107,7 @@ struct SettingsView: View {
         Text(deleteError ?? "")
       }
     }
-    .task {
-      queued = ShareQueue.count
-      await check()
-    }
+    .task { await check() }
   }
 
   private var statusLabel: (text: String, color: Color) {
@@ -131,18 +124,6 @@ struct SettingsView: View {
     health = await APIClient.shared.health()
     checking = false
     health == true ? Haptics.success() : Haptics.error()
-  }
-
-  private func sendQueued() async {
-    flushing = true
-    let result = await ShareQueue.flush()
-    flushing = false
-    queued = ShareQueue.count
-    if result.refused > 0 {
-      app.show("\(Format.plural(result.refused, "share")) couldn’t be sent and were removed.", ok: false)
-    } else if result.sent > 0 {
-      app.show("Sent \(Format.plural(result.sent, "queued share")).", ok: true)
-    }
   }
 
   private func deleteAccount() async {

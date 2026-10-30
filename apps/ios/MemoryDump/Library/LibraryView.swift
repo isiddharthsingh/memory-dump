@@ -65,6 +65,9 @@ struct LibraryView: View {
   private var wall: some View {
     ScrollView {
       LazyVStack(alignment: .leading, spacing: 12) {
+        if !app.queued.isEmpty {
+          QueuedShares(shares: app.queued, sending: app.isSendingQueue) { app.sendQueue() }
+        }
         if !model.loaded {
           ProgressView().frame(maxWidth: .infinity).padding(.top, 120)
         } else if let error = model.error, model.items.isEmpty {

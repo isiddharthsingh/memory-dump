@@ -193,6 +193,70 @@ import Testing
   }
 }
 
+@Suite struct ShareQueueTests {
+  @Test func sharesWaitWhenTryingAgainCanWork() {
+    #expect(ShareQueue.waits(after: URLError(.timedOut)))
+    #expect(ShareQueue.waits(after: URLError(.cannotFindHost)))
+    #expect(ShareQueue.waits(after: URLError(.cancelled)))
+    #expect(ShareQueue.waits(after: CancellationError()))
+    #expect(ShareQueue.waits(after: APIError.signedOut))
+    // A proxy in front of a stopped server, a busy one, and rate limits.
+    #expect(ShareQueue.waits(after: APIError.http(502, "")))
+    #expect(ShareQueue.waits(after: APIError.http(500, "")))
+    #expect(ShareQueue.waits(after: APIError.http(429, "slow down")))
+    #expect(ShareQueue.waits(after: APIError.http(408, "")))
+  }
+
+  @Test func refusedSharesAreDropped() {
+    #expect(!ShareQueue.waits(after: APIError.http(400, "bad url")))
+    #expect(!ShareQueue.waits(after: APIError.http(413, "too large")))
+    #expect(!ShareQueue.waits(after: APIError.http(422, "")))
+    #expect(!ShareQueue.waits(after: DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: ""))))
+  }
+
+  @Test func onlyAnUnreachableServerHoldsUpTheQueue() {
+    #expect(ShareQueue.holdsUpQueue(URLError(.timedOut)))
+    #expect(ShareQueue.holdsUpQueue(APIError.http(503, "")))
+    #expect(ShareQueue.holdsUpQueue(APIError.http(429, "")))
+    #expect(ShareQueue.holdsUpQueue(APIError.signedOut))
+    // One share the server chokes on, or one the other process is sending.
+    #expect(!ShareQueue.holdsUpQueue(APIError.http(500, "")))
+    #expect(!ShareQueue.holdsUpQueue(ShareQueue.InProgress()))
+    #expect(ShareQueue.waits(after: ShareQueue.InProgress()))
+  }
+
+  @Test func anEntryAnotherSenderHoldsIsNotSentTwice() async throws {
+    let entry = try ShareQueue.enqueueLink(URL(string: "https://example.com/locked")!, note: nil, title: nil)
+    defer { ShareQueue.remove(entry) }
+    let lock = AppGroup.directory("ShareQueue").appending(path: "\(entry.id.lower).lock")
+    let fd = open(lock.path(percentEncoded: false), O_CREAT | O_RDWR, 0o600)
+    defer { close(fd) }
+    #expect(flock(fd, LOCK_EX | LOCK_NB) == 0)
+    guard case .waiting(let error) = await ShareQueue.send(entry) else {
+      Issue.record("sent an entry another sender held")
+      return
+    }
+    #expect(error is ShareQueue.InProgress)
+  }
+
+  @Test func anEntryTheOtherProcessSentIsNotSentAgain() async throws {
+    let entry = try ShareQueue.enqueueLink(URL(string: "https://example.com/gone")!, note: nil, title: nil)
+    ShareQueue.remove(entry)
+    guard case .waiting(let error) = await ShareQueue.send(entry) else {
+      Issue.record("sent an entry that had left the queue")
+      return
+    }
+    #expect(error is ShareQueue.InProgress)
+  }
+
+  @Test func readsEntriesQueuedBeforeTheyHadATitle() throws {
+    let json = #"{"id":"79D14C05-0D65-4993-A998-D39D993620AE","queuedAt":815000000,"kind":{"link":{"_0":"https:\/\/x.com\/a\/status\/1"}}}"#
+    let entry = try JSONDecoder().decode(QueuedShare.self, from: Data(json.utf8))
+    #expect(entry.title == nil)
+    #expect(QueuedShares.label(entry) == "x.com")
+  }
+}
+
 @Suite struct OfflineCopyTests {
   /// A fresh folder per test; Swift Testing makes a new suite value for each.
   private let saves = SavedResponses(

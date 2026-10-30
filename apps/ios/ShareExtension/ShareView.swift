@@ -7,7 +7,8 @@ final class ShareModel {
     case reading
     case sending
     case saved
-    case queued
+    /// Kept for the app to send, with why.
+    case queued(String)
     case failed(String)
   }
 
@@ -36,66 +37,53 @@ final class ShareModel {
         return
       }
       describe(payload)
-      phase = .sending
+      // Queued before it is sent, so nothing is lost if the server never
+      // answers or the extension closes first. The app sends what's left.
+      let entry: QueuedShare
       do {
-        try await send(payload)
+        entry = try enqueue(payload)
+      } catch {
+        phase = .failed("This share couldn’t be kept: \(error.localizedDescription)")
+        return
+      }
+      phase = .sending
+      switch await ShareQueue.send(entry) {
+      case .sent:
         phase = .saved
         await finish(after: .seconds(1.2))
-      } catch is CancellationError {
-        discard(payload)
-      } catch let error as URLError where error.code == .cancelled {
-        discard(payload)
-      } catch is URLError {
-        keep(payload)
-      } catch APIError.signedOut {
-        discard(payload)
-        phase = .failed("Open Memory Dump and sign in first.")
-      } catch APIError.http(let status, let detail) {
-        discard(payload)
-        phase = .failed(detail.isEmpty ? "HTTP \(status)" : "\(status) · \(detail)")
-      } catch {
-        discard(payload)
-        phase = .failed(error.localizedDescription)
+      case .waiting(let error):
+        if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
+        let reason =
+          switch error {
+          case APIError.signedOut: "Sign in to Memory Dump and it sends."
+          case is ShareQueue.InProgress: "Memory Dump is sending it."
+          default: "Your server didn’t answer. It sends when it’s back."
+          }
+        phase = .queued(reason)
+        await finish(after: .seconds(1.8))
+      case .refused(let error):
+        if case APIError.http(let status, let detail) = error {
+          phase = .failed(detail.isEmpty ? "HTTP \(status)" : "\(status) · \(detail)")
+        } else {
+          phase = .failed(error.localizedDescription)
+        }
       }
     }
   }
 
+  /// Closes the pill. A share still sending stays queued for the app.
   func cancel() {
     task?.cancel()
     Task { await finish() }
   }
 
-  private func send(_ payload: SharePayload) async throws {
+  private func enqueue(_ payload: SharePayload) throws -> QueuedShare {
     switch payload {
     case .link(let url, let note, _):
-      _ = try await APIClient.shared.ingest(url, note: note)
+      return try ShareQueue.enqueueLink(url, note: note, title: title)
     case .file(let url, let name, let mimeType, let note):
-      _ = try await APIClient.shared.ingestFile(at: url, name: name, mimeType: mimeType, note: note)
-      discard(payload)
-    }
-  }
-
-  /// No network: keep the share in the App Group. The app sends it later.
-  private func keep(_ payload: SharePayload) {
-    do {
-      switch payload {
-      case .link(let url, let note, _):
-        try ShareQueue.enqueueLink(url, note: note)
-      case .file(let url, let name, let mimeType, let note):
-        try ShareQueue.enqueueFile(at: url, name: name, mimeType: mimeType, note: note)
-      }
-      phase = .queued
-      Task { await finish(after: .seconds(1.8)) }
-    } catch {
-      discard(payload)
-      phase = .failed("You’re offline, and the share couldn’t be kept.")
-    }
-  }
-
-  /// Deletes the copied file once nothing needs it.
-  private func discard(_ payload: SharePayload) {
-    if case .file(let url, _, _, _) = payload {
-      try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+      defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+      return try ShareQueue.enqueueFile(at: url, name: name, mimeType: mimeType, note: note)
     }
   }
 
@@ -196,7 +184,7 @@ struct ShareView: View {
     switch model.phase {
     case .reading, .sending: "Saving to Memory Dump"
     case .saved: "Saved to Memory Dump"
-    case .queued: "Kept offline"
+    case .queued: "Saved for later"
     case .failed: "Not saved"
     }
   }
@@ -205,7 +193,7 @@ struct ShareView: View {
     switch model.phase {
     case .reading: "Reading the share…"
     case .sending, .saved: model.title
-    case .queued: "It sends when you open Memory Dump."
+    case .queued(let reason): reason
     case .failed(let reason): reason
     }
   }

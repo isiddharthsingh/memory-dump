@@ -14,6 +14,7 @@ struct MemoryDumpApp: App {
     }
     .onChange(of: scenePhase) { _, phase in
       if phase == .active { Task { await delegate.app.becameActive() } }
+      if phase == .background { delegate.app.wentToBackground() }
     }
   }
 }

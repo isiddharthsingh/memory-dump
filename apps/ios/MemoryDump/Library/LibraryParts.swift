@@ -258,3 +258,52 @@ struct NoteEditor: View {
     }
   }
 }
+
+/// Shares the server hasn't taken yet, at the top of the Library. They go out
+/// on their own when it answers; Retry tries at once.
+struct QueuedShares: View {
+  let shares: [QueuedShare]
+  let sending: Bool
+  let retry: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 10) {
+        Image(systemName: "clock.arrow.circlepath")
+          .font(.callout.weight(.semibold))
+          .foregroundStyle(Palette.accent)
+        // The same words while it retries, so a server that's down doesn't look stuck.
+        Text("\(Format.plural(shares.count, "share")) waiting for your server")
+          .font(.subheadline.weight(.semibold))
+          .foregroundStyle(Palette.ink)
+        Spacer(minLength: 0)
+        if sending {
+          ProgressView().controlSize(.small)
+        } else {
+          Button("Retry", action: retry)
+            .font(.subheadline.weight(.semibold))
+            .tint(Palette.accent)
+        }
+      }
+      ForEach(shares.prefix(3)) { share in
+        Text(Self.label(share))
+          .font(.footnote)
+          .foregroundStyle(Palette.ink2)
+          .lineLimit(1)
+      }
+      if shares.count > 3 {
+        Text("and \(shares.count - 3) more").font(.footnote).foregroundStyle(Palette.ink3)
+      }
+    }
+    .padding(14)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Palette.card, in: .rect(cornerRadius: 18))
+  }
+
+  static func label(_ share: QueuedShare) -> String {
+    switch share.kind {
+    case .link(let url): share.title ?? Format.domain(url.absoluteString)
+    case .file(let name, _): share.title ?? name
+    }
+  }
+}

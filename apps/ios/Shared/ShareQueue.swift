@@ -1,12 +1,14 @@
 import Foundation
 
-/// A share that could not reach the server. Lives in the App Group as
+/// A share on its way to the server. Lives in the App Group as
 /// ShareQueue/<id>.json, with a shared file's bytes beside it as <id>.bin.
 struct QueuedShare: Codable, Identifiable {
   let id: UUID
   let queuedAt: Date
   let note: String?
   let kind: Kind
+  /// The page title or file name, for the Library while it waits.
+  var title: String?
 
   enum Kind: Codable {
     case link(URL)
@@ -14,22 +16,41 @@ struct QueuedShare: Codable, Identifiable {
   }
 }
 
-/// The extension adds to the queue when it is offline; the app sends the queue
-/// when it becomes active, and from Settings.
+/// Every share goes into the queue before it is sent, so closing the
+/// extension or a server that never answers can't lose it. The extension
+/// sends it at once; whatever the server didn't take, the app sends while it
+/// is open, and from Settings.
 enum ShareQueue {
+  /// What one send did with its entry.
+  enum Outcome {
+    case sent
+    /// Still queued: the server couldn't be reached, or the session needs a sign-in.
+    case waiting(Error)
+    /// Dropped: the server refused it, and would again.
+    case refused(Error)
+  }
+
+  /// The other process (app or extension) is sending this entry right now.
+  struct InProgress: Error {}
+
   private static var directory: URL { AppGroup.directory("ShareQueue") }
   private static var isFlushing = false
 
-  static func enqueueLink(_ url: URL, note: String?) throws {
-    try write(QueuedShare(id: UUID(), queuedAt: .now, note: note, kind: .link(url)))
+  static func enqueueLink(_ url: URL, note: String?, title: String?) throws -> QueuedShare {
+    let entry = QueuedShare(id: UUID(), queuedAt: .now, note: note, kind: .link(url), title: title)
+    try write(entry)
+    return entry
   }
 
   /// Moves the file into the queue.
-  static func enqueueFile(at file: URL, name: String, mimeType: String, note: String?) throws {
+  static func enqueueFile(at file: URL, name: String, mimeType: String, note: String?) throws
+    -> QueuedShare
+  {
     let entry = QueuedShare(
-      id: UUID(), queuedAt: .now, note: note, kind: .file(name: name, mimeType: mimeType))
+      id: UUID(), queuedAt: .now, note: note, kind: .file(name: name, mimeType: mimeType), title: name)
     try FileManager.default.moveItem(at: file, to: bytesURL(entry.id))
     try write(entry)
+    return entry
   }
 
   static func pending() -> [QueuedShare] {
@@ -46,15 +67,49 @@ enum ShareQueue {
   static func remove(_ entry: QueuedShare) {
     try? FileManager.default.removeItem(at: jsonURL(entry.id))
     try? FileManager.default.removeItem(at: bytesURL(entry.id))
+    try? FileManager.default.removeItem(at: lockURL(entry.id))
   }
 
   static func clear() {
     pending().forEach(remove)
   }
 
-  /// Sends the queue oldest first. Stops at the first network error, so a
-  /// share is never lost while the network is still down. Drops an entry the
-  /// server refuses, because the same request would fail again.
+  /// Sends one entry, and takes it off the queue unless it has to wait. One
+  /// sender at a time across the app and the extension: an entry another one
+  /// is sending waits, so the server never gets it twice.
+  static func send(_ entry: QueuedShare, using api: APIClient = .shared) async -> Outcome {
+    let lock = open(lockURL(entry.id).path(percentEncoded: false), O_CREAT | O_RDWR, 0o600)
+    if lock >= 0, flock(lock, LOCK_EX | LOCK_NB) != 0 {
+      close(lock)
+      return .waiting(InProgress())
+    }
+    // Closing the file releases the lock, and so does the process ending.
+    defer { if lock >= 0 { close(lock) } }
+    // The other process sent it after this one listed the queue.
+    guard FileManager.default.fileExists(atPath: jsonURL(entry.id).path(percentEncoded: false)) else {
+      try? FileManager.default.removeItem(at: lockURL(entry.id))
+      return .waiting(InProgress())
+    }
+    do {
+      switch entry.kind {
+      case .link(let url):
+        _ = try await api.ingest(url, note: entry.note)
+      case .file(let name, let mimeType):
+        _ = try await api.ingestFile(
+          at: bytesURL(entry.id), name: name, mimeType: mimeType, note: entry.note)
+      }
+      remove(entry)
+      return .sent
+    } catch {
+      if waits(after: error) { return .waiting(error) }
+      remove(entry)
+      return .refused(error)
+    }
+  }
+
+  /// Sends the queue oldest first. Stops when the server can't be reached or
+  /// won't take more, since every share after would wait too; one that waits
+  /// for its own reason (a 500, another sender) doesn't hold up the rest.
   static func flush(using api: APIClient = .shared) async -> (sent: Int, refused: Int) {
     guard !isFlushing else { return (0, 0) }
     isFlushing = true
@@ -62,23 +117,35 @@ enum ShareQueue {
     var sent = 0
     var refused = 0
     for entry in pending() {
-      do {
-        switch entry.kind {
-        case .link(let url):
-          _ = try await api.ingest(url, note: entry.note)
-        case .file(let name, let mimeType):
-          _ = try await api.ingestFile(
-            at: bytesURL(entry.id), name: name, mimeType: mimeType, note: entry.note)
-        }
-        sent += 1
-      } catch APIError.http {
-        refused += 1
-      } catch {
-        break
+      if Task.isCancelled { break }
+      switch await send(entry, using: api) {
+      case .sent: sent += 1
+      case .refused: refused += 1
+      case .waiting(let error): if holdsUpQueue(error) { return (sent, refused) }
       }
-      remove(entry)
     }
     return (sent, refused)
+  }
+
+  /// A share waits when sending it again later can work: no answer, a
+  /// cancelled send, a server that is down, busy or rate-limiting, or a
+  /// session that needs a sign-in. A 4xx refusal would only repeat.
+  static func waits(after error: Error) -> Bool {
+    if error is CancellationError || error is URLError || error is InProgress { return true }
+    switch error as? APIError {
+    case .signedOut?: return true
+    case .http(let status, _)?: return status == 408 || status == 429 || status >= 500
+    default: return false
+    }
+  }
+
+  /// Whether every share would wait after this: no server, no session, a rate limit.
+  static func holdsUpQueue(_ error: Error) -> Bool {
+    switch error as? APIError {
+    case .signedOut?: return true
+    case .http(let status, _)?: return status == 408 || status == 429 || error.isUnreachable
+    default: return error.isUnreachable || error is CancellationError
+    }
   }
 
   private static func write(_ entry: QueuedShare) throws {
@@ -87,6 +154,7 @@ enum ShareQueue {
 
   private static func jsonURL(_ id: UUID) -> URL { directory.appending(path: "\(id.lower).json") }
   private static func bytesURL(_ id: UUID) -> URL { directory.appending(path: "\(id.lower).bin") }
+  private static func lockURL(_ id: UUID) -> URL { directory.appending(path: "\(id.lower).lock") }
 }
 
 /// How a share's text becomes a URL and a note. The same rules as the Expo

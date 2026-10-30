@@ -97,9 +97,15 @@ final class APIClient {
 
   // MARK: Ingest
 
+  /// A share waits in the queue when the server doesn't answer, so it gives up
+  /// as soon as a read does rather than after the default minute. For an
+  /// upload this is the longest pause between bytes, not the whole upload.
+  private static let shareTimeout: TimeInterval = 10
+
   func ingest(_ url: URL, note: String?) async throws -> ItemSummary {
     let r: IngestResponse = try await send(
-      "/ingest", method: "POST", body: ["url": url.absoluteString, "share_text": note])
+      "/ingest", method: "POST", body: ["url": url.absoluteString, "share_text": note],
+      timeout: Self.shareTimeout)
     return r.item
   }
 
@@ -112,7 +118,7 @@ final class APIClient {
       file: file, name: name, mimeType: mimeType, note: note, boundary: boundary)
     defer { try? FileManager.default.removeItem(at: body) }
     let (data, _) = try await authorized { token in
-      var req = try self.request("/ingest/file", method: "POST", token: token)
+      var req = try self.request("/ingest/file", method: "POST", token: token, timeout: Self.shareTimeout)
       req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
       return req
     } perform: { req in
@@ -230,15 +236,16 @@ final class APIClient {
   /// writes that answer with the thing they changed.
   private func send<T: Decodable>(
     _ path: String, method: String = "GET", query: [String: String?] = [:],
-    body: (any Encodable)? = nil, saveAs: String? = nil
+    body: (any Encodable)? = nil, saveAs: String? = nil, timeout: TimeInterval? = nil
   ) async throws -> T {
-    let data = try await data(path, method: method, query: query, body: body, saveAs: saveAs)
+    let data = try await data(
+      path, method: method, query: query, body: body, saveAs: saveAs, timeout: timeout)
     return try decoder.decode(T.self, from: data)
   }
 
   private func data(
     _ path: String, method: String = "GET", query: [String: String?] = [:],
-    body: (any Encodable)? = nil, saveAs: String? = nil
+    body: (any Encodable)? = nil, saveAs: String? = nil, timeout: TimeInterval? = nil
   ) async throws -> Data {
     let isRead = method == "GET"
     let key = isRead ? Self.savedKey(path, query) : saveAs
@@ -251,7 +258,7 @@ final class APIClient {
     }
     do {
       let (data, _) = try await authorized { token in
-        try self.request(path, method: method, query: query, body: body, token: token)
+        try self.request(path, method: method, query: query, body: body, token: token, timeout: timeout)
       } perform: { req in
         try await self.http.data(for: req)
       }
@@ -315,7 +322,7 @@ final class APIClient {
 
   fileprivate func request(
     _ path: String, method: String = "GET", query: [String: String?] = [:],
-    body: (any Encodable)? = nil, token: String?
+    body: (any Encodable)? = nil, token: String?, timeout: TimeInterval? = nil
   ) throws -> URLRequest {
     var url = Server.url.appending(path: path)
     let items = Self.queryItems(query)
@@ -324,7 +331,11 @@ final class APIClient {
     req.httpMethod = method
     // A read has a saved copy to fall back on, so don't wait the default
     // minute on a server that's asleep or off the network.
-    if method == "GET" { req.timeoutInterval = 10 }
+    if let timeout {
+      req.timeoutInterval = timeout
+    } else if method == "GET" {
+      req.timeoutInterval = 10
+    }
     if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
     if let body {
       req.setValue("application/json", forHTTPHeaderField: "Content-Type")
