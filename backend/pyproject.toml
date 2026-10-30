@@ -33,6 +33,9 @@ dependencies = [
     "pyjwt[crypto]>=2.10",
     # Uploads in an S3-compatible bucket (app/storage.py).
     "boto3>=1.35",
+    # Thumbnails of uploaded images and PDFs (app/thumbnails.py).
+    "pillow>=11",
+    "pypdfium2>=4.30",
     "prometheus-client>=0.21",
     "sentry-sdk>=2.19",
 ]

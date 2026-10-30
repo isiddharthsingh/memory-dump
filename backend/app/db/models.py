@@ -84,6 +84,9 @@ class Item(Base):
     # Where an uploaded file waits for the worker (app/storage.py), and its type.
     upload_key: Mapped[str | None] = mapped_column(Text)
     upload_mime: Mapped[str | None] = mapped_column(String(64))
+    # Where the file is kept once processed. Null for links and for uploads
+    # processed before files were kept.
+    file_key: Mapped[str | None] = mapped_column(Text)
     # "pending" once ingest is done until synthesis folds the item into the
     # wiki, then "done", or "failed" when synthesis gave up. Null for items
     # from before it was tracked.

@@ -1,5 +1,6 @@
 import contextlib
 import json
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
@@ -10,7 +11,7 @@ from sqlalchemy import DateTime, delete, func, literal, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import kv
+from app import kv, thumbnails
 from app.api.cached import cached_json
 from app.api.schemas import (
     ItemChanges,
@@ -26,6 +27,8 @@ from app.db.session import get_session
 from app.deps import get_current_user
 from app.queue import enqueue, enqueue_ingest, forget_job_id
 from app.storage import get_storage
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/items", tags=["items"])
 
@@ -196,9 +199,9 @@ async def patch_item(
     values: dict[str, object] = {}
     if body.share_text is not None:
         values["share_text"] = body.share_text or None
-    # An uploaded file is gone once processed, so there's nothing to re-run
-    # (`ingest_item` would fetch the `file://` placeholder): the note is kept
-    # without being embedded.
+    # An upload is analysed once: after that it has no upload_key, so there's
+    # nothing to re-run (`ingest_item` would fetch the `file://` placeholder),
+    # and the note is kept without being embedded.
     rerun = not (item.url.startswith("file://") and item.upload_key is None)
     if rerun:
         # "pending" until a worker claims it; the reconciler fails items left
@@ -223,9 +226,8 @@ async def retry_item(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Item:
     item = await _get_owned_item(session, item_id, current_user)
-    # Uploaded files are deleted once processed (see workers/ingest.py), so
-    # there's nothing to re-run; `ingest_item` would treat the `file://`
-    # placeholder as a web page.
+    # An upload is analysed once (see workers/ingest.py); `ingest_item` would
+    # treat the `file://` placeholder as a web page.
     if item.url.startswith("file://"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -240,6 +242,35 @@ async def retry_item(
     await session.refresh(item)
     await enqueue_ingest(item.id, item.ingest_generation)
     return item
+
+
+@router.get(
+    "/{item_id}/thumbnail",
+    response_class=Response,
+    responses={200: {"content": {"image/jpeg": {}}}},
+)
+async def item_thumbnail(
+    item_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> Response:
+    """An uploaded image's or PDF's thumbnail, the item's `thumbnail_url`.
+    It never changes, so clients may keep it as long as they like."""
+    item = await _get_owned_item(session, item_id, current_user)
+    missing = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No thumbnail")
+    if item.thumbnail_url != thumbnails.path(item.id):
+        raise missing
+    # Not holding a connection while storage answers.
+    await session.commit()
+    try:
+        jpeg = await get_storage().read(thumbnails.key(item_id))
+    except FileNotFoundError:
+        raise missing from None
+    return Response(
+        jpeg,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
 
 
 @router.get("/{item_id}/related", response_model=RelatedResponse)
@@ -308,7 +339,9 @@ async def delete_item(
     await enqueue("forget_item", str(current_user.id), str(item_id), _job_id=forget_job_id(item_id))
     # The chunks go by ON DELETE CASCADE, without loading their embeddings.
     # The tombstone tells other devices (GET /items/changes).
-    upload_key = item.upload_key
+    files = [key for key in (item.upload_key, item.file_key) if key]
+    if item.thumbnail_url == thumbnails.path(item.id):
+        files.append(thumbnails.key(item.id))
     # Two deletes of one item can both get here; the second adds nothing.
     await session.execute(
         pg_insert(ItemTombstone)
@@ -318,5 +351,9 @@ async def delete_item(
     await session.execute(delete(Item).where(Item.id == item.id))
     await session.commit()
     await kv.drop(kv.tags_key(current_user.id))
-    if upload_key:
-        await get_storage().delete(upload_key)
+    for key in files:
+        try:
+            await get_storage().delete(key)
+        except Exception:
+            # The item is gone, so the reconciler's sweep deletes it.
+            log.warning("couldn't delete %s; the storage sweep will", key, exc_info=True)

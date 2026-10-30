@@ -1,8 +1,9 @@
 """Which failures a later try can get past, and what a client may see of one.
 
 Transient: a provider that is rate-limiting, overloaded, unreachable or slow; a
-site that timed out or answered 5xx; a provider this process has stopped
-calling for a moment (`ProviderUnavailable`). Jobs retry those
+site that timed out or answered 5xx; upload storage (SeaweedFS, S3) that is
+unreachable or answered 5xx; a provider this process has stopped calling for a
+moment (`ProviderUnavailable`). Jobs retry those
 (app/workers/jobs.py) and the API answers them with 503 and Retry-After.
 Anything else (a bad request, a 404, a page that isn't public) would only fail
 the same way again.
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import anthropic
 import httpx
+from botocore import exceptions as boto_error  # type: ignore[import-untyped]
 from voyageai import error as voyage_error
 
 # Timeout, too early, rate limit, and the server-side failures (529 is
@@ -47,6 +49,10 @@ def is_transient(exc: BaseException) -> bool:
         return True
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in TRANSIENT_STATUSES
+    if isinstance(exc, boto_error.ConnectionError | boto_error.HTTPClientError):
+        return True
+    if isinstance(exc, boto_error.ClientError):
+        return exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") in TRANSIENT_STATUSES
     # A redirect to a scheme httpx can't fetch (intent://, mailto:) fails the
     # same way every time.
     return isinstance(exc, httpx.TransportError) and not isinstance(exc, httpx.UnsupportedProtocol)

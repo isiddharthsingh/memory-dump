@@ -117,8 +117,8 @@ async def ingest_file(
     """Accept a PDF or image, queue it for vision-based analysis.
 
     The bytes go to upload storage (app/storage.py) in chunks, never whole in
-    memory; the worker reads, analyzes, and deletes them. Long-term we only
-    keep the extracted text + analysis. A client that sends the same
+    memory; the worker reads and analyzes them, then keeps the file with a
+    thumbnail (deleting both if it fails). A client that sends the same
     Idempotency-Key again (a resend after a timeout) gets the item the first
     request saved instead of a second one.
     """

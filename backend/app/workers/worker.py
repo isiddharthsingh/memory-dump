@@ -22,7 +22,7 @@ from app.workers.compact import compact_topics, compact_user
 from app.workers.digest import DIGEST_KEEP_RESULT_S, digest_user, weekly_digest
 from app.workers.ingest import ingest_file, ingest_item
 from app.workers.jobs import JOB_TIMEOUT_S, MAX_TRIES
-from app.workers.reconcile import observe_queue, requeue_stuck
+from app.workers.reconcile import observe_queue, requeue_stuck, sweep_files
 from app.workers.synthesize import forget_item, synthesize_topics
 
 _settings = get_settings()
@@ -61,6 +61,8 @@ class WorkerSettings:
         ),
         # Every 5 minutes, and once as the worker starts.
         cron(requeue_stuck, minute=set(range(0, 60, 5)), run_at_startup=True),
+        # Hourly.
+        cron(sweep_files, minute={37}, run_at_startup=False),
         cron(observe_queue, run_at_startup=True),
     ]
     on_startup = startup

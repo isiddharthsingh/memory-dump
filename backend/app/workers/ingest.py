@@ -13,13 +13,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import AsyncIterator, Awaitable
 from dataclasses import dataclass
 from typing import Any
 
 import structlog
 from sqlalchemy import delete, func, select, update
 
-from app import kv, storage
+from app import kv, storage, thumbnails
 from app.ai.analyze import Analysis, analyze
 from app.ai.embed import chunk_text, embed_texts
 from app.ai.providers import get_vision_provider
@@ -113,6 +114,7 @@ async def _save(
     thumbnail_url: str | None,
     chunks: list[str],
     embeddings: list[list[float]],
+    file_key: str | None = None,
 ) -> bool:
     """Writes the result, unless the claim's generation is no longer current."""
     async with get_sessionmaker()() as session:
@@ -133,6 +135,7 @@ async def _save(
         item.status = "ready"
         item.error = None
         item.upload_key = None
+        item.file_key = file_key
         item.wiki_status = "pending"
 
         # Replace any previous chunks (idempotent re-ingest).
@@ -249,9 +252,10 @@ async def ingest_file(
 
     Mirrors `ingest_item` (claim, retries, wiki kickoff) but bypasses the URL
     extractor: the vision provider returns both the analysis and the extracted
-    text in one call. The file is deleted once the item is saved or has
-    failed for good. `file_path` and `mime_type` come from jobs an older API
-    queued; newer ones find the upload on the item.
+    text in one call. A thumbnail goes beside the file (app/thumbnails.py).
+    Once the item is saved the file is kept as its `file_key`; once it has
+    failed for good, both are deleted. `file_path` and `mime_type` come from
+    jobs an older API queued; newer ones find the upload on the item.
     """
     claim = await _claim(uuid.UUID(item_id), generation)
     if claim is None:
@@ -279,6 +283,7 @@ async def ingest_file(
         raw_text = result.raw_text or ""
         chunks = chunk_text(_text_for_embed(analysis, raw_text))
         embeddings = await embed_texts(chunks, input_type="document") if chunks else []
+        thumbnail_url = await _save_thumbnail(claim, data, mime)
     except Exception as exc:
         outcome = await _failed(ctx, claim, exc)
         # A superseded job leaves the file to the newer one.
@@ -291,24 +296,47 @@ async def ingest_file(
         title=analysis.title or original_name,
         analysis=analysis,
         raw_text=raw_text or None,
-        thumbnail_url=None,
+        thumbnail_url=thumbnail_url,
         chunks=chunks,
         embeddings=embeddings,
+        file_key=claim.upload_key,
     )
     if not saved:
         # The newer job for this item reads the same upload.
         return "superseded"
-    await _discard_upload(claim, file_path)
+    if file_path:
+        # An older API's upload lives outside storage, so it isn't kept.
+        await _discard(storage.legacy_delete(file_path))
     await _synthesize_next(ctx, claim)
     return "ready"
 
 
+async def _save_thumbnail(claim: _Claim, data: bytes, mime: str) -> str | None:
+    """Stores the file's thumbnail and returns its URL, or None when the
+    file can't be drawn."""
+    jpeg = await asyncio.to_thread(thumbnails.make, data, mime)
+    if jpeg is None:
+        return None
+
+    async def one() -> AsyncIterator[bytes]:
+        yield jpeg
+
+    await storage.get_storage().save(thumbnails.key(claim.item_id), one())
+    return thumbnails.path(claim.item_id)
+
+
 async def _discard_upload(claim: _Claim, file_path: str | None) -> None:
-    # Per design we keep only the extracted text.
+    """Deletes the files of an upload that failed for good."""
+    store = storage.get_storage()
+    if claim.upload_key:
+        await _discard(store.delete(claim.upload_key))
+    await _discard(store.delete(thumbnails.key(claim.item_id)))
+    if file_path:
+        await _discard(storage.legacy_delete(file_path))
+
+
+async def _discard(deletion: Awaitable[None]) -> None:
     try:
-        if claim.upload_key:
-            await storage.get_storage().delete(claim.upload_key)
-        if file_path:
-            await storage.legacy_delete(file_path)
+        await deletion
     except Exception:
         log.warning("couldn't delete an upload; the storage sweep will", exc_info=True)

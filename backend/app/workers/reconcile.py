@@ -1,5 +1,6 @@
-"""Puts back what the queue lost, every 5 minutes (`requeue_stuck`), and
-reports the queue's depth every minute (`observe_queue`).
+"""Puts back what the queue lost, every 5 minutes (`requeue_stuck`), deletes
+stored files whose item is gone, hourly (`sweep_files`), and reports the
+queue's depth every minute (`observe_queue`).
 
 The API commits an item and then queues its job, so a crash in between, or
 Redis losing a queued job (a restart between AOF syncs, a flush), leaves an
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from datetime import timedelta
 from typing import Any
 
@@ -23,7 +25,7 @@ from app.db.models import TOMBSTONE_DAYS, Item, ItemTombstone
 from app.db.session import get_sessionmaker
 from app.metrics import QUEUE_JOBS, QUEUE_OLDEST_SECONDS
 from app.queue import enqueue, enqueue_ingest, synthesize_job_id
-from app.storage import get_storage
+from app.storage import ABANDONED_AFTER_S, get_storage
 from app.workers.jobs import JOB_TIMEOUT_S, job
 
 log = logging.getLogger(__name__)
@@ -120,15 +122,47 @@ async def requeue_stuck(ctx: dict[str, Any]) -> str:
         job_id = synthesize_job_id(item_id, generation)
         if await enqueue("synthesize_topics", str(item_id), _job_id=job_id, pool=pool) is not None:
             resynthesized += 1
-    swept = await get_storage().sweep()
 
     summary = (
         f"requeued:{requeued},timed_out:{len(timed_out)},lost_uploads:{len(lost_uploads)},"
-        f"resynthesized:{resynthesized},tombstones:{len(tombstones)},uploads:{swept}"
+        f"resynthesized:{resynthesized},tombstones:{len(tombstones)}"
     )
     if requeued or timed_out or lost_uploads or resynthesized:
         log.warning("reconcile: %s", summary)
     return summary
+
+
+@job
+async def sweep_files(ctx: dict[str, Any]) -> str:
+    """Deletes the stored files whose item is gone (app/storage.py says how
+    they get left behind). It lists every stored file, so it runs hourly
+    rather than with `requeue_stuck`."""
+    return f"swept:{await _sweep_files()}"
+
+
+async def _sweep_files() -> int:
+    store = get_storage()
+    owners = {key: _owner(key) for key in await store.keys_older_than(ABANDONED_AFTER_S)}
+    ids = list({item_id for item_id in owners.values() if item_id is not None})
+    live: set[uuid.UUID] = set()
+    async with get_sessionmaker()() as session:
+        for start in range(0, len(ids), BATCH):
+            batch = ids[start : start + BATCH]
+            live.update(
+                (await session.execute(select(Item.id).where(Item.id.in_(batch)))).scalars()
+            )
+    orphans = [key for key, item_id in owners.items() if item_id not in live]
+    for key in orphans:
+        await store.delete(key)
+    return len(orphans)
+
+
+def _owner(key: str) -> uuid.UUID | None:
+    """The item a stored file belongs to: the id its key starts with."""
+    try:
+        return uuid.UUID(key.partition(".")[0])
+    except ValueError:
+        return None
 
 
 async def observe_queue(ctx: dict[str, Any]) -> None:

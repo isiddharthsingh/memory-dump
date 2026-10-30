@@ -1,11 +1,14 @@
-"""Where uploaded files wait between the API and the worker.
+"""Where uploaded files are kept, with their thumbnails (app/thumbnails.py).
 
 STORAGE_BACKEND=local keeps them under UPLOADS_DIR, a volume the api and worker
 containers must share, so both run on one host. STORAGE_BACKEND=s3 keeps them
-in an S3-compatible bucket (S3, R2, MinIO), so they needn't. The worker deletes
-a file once it has the text out of it; a file whose item was never processed is
-swept after ABANDONED_AFTER (locally by the reconciler, in a bucket by a
-lifecycle rule that expires objects after a few days).
+in an S3-compatible bucket (the compose stack's SeaweedFS, S3, R2, MinIO), so
+they needn't. Every key starts with its item's id. The worker keeps an image or
+PDF once it has the text out of it, and deletes it when processing fails; the
+API deletes an item's files with the item. Whatever is left behind (an upload
+whose row never landed, the files of a deleted account, a delete that couldn't
+reach storage) the reconciler sweeps once it is ABANDONED_AFTER_S old and its
+item is gone, so the bucket must hold nothing else.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ import asyncio
 import tempfile
 import time
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any, Protocol
 
@@ -21,7 +25,8 @@ import anyio
 
 from app.config import get_settings
 
-ABANDONED_AFTER_S = 7 * 24 * 3600
+# A file is saved before its item's row is committed: give it this long.
+ABANDONED_AFTER_S = 3600
 
 
 class Storage(Protocol):
@@ -31,7 +36,7 @@ class Storage(Protocol):
 
     async def delete(self, key: str) -> None: ...
 
-    async def sweep(self) -> int: ...
+    async def keys_older_than(self, seconds: float) -> list[str]: ...
 
 
 class LocalStorage:
@@ -52,22 +57,19 @@ class LocalStorage:
                 await f.write(chunk)
 
     async def read(self, key: str) -> bytes:
+        """Raises FileNotFoundError when there's no such file."""
         return await self._path(key).read_bytes()
 
     async def delete(self, key: str) -> None:
         await self._path(key).unlink(missing_ok=True)
 
-    async def sweep(self) -> int:
-        """Deletes files older than ABANDONED_AFTER_S. Returns how many."""
+    async def keys_older_than(self, seconds: float) -> list[str]:
         if not await self.root.exists():
-            return 0
-        cutoff = time.time() - ABANDONED_AFTER_S
-        swept = 0
-        async for path in self.root.iterdir():
-            if (await path.stat()).st_mtime < cutoff:
-                await path.unlink(missing_ok=True)
-                swept += 1
-        return swept
+            return []
+        cutoff = time.time() - seconds
+        return [
+            path.name async for path in self.root.iterdir() if (await path.stat()).st_mtime < cutoff
+        ]
 
 
 class S3Storage:
@@ -86,17 +88,36 @@ class S3Storage:
             await asyncio.to_thread(self.client.upload_fileobj, buf, self.bucket, key)
 
     async def read(self, key: str) -> bytes:
+        """Raises FileNotFoundError when there's no such object."""
+
         def get() -> bytes:
-            return bytes(self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read())
+            try:
+                obj = self.client.get_object(Bucket=self.bucket, Key=key)
+            except self.client.exceptions.NoSuchKey:
+                raise FileNotFoundError(key) from None
+            return bytes(obj["Body"].read())
 
         return await asyncio.to_thread(get)
 
     async def delete(self, key: str) -> None:
         await asyncio.to_thread(self.client.delete_object, Bucket=self.bucket, Key=key)
 
-    async def sweep(self) -> int:
-        # The bucket's lifecycle rule does this.
-        return 0
+    async def keys_older_than(self, seconds: float) -> list[str]:
+        def listed() -> list[str]:
+            cutoff = datetime.now(UTC) - timedelta(seconds=seconds)
+            pages = self.client.get_paginator("list_objects_v2").paginate(Bucket=self.bucket)
+            try:
+                return [
+                    obj["Key"]
+                    for page in pages
+                    for obj in page.get("Contents", [])
+                    if obj["LastModified"] < cutoff
+                ]
+            except self.client.exceptions.NoSuchBucket:
+                # SeaweedFS creates it with the first upload.
+                return []
+
+        return await asyncio.to_thread(listed)
 
 
 @lru_cache(maxsize=1)

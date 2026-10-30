@@ -52,8 +52,9 @@ async def delete_me(
     The ON DELETE CASCADE FKs on items, item_chunks, topic_pages,
     topic_page_chunks, devices, and chats clear every trace of the account in
     one statement; SuperTokens then drops the login and every session. If that
-    call fails the row deletion rolls back. No tombstone — bring your own
-    backup.
+    call fails the row deletion rolls back. The uploaded files and thumbnails
+    go with the next hourly storage sweep (`sweep_files`), their items gone.
+    No tombstone — bring your own backup.
     """
     # A big library cascades through a lot of rows: more than the usual
     # statement timeout allows.
