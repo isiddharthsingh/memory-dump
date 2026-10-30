@@ -32,7 +32,7 @@ docker compose exec api ruff format .
 docker compose exec api mypy app                        # type-check
 ```
 
-Worker entry point: `arq app.workers.worker.WorkerSettings` (the `worker` compose service runs this). Functions registered there: `ingest_item`, `synthesize_topics`, `compact_topics`. A cron job runs `compact_topics` nightly at 03:14 UTC.
+Worker entry point: `arq app.workers.worker.WorkerSettings` (the `worker` compose service runs this). Functions registered there: `ingest_item`, `ingest_file`, `synthesize_topics`, `forget_item`, `compact_topics`, `weekly_digest`. A cron job runs `compact_topics` nightly at 03:14 UTC.
 
 `pytest-asyncio` is in `asyncio_mode = "auto"` — don't decorate async tests with `@pytest.mark.asyncio`.
 
@@ -74,6 +74,8 @@ If you add a new source type, the work is: new extractor in `app/extractors/`, r
 
 `compact_topics` (nightly) is the GC pass that merges/prunes drifted pages.
 
+Deleting an item leaves no trace of it. `DELETE /items/{id}` enqueues `forget_item` (also in `app/workers/synthesize.py`) before it deletes, so a delete never lands without its cleanup; the job retries until the item is gone. Pages only that item supported are deleted at once, along with the Ask history source cards and `[item:…]` / `[wiki:…]` markers that point at the item or those pages (a chat's `updated_at` is left alone, so History keeps its order). Then each page that cites the item or links to a deleted page is rewritten in its own transaction: Claude (`CLAUDE_SYNTHESIS_MODEL`, `FORGET_SYSTEM`) rewrites it, `forget_in_body` removes whatever is still cited only to the item and unlinks links to deleted pages, and the page is re-embedded with its `version` bumped. Last, stub pages nothing links to any more are deleted. Rate limits and overloads retry with backoff like ingest, and a retry picks up the pages still left. Synthesis and `forget_item` both take a per-user Postgres advisory lock (`_lock_wiki`), so neither writes a page from a copy the other has changed; a job that waits 30 s for it runs again later instead of holding a worker. Synthesis keeps nothing when its item was deleted while Claude was writing.
+
 ### Hybrid retrieval (`/search` and `/ask`)
 
 `app/ai/retrieval.py` is the single source of truth and is used by both endpoints. The pipeline:
@@ -96,7 +98,7 @@ If you change the chunking or embedding model, both `items` and `topic_pages` ne
 
 ### Offline copy (iOS)
 
-The app stays readable with no server. `APIClient` saves every GET body to disk per account (`Shared/SavedResponses.swift`, Application Support/Offline/<user id>/, keyed by path and sorted query), and when a request can't reach the server (any `URLError` but cancel, or 502/503/504) a GET returns that saved copy and sets `isOffline`, which the Library and Wiki subtitles show. Writes never fall back. `APIClient.saved` reads only the saved copies, so screens show them at once and then refresh from the server. `MemoryDump/App/OfflineSync.swift` runs when the app becomes active: it walks `/items` in the Library's page size (so offline scrolling finds the same pages), then fetches each item, wiki page and chat whose status, version or `updated_at` changed since its last walk. Thumbnails go through `CachedImage`, a disk `URLCache` that always prefers its copy. Signing out, deleting the account, or a rejected session clears both. Search and Ask still need the server.
+The app stays readable with no server. `APIClient` saves every GET body to disk per account (`Shared/SavedResponses.swift`, Application Support/Offline/<user id>/, keyed by path and sorted query), and when a request can't reach the server (any `URLError` but cancel, or 502/503/504) a GET returns that saved copy and sets `isOffline`, which the Library and Wiki subtitles show. Writes never fall back. `APIClient.saved` reads only the saved copies, so screens show them at once and then refresh from the server. `MemoryDump/App/OfflineSync.swift` runs when the app becomes active: it walks `/items` in the Library's page size (so offline scrolling finds the same pages), then fetches each item, wiki page and chat whose status, version or `updated_at` changed since its last walk. Items and chats the server no longer lists lose their saved copies too, and so do wiki pages once they answer 404 (the list holds only the 100 most recently updated). Thumbnails go through `CachedImage`, a disk `URLCache` that always prefers its copy. Signing out, deleting the account, or a rejected session clears both. Search and Ask still need the server.
 
 ### Auth
 
