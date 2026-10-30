@@ -1,9 +1,10 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.cached import cached_json
 from app.api.schemas import TopicPageDetail, TopicPageSummary
 from app.db.models import TopicPage, User
 from app.db.session import get_session
@@ -32,9 +33,10 @@ async def list_pages(
 @router.get("/{slug}", response_model=TopicPageDetail)
 async def get_page(
     slug: str,
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
-) -> TopicPage:
+) -> Response:
     page = (
         await session.execute(
             select(TopicPage)
@@ -44,4 +46,4 @@ async def get_page(
     ).scalar_one_or_none()
     if page is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Topic page not found")
-    return page
+    return cached_json(request, TopicPageDetail.model_validate(page))

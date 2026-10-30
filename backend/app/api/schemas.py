@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 class IngestRequest(BaseModel):
     url: HttpUrl
-    share_text: str | None = None
+    share_text: str | None = Field(default=None, max_length=20_000)
 
 
 class ItemSummary(BaseModel):
@@ -37,7 +37,7 @@ class ItemDetail(ItemSummary):
 
 
 class ItemPatch(BaseModel):
-    share_text: str | None = None
+    share_text: str | None = Field(default=None, max_length=20_000)
 
 
 class IngestResponse(BaseModel):
@@ -45,8 +45,8 @@ class IngestResponse(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    q: str
-    limit: int = 10
+    q: str = Field(min_length=1, max_length=1_000)
+    limit: int = Field(default=10, ge=1, le=50)
 
 
 class SearchHit(BaseModel):
@@ -64,7 +64,7 @@ class SearchResponse(BaseModel):
 
 
 class AskRequest(BaseModel):
-    question: str
+    question: str = Field(min_length=1, max_length=10_000)
 
 
 class CitationOut(BaseModel):
@@ -101,6 +101,9 @@ class ChatTurn(BaseModel):
 
 class ChatIn(BaseModel):
     turns: list[ChatTurn] = Field(min_length=1, max_length=500)
+    # The version the app last saw (0 for a chat it is creating): a save over a
+    # newer one is refused with 409. Without it the save always wins.
+    version: int | None = Field(default=None, ge=0)
 
 
 class ChatSummary(BaseModel):
@@ -108,6 +111,7 @@ class ChatSummary(BaseModel):
     questions: list[str]
     created_at: datetime
     updated_at: datetime
+    version: int
 
 
 class ChatOut(BaseModel):
@@ -115,6 +119,7 @@ class ChatOut(BaseModel):
     turns: list[ChatTurn]
     created_at: datetime
     updated_at: datetime
+    version: int
 
 
 class TopicPageSummary(BaseModel):
@@ -131,6 +136,17 @@ class TopicPageSummary(BaseModel):
 
 class TopicPageDetail(TopicPageSummary):
     body_md: str
+
+
+class ItemChanges(BaseModel):
+    """What changed in the library since a `since`. `full` means the
+    deletions from then aren't all kept any more: walk the list instead."""
+
+    full: bool
+    changed: list[uuid.UUID]
+    deleted: list[uuid.UUID]
+    # Pass back as `since` next time. UTC, ending in Z (no "+" to escape).
+    until: str
 
 
 class RelatedResponse(BaseModel):
