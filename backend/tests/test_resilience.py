@@ -19,7 +19,7 @@ from app import kv
 from app.ai import clients, embed
 from app.ai.clients import _Breaker
 from app.api import search as search_api
-from app.auth.rate_limit import AUTH_PATH, take
+from app.auth.rate_limit import is_auth_path, take
 from app.config import get_settings
 from app.errors import ProviderUnavailable, is_transient
 from app.extractors.webpage import NotPublic, TooLarge, _CappedClient
@@ -231,11 +231,34 @@ def test_sign_in_attempts_are_capped_per_address(
         _clear(client, key)
 
 
+def _scope(path: str) -> dict[str, Any]:
+    return {
+        "type": "http",
+        "scheme": "http",
+        "server": ("test", 80),
+        "path": path,
+        "query_string": b"",
+        "headers": [],
+    }
+
+
 def test_auth_limit_matches_every_sign_in_route() -> None:
-    for path in ("/auth/signup/", "/auth/public/signup", "/auth/dashboard/api/signin"):
-        assert AUTH_PATH.fullmatch(path)
-    for path in ("/auth/signup/email/exists", "/auth/session/refresh", "/auth/signout"):
-        assert not AUTH_PATH.fullmatch(path)
+    # Each of these reaches a sign-in or sign-up in SuperTokens.
+    for path in (
+        "/auth/signup/",
+        "/auth/public/signup",
+        "/auth/dashboard/api/signin",
+        "/auth/signin ",
+        "/auth/signin;x",
+    ):
+        assert is_auth_path(_scope(path)), path
+    for path in (
+        "/auth/signup/email/exists",
+        "/auth/session/refresh",
+        "/auth/signout",
+        "/auth/signin#x",
+    ):
+        assert not is_auth_path(_scope(path)), path
 
 
 def test_search_is_rate_limited_per_user(

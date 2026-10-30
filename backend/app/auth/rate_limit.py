@@ -22,8 +22,10 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from redis.exceptions import RedisError
+from starlette.datastructures import URL
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
+from supertokens_python.normalised_url_path import NormalisedURLPath
 
 from app import kv
 from app.config import Settings, get_settings
@@ -90,10 +92,18 @@ def rate_limit(bucket: str, limit_attr: str) -> Callable[..., Coroutine[None, No
     return _dep
 
 
-# SuperTokens' routes that check a password.
-# SuperTokens also answers these with a trailing slash and under a tenant
-# (/auth/public/signin), and the dashboard signs in at /auth/dashboard/api/signin.
+# SuperTokens' routes that check a password. It also answers them with a
+# trailing slash and under a tenant (/auth/public/signin), and the dashboard
+# signs in at /auth/dashboard/api/signin.
 AUTH_PATH = re.compile(r"/auth(?:/.+)?/sign(?:in|up)/*")
+
+
+def is_auth_path(scope: Scope) -> bool:
+    """Judged on the path as SuperTokens' middleware normalises it before
+    routing (surrounding whitespace and `;params` dropped), so no spelling it
+    routes to a sign-in gets past the limit."""
+    path = NormalisedURLPath(URL(scope=scope).path).get_as_string_dangerous()
+    return AUTH_PATH.fullmatch(path) is not None
 
 
 class AuthRateLimit:
@@ -106,11 +116,7 @@ class AuthRateLimit:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if (
-            scope["type"] == "http"
-            and scope["method"] == "POST"
-            and AUTH_PATH.fullmatch(scope["path"])
-        ):
+        if scope["type"] == "http" and scope["method"] == "POST" and is_auth_path(scope):
             client = scope.get("client")
             address = client[0] if client else "unknown"
             wait = await take(f"rl:auth:{address}", get_settings().rate_limit_auth_per_hour)
