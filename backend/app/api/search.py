@@ -6,11 +6,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.retrieval import hybrid_search
 from app.api.schemas import SearchHit, SearchRequest, SearchResponse
+from app.auth.rate_limit import rate_limit
 from app.db.models import User
 from app.db.session import get_session
 from app.deps import get_current_user
 
-router = APIRouter(prefix="/search", tags=["search"])
+# Each search embeds the query and reranks with Voyage.
+_search_rate_limit = rate_limit("search", "rate_limit_search_per_hour")
+
+router = APIRouter(prefix="/search", tags=["search"], dependencies=[Depends(_search_rate_limit)])
 
 # Rerank score a semantic-only match needs to be listed. With rerank-2.5 on a
 # real library, the closest chunks to nonsense or off-topic queries scored

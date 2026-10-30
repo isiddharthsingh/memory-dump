@@ -16,9 +16,9 @@ import re
 import uuid
 from dataclasses import dataclass
 
-from anthropic import AsyncAnthropic
 from slugify import slugify
 
+from app.ai.clients import claude
 from app.ai.embed import chunk_text, embed_texts
 from app.config import get_settings
 
@@ -154,7 +154,6 @@ async def propose_slugs(
     existing_slugs: list[str],
 ) -> ProposedSlugs:
     settings = get_settings()
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     existing_text = ", ".join(existing_slugs[:300]) if existing_slugs else "(none yet)"
     item_facts = (
@@ -166,7 +165,8 @@ async def propose_slugs(
         "Return JSON only."
     )
 
-    resp = await client.messages.create(
+    resp = await claude(
+        purpose="propose_slugs",
         model=settings.claude_analysis_model,
         max_tokens=200,
         system=[
@@ -206,7 +206,6 @@ async def patch_page(
     related_slugs: list[str],
 ) -> PatchedPage:
     settings = get_settings()
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     title = existing_title or title_from_slug(slug)
     body = existing_body or ""
@@ -225,7 +224,8 @@ async def patch_page(
         "Produce the full updated markdown for this page. Output ONLY the markdown."
     )
 
-    resp = await client.messages.create(
+    resp = await claude(
+        purpose="patch_page",
         model=settings.claude_synthesis_model,
         max_tokens=4096,
         system=[
@@ -254,14 +254,14 @@ async def remove_from_page(*, body: str, item_id: uuid.UUID, gone_slugs: list[st
     """The page rewritten without a deleted item and without links to deleted
     pages, or None when Claude's answer is empty, cut off or refused."""
     settings = get_settings()
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     user = (
         f"Deleted item: [item:{item_id}]\n"
         f"Pages that no longer exist: {', '.join(gone_slugs) or '(none)'}\n\n"
         f"=== Page (markdown) ===\n{body}"
     )
-    resp = await client.messages.create(
+    resp = await claude(
+        purpose="forget",
         model=settings.claude_synthesis_model,
         max_tokens=16_000,
         system=[{"type": "text", "text": FORGET_SYSTEM, "cache_control": {"type": "ephemeral"}}],

@@ -5,6 +5,8 @@ Returns ranked Item + (optionally) topic-page chunks for the Ask pipeline.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Literal
@@ -12,7 +14,9 @@ from typing import Literal
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.embed import embed_texts, rerank
+from app.ai.embed import embed_query, rerank
+
+log = logging.getLogger(__name__)
 
 CandidateKind = Literal["item", "topic_page"]
 
@@ -25,8 +29,8 @@ class Candidate:
     ord: int
     text: str
     title: str | None
-    url: str | None       # for items
-    slug: str | None      # for topic pages
+    url: str | None  # for items
+    slug: str | None  # for topic pages
     score: float = 0.0
 
 
@@ -46,6 +50,18 @@ def _rrf_merge(rankings: list[list[tuple[str, str]]], k: int = 60) -> dict[tuple
 async def _dense_search(
     session: AsyncSession, query_vec: list[float], limit: int, user_id: uuid.UUID
 ) -> list[Candidate]:
+    # The HNSW indexes hold every user's chunks and the user filter applies
+    # after them. With a fixed scan (ef_search, 40 by default) a user owning a
+    # small share of the chunks would get few or none of theirs back, so the
+    # scan carries on until it has `limit` of this user's (pgvector 0.8
+    # iterative scans). relaxed_order may return them a little out of order;
+    # the query sorts them again.
+    await session.execute(
+        text(
+            "SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true),"
+            " set_config('hnsw.ef_search', '100', true)"
+        )
+    )
     sql = text(
         """
         WITH ic AS (
@@ -106,14 +122,20 @@ async def _dense_search(
 async def _lexical_search(
     session: AsyncSession, query: str, limit: int, user_id: uuid.UUID
 ) -> list[Candidate]:
-    # Use the precomputed `fts_doc` generated columns (created in the
-    # initial migration) — same content as item/topic-page fields, indexed
-    # for fast GIN lookup. For per-chunk ranking we still need a runtime
-    # tsvector over the chunk text, but that's a per-row computation, not
-    # an index expression, so STABLE is fine.
+    # A chunk matches when its own text does (the chunk's `fts` column) or when
+    # its item or page as a whole does (`fts_doc`: title, tags, the lexical
+    # anchors). Both are stored tsvectors with GIN indexes, so each branch of
+    # the UNION is an index lookup instead of parsing every chunk per query.
     sql = text(
         """
         WITH q AS (SELECT websearch_to_tsquery('english'::regconfig, :q) AS tsq),
+        ic_hits AS (
+            SELECT ic.id FROM item_chunks ic, q
+            WHERE ic.user_id = :uid AND ic.fts @@ q.tsq
+            UNION
+            SELECT ic.id FROM items i JOIN item_chunks ic ON ic.item_id = i.id, q
+            WHERE i.user_id = :uid AND i.fts_doc @@ q.tsq
+        ),
         ic AS (
             SELECT 'item'::text AS kind,
                    ic.id AS chunk_id,
@@ -121,21 +143,20 @@ async def _lexical_search(
                    ic.ord, ic.text,
                    i.title, i.url,
                    NULL::text AS slug,
-                   ts_rank_cd(
-                     i.fts_doc ||
-                     to_tsvector('english'::regconfig, coalesce(ic.text,'')),
-                     q.tsq
-                   ) AS score
-            FROM item_chunks ic
+                   ts_rank_cd(i.fts_doc || ic.fts, q.tsq) AS score
+            FROM ic_hits
+            JOIN item_chunks ic ON ic.id = ic_hits.id
             JOIN items i ON i.id = ic.item_id, q
-            WHERE ic.user_id = :uid
-              AND i.status = 'ready'
-              AND (
-                i.fts_doc @@ q.tsq
-                OR to_tsvector('english'::regconfig, coalesce(ic.text,'')) @@ q.tsq
-              )
+            WHERE i.status = 'ready'
             ORDER BY score DESC
             LIMIT :lim
+        ),
+        tc_hits AS (
+            SELECT tc.id FROM topic_page_chunks tc, q
+            WHERE tc.user_id = :uid AND tc.fts @@ q.tsq
+            UNION
+            SELECT tc.id FROM topic_pages tp JOIN topic_page_chunks tc ON tc.topic_page_id = tp.id, q
+            WHERE tp.user_id = :uid AND tp.fts_doc @@ q.tsq
         ),
         tc AS (
             SELECT 'topic_page'::text AS kind,
@@ -145,18 +166,10 @@ async def _lexical_search(
                    tp.title,
                    NULL::text AS url,
                    tp.slug,
-                   ts_rank_cd(
-                     tp.fts_doc ||
-                     to_tsvector('english'::regconfig, coalesce(tc.text,'')),
-                     q.tsq
-                   ) AS score
-            FROM topic_page_chunks tc
+                   ts_rank_cd(tp.fts_doc || tc.fts, q.tsq) AS score
+            FROM tc_hits
+            JOIN topic_page_chunks tc ON tc.id = tc_hits.id
             JOIN topic_pages tp ON tp.id = tc.topic_page_id, q
-            WHERE tc.user_id = :uid
-              AND (
-                tp.fts_doc @@ q.tsq
-                OR to_tsvector('english'::regconfig, coalesce(tc.text,'')) @@ q.tsq
-              )
             ORDER BY score DESC
             LIMIT :lim
         )
@@ -202,13 +215,26 @@ async def hybrid_search(
     unless its rerank score reaches it: nearest neighbours exist even for a
     query that matches nothing. Keyword matches are kept whatever their score.
     """
-    embeddings = await embed_texts([query], input_type="query")
-    if not embeddings:
-        return []
-    qv = embeddings[0]
+    # The keyword search doesn't need the embedding, so it runs while Voyage
+    # embeds the query.
+    embedded, lexical = await asyncio.gather(
+        embed_query(query),
+        _lexical_search(session, query, candidate_limit, user_id),
+        return_exceptions=True,
+    )
+    if isinstance(lexical, BaseException):
+        raise lexical
+    qv: list[float] | None = None
+    if isinstance(embedded, BaseException):
+        # Without the query's embedding, keyword search still answers.
+        log.warning("query embedding failed, searching by keyword only", exc_info=embedded)
+    else:
+        qv = embedded
 
-    dense = await _dense_search(session, qv, candidate_limit, user_id)
-    lexical = await _lexical_search(session, query, candidate_limit, user_id)
+    dense = await _dense_search(session, qv, candidate_limit, user_id) if qv else []
+    # Done with the database: don't hold a pooled connection (or the SET
+    # LOCALs above) while Voyage reranks and Claude answers.
+    await session.commit()
 
     by_key: dict[tuple[str, str], Candidate] = {}
     for c in dense + lexical:

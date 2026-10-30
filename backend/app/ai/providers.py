@@ -16,9 +16,8 @@ import json
 import re
 from typing import Protocol
 
-from anthropic import AsyncAnthropic
-
 from app.ai.analyze import Analysis
+from app.ai.clients import claude
 from app.config import get_settings
 
 VISION_SYSTEM = """You are an analyst extracting structured information from \
@@ -120,13 +119,13 @@ class AnthropicVisionProvider:
 
     async def analyze_pdf(self, data: bytes, filename: str) -> VisionResult:
         settings = get_settings()
-        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
         b64 = base64.b64encode(data).decode("ascii")
         prompt = (
             f"Filename: {filename}\n\n"
             "Read the attached PDF and return ONLY the JSON object as specified."
         )
-        resp = await client.messages.create(
+        resp = await claude(
+            purpose="analyze_pdf",
             model=settings.claude_analysis_model,
             max_tokens=4096,
             system=[
@@ -158,10 +157,10 @@ class AnthropicVisionProvider:
 
     async def analyze_image(self, data: bytes, mime_type: str) -> VisionResult:
         settings = get_settings()
-        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
         b64 = base64.b64encode(data).decode("ascii")
         prompt = "Describe the attached image and return ONLY the JSON object as specified."
-        resp = await client.messages.create(
+        resp = await claude(
+            purpose="analyze_image",
             model=settings.claude_analysis_model,
             max_tokens=2048,
             system=[

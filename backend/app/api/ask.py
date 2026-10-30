@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import AsyncIterator
 from typing import Annotated
 
@@ -12,6 +13,9 @@ from app.auth.rate_limit import rate_limit
 from app.db.models import User
 from app.db.session import get_session
 from app.deps import get_current_user
+from app.errors import user_message
+
+log = logging.getLogger(__name__)
 
 _ask_rate_limit = rate_limit("ask", "rate_limit_ask_per_hour")
 
@@ -74,7 +78,10 @@ async def ask_stream_endpoint(
                         },
                     )
         except Exception as e:  # noqa: BLE001
-            yield _sse("error", {"message": str(e)})
+            # The answer has started streaming, so the status is already 200:
+            # the failure goes in the stream, as a sentence the app can show.
+            log.warning("ask stream failed", exc_info=e)
+            yield _sse("error", {"message": user_message(e)})
 
     return StreamingResponse(
         gen(),

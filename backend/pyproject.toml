@@ -31,6 +31,10 @@ dependencies = [
     "supertokens-python>=0.31.4,<0.32",
     # APNs provider tokens (app/notifications.py).
     "pyjwt[crypto]>=2.10",
+    # Uploads in an S3-compatible bucket (app/storage.py).
+    "boto3>=1.35",
+    "prometheus-client>=0.21",
+    "sentry-sdk>=2.19",
 ]
 
 [project.optional-dependencies]

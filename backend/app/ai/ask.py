@@ -5,10 +5,10 @@ import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
-from anthropic import AsyncAnthropic
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.clients import claude, claude_stream
 from app.ai.retrieval import Candidate, hybrid_search
 from app.config import get_settings
 from app.db.models import Item, TopicPage
@@ -159,13 +159,14 @@ async def ask_stream(
         return
 
     settings = get_settings()
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     context = _format_context(chunks)
     user = f"Context:\n\n{context}\n\nQuestion: {question}\n\nAnswer with citations:"
 
     pieces: list[str] = []
-    async with client.messages.stream(
+    async with claude_stream(
+        purpose="ask",
+        timeout_s=settings.ask_timeout_s,
         model=settings.claude_ask_model,
         max_tokens=1024,
         system=[
@@ -191,12 +192,13 @@ async def ask(session: AsyncSession, question: str, user_id: uuid.UUID) -> AskRe
         )
 
     settings = get_settings()
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     context = _format_context(chunks)
     user = f"Context:\n\n{context}\n\nQuestion: {question}\n\nAnswer with citations:"
 
-    resp = await client.messages.create(
+    resp = await claude(
+        purpose="ask",
+        timeout_s=settings.ask_timeout_s,
         model=settings.claude_ask_model,
         max_tokens=1024,
         system=[

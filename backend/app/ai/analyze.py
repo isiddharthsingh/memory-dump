@@ -4,8 +4,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from anthropic import AsyncAnthropic
-
+from app.ai.clients import claude
 from app.config import get_settings
 from app.extractors.base import ExtractedContent
 
@@ -69,7 +68,6 @@ async def analyze(
     source: str,
 ) -> Analysis:
     settings = get_settings()
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     user_blocks: list[dict] = []
 
@@ -96,7 +94,8 @@ async def analyze(
     )
     user_blocks.append({"type": "text", "text": prompt})
 
-    resp = await client.messages.create(
+    resp = await claude(
+        purpose="analyze",
         model=settings.claude_analysis_model,
         max_tokens=1024,
         system=[{"type": "text", "text": ANALYSIS_SYSTEM, "cache_control": {"type": "ephemeral"}}],
