@@ -1,8 +1,14 @@
 import httpx
 import pytest
 
-from app.extractors.base import detect_source, get_extractor
+from app.extractors.base import ExtractedContent, detect_source, get_extractor
 from app.extractors.reddit import _parse, _to_json_url
+from app.extractors.twitter import (
+    _oembed_text,
+    article_markdown,
+    compose,
+    linked_url,
+)
 from app.extractors.webpage import NotPublic, WebpageExtractor, public_address, public_client
 from app.extractors.youtube import extract_video_id
 
@@ -157,6 +163,114 @@ def test_chunk_text_packs_paragraphs() -> None:
     assert all(len(c) <= 1000 for c in chunks)
 
 
+def _post(**extra: object) -> dict[str, object]:
+    return {
+        "text": "Introducing Droid 1.0.\n\nBuilt for complex projects:\n>faster",
+        "author": {"name": "Factory", "screen_name": "FactoryAI"},
+        "raw_text": {"facets": []},
+        "media": {},
+        **extra,
+    }
+
+
+def test_twitter_compose_keeps_each_section_free_of_blank_lines() -> None:
+    post = _post(
+        quote={"text": "Imagine every pixel\n\nstreamed live", "author": {"screen_name": "zan"}},
+        media={"all": [{"type": "video", "thumbnail_url": "https://pbs.twimg.com/v.jpg"}]},
+    )
+    c = compose(post, "watch later")
+    assert c.raw_text == (
+        "Author: Factory\n\n"
+        "Tweet:\nIntroducing Droid 1.0.\nBuilt for complex projects:\n>faster\n\n"
+        "Quoted post:\n@zan: Imagine every pixel\nstreamed live\n\n"
+        "Media: 1 video\n\n"
+        "User note:\nwatch later"
+    )
+    assert c.title == "Post by Factory"
+    assert c.thumbnail_url == "https://pbs.twimg.com/v.jpg"
+    # A deleted quote is left out rather than shown as a tombstone.
+    assert "Quoted post" not in (compose(_post(quote={"type": "tombstone"}), None).raw_text or "")
+
+
+def test_twitter_article_blocks_become_markdown() -> None:
+    article = {
+        "title": "2025 LLM Year in Review",
+        "preview_text": "preview",
+        "cover_media": {"media_info": {"original_img_url": "https://pbs.twimg.com/cover.jpg"}},
+        "content": {
+            "blocks": [
+                {"type": "unstyled", "text": "Intro.", "entityRanges": []},
+                {"type": "header-two", "text": "RLVR", "entityRanges": []},
+                {"type": "ordered-list-item", "text": "Pretraining", "entityRanges": []},
+                {"type": "ordered-list-item", "text": "SFT", "entityRanges": []},
+                {"type": "unordered-list-item", "text": "a bullet", "entityRanges": []},
+                {"type": "atomic", "text": " ", "entityRanges": [{"key": 0}]},
+                {"type": "atomic", "text": " ", "entityRanges": [{"key": 1}]},
+                {"type": "unstyled", "text": "  ", "entityRanges": []},
+            ],
+            "entityMap": [
+                {"key": "0", "value": {"type": "MEDIA", "data": {}}},
+                {
+                    "key": "1",
+                    "value": {
+                        "type": "MARKDOWN",
+                        "data": {"markdown": "```py\nx = 1\n\ny = 2\n```"},
+                    },
+                },
+            ],
+        },
+    }
+    assert article_markdown(article) == (
+        "Intro.\n## RLVR\n1. Pretraining\n2. SFT\n- a bullet\n```py\nx = 1\ny = 2\n```"
+    )
+    c = compose(_post(text="", article=article), None, link="https://ignored.example")
+    assert c.title == "2025 LLM Year in Review"
+    assert c.thumbnail_url == "https://pbs.twimg.com/cover.jpg"
+    assert c.raw_text is not None and "Tweet:" not in c.raw_text
+    assert "Title: 2025 LLM Year in Review\n\nBody:\nIntro.\n## RLVR" in c.raw_text
+
+
+def test_twitter_linked_url_skips_x_links_and_falls_back_to_the_card() -> None:
+    facets = [
+        {"type": "mention", "replacement": "https://x.com/zan"},
+        {"type": "url", "replacement": "https://x.com/i/status/1"},
+        {"type": "url", "replacement": "https://simonwillison.net/2026/Oct/29/post/"},
+    ]
+    assert linked_url(_post(raw_text={"facets": facets})) == (
+        "https://simonwillison.net/2026/Oct/29/post/"
+    )
+    assert linked_url(_post(card={"url": "https://example.com/a"})) == "https://example.com/a"
+    assert linked_url(_post(card={"url": "https://t.co/abc"})) is None
+    assert linked_url(_post()) is None
+
+
+def test_twitter_compose_adds_the_linked_page_or_its_card() -> None:
+    page = ExtractedContent(
+        raw_text="Title: Notes\n\nBody:\nThe article.", thumbnail_url="https://site/og.png"
+    )
+    c = compose(_post(), None, link="https://site/notes", linked=page)
+    assert c.raw_text is not None
+    assert "Link: https://site/notes\n\nTitle: Notes\n\nBody:\nThe article." in c.raw_text
+    assert c.thumbnail_url == "https://site/og.png"
+
+    # A bot-walled page leaves a stub; the card's title and description stand in.
+    stub = ExtractedContent(raw_text="URL: https://site/notes")
+    card = {"url": "https://site/notes", "title": "Notes", "description": "What I learned"}
+    c = compose(_post(card=card), None, link="https://site/notes", linked=stub)
+    assert c.raw_text is not None
+    assert "Link: https://site/notes\nNotes — What I learned" in c.raw_text
+    assert "URL:" not in c.raw_text
+
+
+def test_twitter_oembed_text_drops_the_byline() -> None:
+    html = (
+        '<blockquote class="twitter-tweet"><p lang="en">First line<br>second &amp; last</p>'
+        '&mdash; Joe P (@joe) <a href="https://x.com/joe/status/1">October 30, 2026</a>'
+        "</blockquote>"
+    )
+    assert _oembed_text(html) == "First line\nsecond & last"
+
+
 async def test_public_address_refuses_this_machine_and_its_network() -> None:
     # A post's author picks the link, so nothing on this machine or its network.
     for host in ("localhost", "127.0.0.1", "169.254.169.254", "10.0.0.5", "192.168.1.9", "::1", ""):
@@ -184,3 +298,12 @@ async def test_a_name_that_does_not_resolve_is_a_connection_error() -> None:
     async with public_client() as client:
         with pytest.raises(httpx.ConnectError):
             await client.get("http://no-such-host.invalid/")
+
+
+def test_twitter_article_without_a_title_has_no_title_section() -> None:
+    article = {"preview_text": "Just the preview.", "content": {"blocks": []}}
+    c = compose(_post(text="", article=article), None)
+    assert c.raw_text is not None
+    assert "Title:" not in c.raw_text
+    assert "Body:\nJust the preview." in c.raw_text
+    assert c.title == "Post by Factory"
