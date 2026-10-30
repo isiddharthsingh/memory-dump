@@ -7,6 +7,7 @@ from typing import Any
 import httpcore
 import httpx
 
+from app.config import get_settings
 from app.extractors.base import ExtractedContent
 
 # Tried in order. The Safari UA is the default; if a site walls it off
@@ -37,6 +38,12 @@ RETRY_STATUSES = frozenset({401, 403, 429, 451})
 JINA_READER = "https://r.jina.ai/"
 
 TIMEOUT = httpx.Timeout(20.0, connect=10.0)
+
+
+class TooLarge(Exception):
+    """The page's body is over EXTRACT_MAX_BYTES, before or after
+    decompression. The app shows the stored `TooLarge: <url>` as its own
+    message."""
 
 
 class NotPublic(Exception):
@@ -102,11 +109,63 @@ class PublicOnlyTransport(httpx.AsyncHTTPTransport):
         )
 
 
+class _CappedClient(httpx.AsyncClient):
+    """Reads at most `max_bytes` of a response body, counted after
+    decompression, so neither a huge download nor a small compressed bomb can
+    fill the worker's memory. Raises TooLarge past it. Follows redirects itself:
+    httpx would read each redirect's whole body before following it."""
+
+    def __init__(self, *, max_bytes: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._max_bytes = max_bytes
+
+    async def send(  # type: ignore[override]
+        self,
+        request: httpx.Request,
+        *,
+        stream: bool = False,
+        follow_redirects: bool | None = None,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        follow = self.follow_redirects if follow_redirects is None else follow_redirects
+        for _ in range(self.max_redirects + 1):
+            response = await super().send(request, stream=True, follow_redirects=False, **kwargs)
+            if not (follow and response.next_request is not None):
+                break
+            # Its body is never read.
+            await response.aclose()
+            request = response.next_request
+        else:
+            raise httpx.TooManyRedirects("Exceeded maximum allowed redirects.", request=request)
+        if stream:
+            return response
+        try:
+            length = response.headers.get("content-length", "")
+            if length.isdigit() and int(length) > self._max_bytes:
+                raise TooLarge(str(request.url))
+            body = bytearray()
+            async for chunk in response.aiter_bytes():
+                body += chunk
+                if len(body) > self._max_bytes:
+                    raise TooLarge(str(request.url))
+        finally:
+            await response.aclose()
+        # What Response.aread() would have stored.
+        response._content = bytes(body)
+        return response
+
+
 def public_client(**kwargs: Any) -> httpx.AsyncClient:
     """The HTTP client every extractor fetches with. Anyone who can sign up
-    picks the URLs, so it only reaches public addresses, and no proxy from the
-    environment connects for it."""
-    return httpx.AsyncClient(transport=PublicOnlyTransport(), trust_env=False, **kwargs)
+    picks the URLs, so it only reaches public addresses, no proxy from the
+    environment connects for it, and it reads at most EXTRACT_MAX_BYTES of a
+    body."""
+    return _CappedClient(
+        transport=PublicOnlyTransport(),
+        trust_env=False,
+        max_bytes=get_settings().extract_max_bytes,
+        **kwargs,
+    )
 
 
 class WebpageExtractor:
@@ -120,9 +179,7 @@ class WebpageExtractor:
             # Direct fetch hit a wall on every UA. Try the reader fallback.
             return await self._from_reader(client, url, share_text)
 
-    async def _from_html(
-        self, html: str, url: str, share_text: str | None
-    ) -> ExtractedContent:
+    async def _from_html(self, html: str, url: str, share_text: str | None) -> ExtractedContent:
         meta = self._parse_og(html)
         body = await asyncio.to_thread(self._extract_body, html, url)
 
