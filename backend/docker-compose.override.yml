@@ -16,6 +16,11 @@ services:
     ports:
       - "127.0.0.1:3567:3567"
 
+  # For an api or worker on the host, with S3_ENDPOINT_URL=http://localhost:8333.
+  seaweedfs:
+    ports:
+      - "127.0.0.1:8333:8333"
+
   migrate:
     volumes:
       - .:/app

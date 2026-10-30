@@ -79,6 +79,27 @@ services:
       timeout: 3s
       retries: 20
 
+  # Upload storage (STORAGE_BACKEND=s3, S3_ENDPOINT_URL=http://seaweedfs:8333):
+  # every uploaded file and its thumbnail, behind an S3 API on the compose
+  # network only. The api serves thumbnails to the app; nothing else reaches
+  # it. Like SUPERTOKENS_API_KEY, the key pair comes from your shell or
+  # backend/.env and goes to the api and worker too, so they can't disagree;
+  # the bucket is created on the first upload.
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.48
+    restart: unless-stopped
+    command: ["server", "-s3", "-master.telemetry=false"]
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in backend/.env}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in backend/.env}
+    volumes:
+      - seaweedfs-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8333/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   # Migrations run once, before the api and worker start, rather than in every
   # api process (several would race).
   migrate:
@@ -104,6 +125,8 @@ services:
       - ../.env
     environment:
       SUPERTOKENS_API_KEY: ${SUPERTOKENS_API_KEY:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
       # uvicorn worker processes; each has its own database pool
       # (DB_POOL_SIZE + DB_MAX_OVERFLOW connections).
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
@@ -115,6 +138,8 @@ services:
       redis:
         condition: service_healthy
       supertokens:
+        condition: service_healthy
+      seaweedfs:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
@@ -145,10 +170,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      seaweedfs:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     environment:
       SUPERTOKENS_API_KEY: ${SUPERTOKENS_API_KEY:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
     command: ["arq", "app.workers.worker.WorkerSettings"]
     volumes:
       - uploads:/uploads
@@ -166,3 +195,4 @@ volumes:
   postgres-data:
   redis-data:
   uploads:
+  seaweedfs-data:
