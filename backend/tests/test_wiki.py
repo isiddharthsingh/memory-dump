@@ -16,13 +16,12 @@ from app.ai.synthesize import (
     _strip_json_fence,
     forget_in_body,
 )
-from app.api import items as items_api
 from app.config import get_settings
 from app.db.models import EMBED_DIM, Chat, Item, TopicPage, TopicPageChunk
 from app.main import app
 from app.workers import synthesize as synthesize_worker
 from app.workers.synthesize import forget_item, synthesize_topics
-from tests.conftest import signup
+from tests.conftest import Jobs, signup
 
 X = uuid.UUID("11111111-1111-1111-1111-111111111111")
 Y = uuid.UUID("22222222-2222-2222-2222-222222222222")
@@ -147,6 +146,7 @@ def test_deleting_an_item_takes_it_out_of_the_wiki_and_ask_history(
     account: tuple[dict[str, str], uuid.UUID],
     db: Any,
     embed: None,
+    jobs: Jobs,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     auth, user_id = account
@@ -225,16 +225,6 @@ def test_deleting_an_item_takes_it_out_of_the_wiki_and_ask_history(
             ],
         )
 
-    jobs: list[tuple[str, ...]] = []
-
-    class Pool:
-        async def enqueue_job(self, *args: str) -> None:
-            jobs.append(args)
-
-    async def pool() -> Pool:
-        return Pool()
-
-    monkeypatch.setattr(items_api, "get_arq_pool", pool)
     asked: list[tuple[str, list[str]]] = []
 
     async def remove_from_page(*, body: str, item_id: uuid.UUID, gone_slugs: list[str]) -> str:
@@ -246,7 +236,7 @@ def test_deleting_an_item_takes_it_out_of_the_wiki_and_ask_history(
     monkeypatch.setattr(synthesize_worker, "remove_from_page", remove_from_page)
 
     assert client.delete(f"/items/{x}", headers=auth).status_code == 204
-    assert jobs == [("forget_item", str(user_id), str(x))]
+    assert jobs == [("forget_item", str(user_id), str(x), {"_job_id": f"forget:{x}"})]
     result = client.portal.call(forget_item, {}, str(user_id), str(x))  # type: ignore[union-attr]
     assert result == "removed:1,rewrote:2,stubs:1"
     assert sorted(asked) == [

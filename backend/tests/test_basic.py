@@ -1,10 +1,12 @@
 """Tests that don't need a running database or external services."""
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.ai.synthesize import title_from_slug
 from app.api.ingest import detect_source
 from app.api.search import _snippet
+from app.config import get_settings
 from app.main import app
 
 
@@ -68,3 +70,53 @@ def test_title_from_slug_keeps_acronyms() -> None:
     assert title_from_slug("llm-scaling") == "LLM Scaling"
     assert title_from_slug("ai-reasoning") == "AI Reasoning"
     assert title_from_slug("large-language-models") == "Large Language Models"
+
+
+def test_routes_answer_with_and_without_v1() -> None:
+    with TestClient(app) as client:
+        assert client.get("/v1/items").status_code == 401
+        assert client.get("/items").status_code == 401
+        assert client.get("/v1/nothing-here").status_code == 404
+
+
+def test_old_builds_are_asked_to_update(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(get_settings(), "min_app_build", 10)
+    with TestClient(app) as client:
+        too_old = client.get("/v1/items", headers={"X-App-Build": "9"})
+        assert too_old.status_code == 426
+        assert "Update" in too_old.json()["detail"]
+        assert client.get("/v1/items", headers={"X-App-Build": "10"}).status_code == 401
+        # Builds from before /v1 sent no build number and call unversioned routes.
+        assert client.get("/items").status_code == 426
+        assert client.get("/v1/items").status_code == 401
+        assert client.get("/healthz").status_code == 200
+
+
+def test_readyz_checks_postgres_and_redis() -> None:
+    with TestClient(app) as client:
+        assert client.get("/livez").json() == {"status": "ok"}
+        resp = client.get("/readyz")
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"status": "ok"}
+
+
+def test_metrics_need_the_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    with TestClient(app) as client:
+        assert client.get("/metrics").status_code == 404
+        monkeypatch.setattr(get_settings(), "metrics_token", "t0ken")
+        assert client.get("/metrics", headers={"Authorization": "Bearer nope"}).status_code == 404
+        resp = client.get("/metrics", headers={"Authorization": "Bearer t0ken"})
+        assert resp.status_code == 200
+        assert "http_requests_total" in resp.text
+
+
+def test_request_ids_are_kept_or_made() -> None:
+    with TestClient(app) as client:
+        assert (
+            client.get("/livez", headers={"X-Request-ID": "abc-123"}).headers["x-request-id"]
+            == "abc-123"
+        )
+        made = client.get("/livez").headers["x-request-id"]
+        assert len(made) == 32
+        bad = client.get("/livez", headers={"X-Request-ID": "has spaces"})
+        assert bad.headers["x-request-id"] != "has spaces"

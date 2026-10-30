@@ -106,3 +106,38 @@ def test_rejects_bad_chats(client: TestClient, two_users: tuple, body: dict) -> 
 
 def test_needs_sign_in(client: TestClient) -> None:
     assert client.get("/chats").status_code == 401
+
+
+def test_a_save_over_a_newer_version_is_refused(client: TestClient, two_users: tuple) -> None:
+    a, _ = two_users
+    chat, first = str(uuid.uuid4()), _turn("First")
+    created = client.put(f"/v1/chats/{chat}", json={"turns": [first], "version": 0}, headers=a)
+    assert created.json()["version"] == 1
+    phone = [first, _turn("From the phone")]
+    saved = client.put(f"/v1/chats/{chat}", json={"turns": phone, "version": 1}, headers=a)
+    assert saved.json()["version"] == 2
+    stale = client.put(
+        f"/v1/chats/{chat}",
+        json={"turns": [first, _turn("From the iPad")], "version": 1},
+        headers=a,
+    )
+    assert stale.status_code == 409
+    opened = client.get(f"/v1/chats/{chat}", headers=a).json()
+    assert opened["version"] == 2
+    assert [t["question"] for t in opened["turns"]] == ["First", "From the phone"]
+    # Without a version the save always wins, as builds from before versions expect.
+    overwrite = client.put(f"/v1/chats/{chat}", json={"turns": [_turn("Overwrite")]}, headers=a)
+    assert overwrite.json()["version"] == 3
+
+
+def test_history_pages_by_cursor(client: TestClient, two_users: tuple) -> None:
+    a, _ = two_users
+    ids = [str(uuid.uuid4()) for _ in range(3)]
+    for chat in ids:
+        client.put(f"/v1/chats/{chat}", json={"turns": [_turn(chat)]}, headers=a)
+    page = client.get("/v1/chats", params={"limit": 2}, headers=a).json()
+    assert [c["id"] for c in page] == ids[::-1][:2]
+    rest = client.get("/v1/chats", params={"limit": 2, "before": page[-1]["id"]}, headers=a).json()
+    assert [c["id"] for c in rest] == [ids[0]]
+    unknown = client.get("/v1/chats", params={"before": str(uuid.uuid4())}, headers=a)
+    assert unknown.status_code == 404
