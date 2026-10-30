@@ -9,7 +9,8 @@ asking natural-language questions.
 
 1. I tap **Share → Memory Dump** on any URL, PDF or image on iOS.
 2. The backend extracts the content (YouTube transcript, article body,
-   tweet text, image caption + vision description for Instagram).
+   tweet text, a reel's transcript and frames or a post's caption and
+   image for Instagram).
 3. Claude summarizes it, tags it, and pulls out named entities
    (people, handles, brands, topics).
 4. Voyage AI embeds the content into pgvector alongside Postgres
@@ -189,7 +190,8 @@ HNSW) ∪ BM25 (`tsvector`) → Reciprocal Rank Fusion → Voyage `rerank-2.5`
   Postgres 16 + pgvector (HNSW), Redis + arq workers, Alembic. Anthropic
   SDK (Claude Haiku for analyze, Sonnet for synthesis, Opus for /ask),
   Voyage AI (`voyage-3-large` embed, `rerank-2.5`). `yt-dlp` +
-  `youtube-transcript-api` for video extraction, `trafilatura` for web.
+  `youtube-transcript-api` for video extraction, `faster-whisper` for
+  Instagram reel transcripts, `trafilatura` for web.
 - **iOS**: SwiftUI (iOS 26+, Swift 6), a Share Extension that uploads
   directly, Keychain sharing and an App Group between the two, `URLSession`
   streaming for Ask, `SFSpeechRecognizer` for voice, APNs for push. No
