@@ -1,7 +1,9 @@
+import time
+
 import httpx
 import pytest
 
-from app.extractors.base import ExtractedContent, detect_source, get_extractor
+from app.extractors.base import ExtractedContent, detect_source, flatten, get_extractor
 from app.extractors.reddit import _parse, _to_json_url
 from app.extractors.twitter import (
     _oembed_text,
@@ -190,6 +192,16 @@ def test_twitter_compose_keeps_each_section_free_of_blank_lines() -> None:
     assert c.thumbnail_url == "https://pbs.twimg.com/v.jpg"
     # A deleted quote is left out rather than shown as a tombstone.
     assert "Quoted post" not in (compose(_post(quote={"type": "tombstone"}), None).raw_text or "")
+
+
+def test_flatten_drops_blank_lines_in_linear_time() -> None:
+    assert flatten("a \n\n  \nb\n  c\n") == "a\nb\n  c"
+    assert flatten(None) == ""
+    # A share note may be 20,000 characters; a regex took seconds on a long
+    # run of spaces around one newline.
+    start = time.monotonic()
+    assert flatten(" " * 30_000 + "\n" + " " * 30_000) == ""
+    assert time.monotonic() - start < 1
 
 
 def test_twitter_article_blocks_become_markdown() -> None:

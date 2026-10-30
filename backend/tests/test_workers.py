@@ -155,6 +155,38 @@ def test_a_site_failure_retries_then_fails_on_the_last_try(
     assert row.error.startswith("ConnectError")
 
 
+def test_text_on_a_videos_frames_is_saved_with_it_and_found_by_search(
+    client: TestClient,
+    account: tuple[dict[str, str], uuid.UUID],
+    db: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, user_id = account
+    item_id = _item(db, user_id, source="instagram")
+
+    async def extract(url: str, share_text: str | None = None) -> ExtractedContent:
+        return ExtractedContent(raw_text="Transcript:\nSomebody used proofs.", frames=["AAAA"])
+
+    async def analyze(*_: Any, **__: Any) -> Analysis:
+        return Analysis("Title", "Summary", [], [], [], [], [], on_screen="@hargup PR #153")
+
+    async def embed_texts(texts: list[str], input_type: str) -> list[list[float]]:
+        return [[0.1] * EMBED_DIM for _ in texts]
+
+    monkeypatch.setattr(ingest_worker, "get_extractor", lambda _: _Extractor(extract))
+    monkeypatch.setattr(ingest_worker, "analyze", analyze)
+    monkeypatch.setattr(ingest_worker, "embed_texts", embed_texts)
+
+    run = client.portal.call  # type: ignore[union-attr]
+    assert run(ingest_item, {"job_try": 1}, str(item_id), 0) == "ready"
+    assert _row(db, item_id).raw_text == (
+        "Transcript:\nSomebody used proofs.\n\nOn screen:\n@hargup PR #153"
+    )
+    with db.connect() as conn:
+        chunks = conn.scalars(select(ItemChunk.text).where(ItemChunk.item_id == item_id)).all()
+    assert any("@hargup" in chunk for chunk in chunks)
+
+
 def test_the_reconciler_puts_back_lost_jobs_and_fails_stuck_ones(
     client: TestClient, account: tuple[dict[str, str], uuid.UUID], db: Any, jobs: Jobs
 ) -> None:
