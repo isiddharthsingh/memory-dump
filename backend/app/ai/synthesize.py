@@ -55,6 +55,25 @@ Style:
 - Output ONLY the full new markdown body. No fences, no commentary.
 """
 
+FORGET_SYSTEM = """You maintain a personal wiki of interlinked topic \
+pages. The user deleted one of the source items, and the page must keep no \
+trace of it. You receive the page's markdown, the deleted item's citation \
+and the slugs of topic pages that no longer exist.
+
+Rewrite the page:
+- Remove every statement cited only to the deleted item, and any uncited
+  text that only introduces or frames that material (headings, lead-ins,
+  "see also" lines).
+- Where a statement also cites other items, keep what those items support
+  and drop the deleted item's citation.
+- Remove `[[slug]]` links to the listed slugs, rewording or dropping the
+  text around them so it still reads well.
+- Remove headings left with nothing under them.
+- Change nothing else: keep the remaining wording, citations, links and
+  structure as they are, and add nothing new.
+- Output ONLY the full new markdown body. No fences, no commentary.
+"""
+
 MAX_ITEM_CHARS = 6_000
 MAX_PAGE_CHARS = 12_000
 
@@ -73,6 +92,12 @@ class PatchedPage:
 
 
 WIKILINK_RE = re.compile(r"\[\[([a-z0-9][a-z0-9\-]*)\]\]")
+CITATION_RE = re.compile(r"\[item:([0-9a-fA-F-]{36})\]")
+# The citations that close a claim, and the punctuation after them.
+_CITES_RE = re.compile(r"(?:\s*\[item:[0-9a-fA-F-]{36}\])+[.,;:!?)]*")
+# A line's indent plus its list or quote marker, kept when its text changes.
+_LINE_PREFIX_RE = re.compile(r"^\s*(?:(?:[-*+]|\d+[.)])\s+|>\s*)?")
+_HEADING_RE = re.compile(r"^(#{1,6})\s")
 
 
 def _normalize_slug(s: str) -> str:
@@ -223,6 +248,98 @@ async def patch_page(
         body_md=new_body,
         backlinks=backlinks,
     )
+
+
+async def remove_from_page(*, body: str, item_id: uuid.UUID, gone_slugs: list[str]) -> str | None:
+    """The page rewritten without a deleted item and without links to deleted
+    pages, or None when Claude's answer is empty, cut off or refused."""
+    settings = get_settings()
+    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+    user = (
+        f"Deleted item: [item:{item_id}]\n"
+        f"Pages that no longer exist: {', '.join(gone_slugs) or '(none)'}\n\n"
+        f"=== Page (markdown) ===\n{body}"
+    )
+    resp = await client.messages.create(
+        model=settings.claude_synthesis_model,
+        max_tokens=16_000,
+        system=[{"type": "text", "text": FORGET_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": user}],
+    )
+    if resp.stop_reason != "end_turn":
+        return None
+    new_body = "".join(b.text for b in resp.content if b.type == "text").strip()
+    new_body = re.sub(r"^```(?:markdown)?\s*", "", new_body)
+    new_body = re.sub(r"\s*```$", "", new_body).strip()
+    return new_body or None
+
+
+def forget_in_body(body: str, item_id: uuid.UUID, gone_slugs: set[str]) -> str:
+    """Takes out whatever a rewrite left of a deleted item: claims cited only
+    to it, its citations on shared claims, links to deleted pages, and the
+    headings this empties. Lines it doesn't touch stay as they are."""
+    item = str(item_id).lower()
+
+    def unlink(text: str, label: bool) -> str:
+        return WIKILINK_RE.sub(
+            lambda m: (
+                (title_from_slug(m.group(1)) if label else "")
+                if m.group(1) in gone_slugs
+                else m.group(0)
+            ),
+            text,
+        )
+
+    lines: list[str] = []
+    for line in body.split("\n"):
+        rest = _LINE_PREFIX_RE.sub("", line, count=1)
+        prefix = line[: len(line) - len(rest)]
+        text = _strip_claims(rest, item)
+        if text == rest and unlink(text, label=False) == text:
+            lines.append(line)
+            continue
+        # Nothing left but the item's claims or links to deleted pages.
+        if not unlink(text, label=False).strip(" \t.,;:—–-"):
+            continue
+        lines.append(prefix + unlink(text, label=True).lstrip())
+
+    out = "\n".join(_drop_empty_headings(lines))
+    return re.sub(r"\n{3,}", "\n\n", out).strip()
+
+
+def _strip_claims(text: str, item: str) -> str:
+    """Drops each claim whose citations are only `item`, and `item`'s
+    citation from claims that other items support too."""
+    out: list[str] = []
+    start = 0
+    for m in _CITES_RE.finditer(text):
+        cited = {c.lower() for c in CITATION_RE.findall(m.group())}
+        if cited != {item}:
+            cites = re.sub(rf"\s*\[item:{re.escape(item)}\]", "", m.group(), flags=re.IGNORECASE)
+            out.append(text[start : m.start()] + cites)
+        start = m.end()
+    out.append(text[start:])
+    return "".join(out)
+
+
+def _drop_empty_headings(lines: list[str]) -> list[str]:
+    """Headings with no text before the next heading of their level or above."""
+    kept: list[str] = []
+    for i, line in enumerate(lines):
+        heading = _HEADING_RE.match(line)
+        if heading:
+            level = len(heading.group(1))
+            for after in lines[i + 1 :]:
+                sub = _HEADING_RE.match(after)
+                if sub and len(sub.group(1)) <= level:
+                    break
+                if not sub and after.strip():
+                    kept.append(line)
+                    break
+            continue
+        kept.append(line)
+    return kept
 
 
 async def embed_page_chunks(body: str) -> list[tuple[str, list[float]]]:

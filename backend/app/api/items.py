@@ -2,7 +2,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import (
@@ -186,6 +186,13 @@ async def delete_item(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
+    """Deletes the item, then takes it out of the wiki and Ask history in the
+    background (see `forget_item`)."""
     item = await _get_owned_item(session, item_id, current_user)
-    await session.delete(item)
+    # Queued first, so a delete never lands without its cleanup to follow;
+    # forget_item waits until the item is gone.
+    pool = await get_arq_pool()
+    await pool.enqueue_job("forget_item", str(current_user.id), str(item_id))
+    # The chunks go by ON DELETE CASCADE, without loading their embeddings.
+    await session.execute(delete(Item).where(Item.id == item.id))
     await session.commit()

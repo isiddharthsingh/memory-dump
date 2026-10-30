@@ -11,14 +11,21 @@ from app.config import get_settings
 from app.workers.compact import compact_topics
 from app.workers.digest import weekly_digest
 from app.workers.ingest import ingest_file, ingest_item
-from app.workers.synthesize import synthesize_topics
+from app.workers.synthesize import forget_item, synthesize_topics
 
 _settings = get_settings()
 
 
 class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(_settings.redis_url)
-    functions = [ingest_item, ingest_file, synthesize_topics, compact_topics, weekly_digest]
+    functions = [
+        ingest_item,
+        ingest_file,
+        synthesize_topics,
+        forget_item,
+        compact_topics,
+        weekly_digest,
+    ]
     cron_jobs = [
         # Nightly at 03:14 UTC.
         cron(compact_topics, hour={3}, minute={14}, run_at_startup=False),
