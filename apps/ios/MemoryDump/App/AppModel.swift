@@ -13,6 +13,8 @@ final class AppModel {
 
   private(set) var session: Session?
   var toast: Toast?
+  /// The server's 426 detail: this build is too old for it. Shown as an alert.
+  var updateNotice: String?
   let router = Router()
   /// Bumped each time the app becomes active, so the Library reloads and shows
   /// what the share extension saved while the app was in the background.
@@ -33,6 +35,10 @@ final class AppModel {
       Self.forgetSavedCopies()
       self?.session = nil
       self?.stopSendingQueue()
+    }
+    APIClient.shared.onUpdateRequired = { [weak self] message in
+      Haptics.error()
+      self?.updateNotice = message
     }
     // Back on a network: try the queue now rather than at the next retry.
     network.pathUpdateHandler = Self.onConnected { [weak self] in
@@ -94,6 +100,8 @@ final class AppModel {
 
   func becameActive() async {
     isActive = true
+    // Asks once more whether the server still refuses this build.
+    APIClient.shared.checkBuildAgain()
     // The extension can rotate the tokens while the app is in the background.
     if session != nil {
       session = store.current()
@@ -116,9 +124,11 @@ final class AppModel {
   // MARK: Share queue
 
   /// Sends the queue now, then again after 5, 10 and 20 s and every 30 s after
-  /// that, for as long as anything is left, someone is signed in and the app is
-  /// in front. Called again (a new network, Retry) while it waits, it tries at
-  /// once; a send under way carries on.
+  /// that, or once the server's Retry-After has passed if that's later, for as
+  /// long as anything is left, someone is signed in, the server takes this
+  /// build and the app is in front. Called again (a new network, Retry) while
+  /// it waits, it tries at once unless Retry-After hasn't passed; a send under
+  /// way carries on.
   func sendQueue() {
     queued = ShareQueue.pending()
     guard isActive, session != nil, !queued.isEmpty, !isSendingQueue else { return }
@@ -138,8 +148,11 @@ final class AppModel {
         if result.refused > 0 {
           show("\(Format.plural(result.refused, "share")) couldn’t be sent and were removed.", ok: false)
         }
-        if queued.isEmpty || session == nil || !isActive { return }
-        try? await Task.sleep(for: .seconds(pause))
+        if queued.isEmpty || session == nil || !isActive || APIClient.shared.updateRequired != nil {
+          return
+        }
+        let retryAfter = ShareQueue.notBefore?.timeIntervalSinceNow ?? 0
+        try? await Task.sleep(for: .seconds(max(Double(pause), retryAfter)))
         guard !Task.isCancelled else { return }
         pause = min(pause * 2, 30)
       }

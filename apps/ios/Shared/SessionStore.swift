@@ -45,7 +45,7 @@ final class SessionStore {
         let fresh = try await AuthAPI.refresh(session: now)
         save(fresh)
         return fresh
-      } catch APIError.http(401, _) {
+      } catch APIError.http(401, _, _) {
         expire()
         throw APIError.signedOut
       }

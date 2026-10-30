@@ -105,6 +105,56 @@ import Testing
     #expect(FastAPIError.detail(in: Data(#"{"message": "try refresh token"}"#.utf8)) == "try refresh token")
   }
 
+  @Test func readsRetryAfterSeconds() {
+    #expect(APIError.seconds(retryAfter: "120") == 120)
+    #expect(APIError.seconds(retryAfter: " 5 ") == 5)
+    #expect(APIError.seconds(retryAfter: "0") == 0)
+    #expect(APIError.seconds(retryAfter: nil) == nil)
+    #expect(APIError.seconds(retryAfter: "-3") == nil)
+    // The HTTP-date form, which the server doesn't send.
+    #expect(APIError.seconds(retryAfter: "Wed, 21 Oct 2026 07:28:00 GMT") == nil)
+  }
+
+  @Test func buildsErrorsFromResponses() throws {
+    func response(_ status: Int, _ headers: [String: String] = [:]) -> HTTPURLResponse? {
+      HTTPURLResponse(url: URL(string: "https://a.com/v1/ingest")!, statusCode: status, httpVersion: nil, headerFields: headers)
+    }
+    let limited = APIError(
+      status: 429, body: Data(#"{"detail": "Too many attempts. Try again later."}"#.utf8),
+      response: response(429, ["Retry-After": "30"]))
+    #expect(limited == .http(429, "Too many attempts. Try again later.", retryAfter: 30))
+    #expect(limited.localizedDescription == "Too many attempts. Try again later.")
+    #expect(limited.retryAfter == 30)
+    #expect(APIError(status: 429, body: Data(), response: response(429)).localizedDescription == "Too many tries. Try again later.")
+    let old = APIError(status: 426, body: Data(#"{"detail": "Update the app."}"#.utf8), response: response(426))
+    #expect(old == .updateRequired("Update the app."))
+    #expect(old.localizedDescription == "Update the app.")
+    #expect(APIError(status: 404, body: Data(#"{"detail": "Unknown cursor"}"#.utf8), response: response(404)).isUnknownCursor)
+    #expect(!APIError.http(404, "Item not found").isUnknownCursor)
+  }
+
+  /// The app's own routes are under /v1; SuperTokens' stay where it serves them.
+  @Test func versionsAppRoutesOnly() {
+    #expect(APIClient.route("/items") == "/v1/items")
+    #expect(APIClient.route("/ingest/file") == "/v1/ingest/file")
+    #expect(APIClient.route("/auth/me") == "/v1/auth/me")
+    #expect(APIClient.route("/auth/signin") == "/auth/signin")
+    #expect(APIClient.route("/auth/signup") == "/auth/signup")
+    #expect(APIClient.route("/auth/signout") == "/auth/signout")
+    #expect(APIClient.route("/auth/session/refresh") == "/auth/session/refresh")
+  }
+
+  @Test func decodesItemChanges() throws {
+    let json = #"""
+      {"full": false, "changed": ["6f1c1b0e-6b8e-4c33-9f55-5a1b2c3d4e5f"], "deleted": [],
+       "until": "2026-10-30T12:00:00.123456Z"}
+      """#
+    let changes = try JSONDecoder.api.decode(ItemChanges.self, from: Data(json.utf8))
+    #expect(!changes.full)
+    #expect(changes.changed.count == 1)
+    #expect(changes.until == "2026-10-30T12:00:00.123456Z")
+  }
+
   @Test func writesMultipartBody() throws {
     let src = FileManager.default.temporaryDirectory.appending(path: "src-\(UUID().uuidString).pdf")
     try Data("PDFDATA".utf8).write(to: src)
@@ -151,11 +201,39 @@ import Testing
   @Test func decodesHistorySummary() throws {
     let json = #"""
       [{"id": "6f1c1b0e-6b8e-4c33-9f55-5a1b2c3d4e5f", "questions": ["First?", "Second?"],
-        "created_at": "2026-10-29T02:10:00Z", "updated_at": "2026-10-29T02:11:00.5+00:00"}]
+        "created_at": "2026-10-29T02:10:00Z", "updated_at": "2026-10-29T02:11:00.5+00:00", "version": 4}]
       """#
     let history = try JSONDecoder.api.decode([ChatSummary].self, from: Data(json.utf8))
     #expect(history.first?.title == "First?")
     #expect(history.first?.questions.count == 2)
+    #expect(history.first?.version == 4)
+  }
+
+  /// A chat saved on the phone before chats had versions still opens.
+  @Test func decodesChatsWithAndWithoutVersion() throws {
+    let old = #"{"id": "6f1c1b0e-6b8e-4c33-9f55-5a1b2c3d4e5f", "created_at": "2026-10-29T02:10:00Z", "updated_at": "2026-10-29T02:11:00Z", "turns": []}"#
+    #expect(try JSONDecoder.api.decode(Chat.self, from: Data(old.utf8)).version == nil)
+    let new = old.replacing(#""turns": []"#, with: #""turns": [], "version": 7"#)
+    #expect(try JSONDecoder.api.decode(Chat.self, from: Data(new.utf8)).version == 7)
+  }
+
+  @Test func mergeKeepsTheServersOrderAndThisDevicesTurns() {
+    let (a, b, c, d) = (UUID(), UUID(), UUID(), UUID())
+    let server = [
+      ChatTurn(id: a, question: "A", answer: "server", status: .done),
+      ChatTurn(id: b, question: "B", answer: "from the other phone", status: .done),
+      ChatTurn(id: c, question: "C", answer: "server", status: .done),
+    ]
+    let local = [
+      ChatTurn(id: c, question: "C", answer: "local", status: .done),
+      ChatTurn(id: a, question: "A", answer: "local", status: .done),
+      ChatTurn(id: d, question: "D", answer: "only here", status: .done),
+    ]
+    let merged = Chat.merge(server: server, local: local)
+    #expect(merged.map(\.id) == [a, b, c, d])
+    #expect(merged.map(\.answer) == ["local", "from the other phone", "local", "only here"])
+    #expect(Chat.merge(server: [], local: local).map(\.id) == [c, a, d])
+    #expect(Chat.merge(server: server, local: []).map(\.id) == [a, b, c])
   }
 
   /// PUT bodies go out through a plain JSONEncoder, so the keys must already be the server's.
@@ -205,6 +283,8 @@ import Testing
     #expect(ShareQueue.waits(after: APIError.http(500, "")))
     #expect(ShareQueue.waits(after: APIError.http(429, "slow down")))
     #expect(ShareQueue.waits(after: APIError.http(408, "")))
+    // Kept until the app is updated.
+    #expect(ShareQueue.waits(after: APIError.updateRequired("Update")))
   }
 
   @Test func refusedSharesAreDropped() {
@@ -219,6 +299,7 @@ import Testing
     #expect(ShareQueue.holdsUpQueue(APIError.http(503, "")))
     #expect(ShareQueue.holdsUpQueue(APIError.http(429, "")))
     #expect(ShareQueue.holdsUpQueue(APIError.signedOut))
+    #expect(ShareQueue.holdsUpQueue(APIError.updateRequired("")))
     // One share the server chokes on, or one the other process is sending.
     #expect(!ShareQueue.holdsUpQueue(APIError.http(500, "")))
     #expect(!ShareQueue.holdsUpQueue(ShareQueue.InProgress()))
@@ -282,11 +363,59 @@ import Testing
     #expect(saves.read("/wiki", user: b) == nil)
   }
 
-  /// The Library's pages and the offline walk's pages must land on the same copy.
+  /// The Library's pages and the offline walk's pages must land on the same
+  /// copy, and copies saved before /v1 keep their keys.
   @Test func savedKeyIgnoresQueryOrderAndMissingValues() {
-    #expect(APIClient.savedKey("/items", ["offset": "25", "limit": "25", "tag": nil]) == "/items?limit=25&offset=25")
-    #expect(APIClient.savedKey("/items", ["limit": "25", "offset": "25"]) == "/items?limit=25&offset=25")
+    #expect(APIClient.savedKey("/items", ["limit": "25", "before": "abc", "tag": nil]) == "/items?before=abc&limit=25")
+    #expect(APIClient.savedKey("/items", ["before": "abc", "limit": "25"]) == "/items?before=abc&limit=25")
+    #expect(APIClient.savedKey("/items", ["limit": "25", "before": nil]) == "/items?limit=25")
     #expect(APIClient.savedKey("/wiki/llms", [:]) == "/wiki/llms")
+  }
+
+  @Test func keepsTheETagWithItsBody() {
+    let user = UUID()
+    saves.write(Data("v1".utf8), "/items/a", user: user, etag: #""abc""#)
+    #expect(saves.etag("/items/a", user: user) == #""abc""#)
+    #expect(saves.read("/items/a", user: user) == Data("v1".utf8))
+    // A body that came without one leaves no stale ETag behind.
+    saves.write(Data("v2".utf8), "/items/a", user: user)
+    #expect(saves.etag("/items/a", user: user) == nil)
+    saves.write(Data("v3".utf8), "/items/a", user: user, etag: "W/\"def\"")
+    saves.remove("/items/a", user: user)
+    #expect(saves.etag("/items/a", user: user) == nil)
+    #expect(saves.read("/items/a", user: user) == nil)
+  }
+
+  /// Rows in pages of 2, newest first, the way /items and /chats page.
+  private struct Row: Identifiable, Equatable { let id: UUID }
+
+  @Test func pagesByTheLastRowUntilAShortPage() async throws {
+    let rows = (0..<5).map { _ in Row(id: UUID()) }
+    var asked: [UUID?] = []
+    let all = try await APIClient.everyPage(limit: 2) { (before: UUID?) -> [Row] in
+      asked.append(before)
+      let start = before.flatMap { b in rows.firstIndex { $0.id == b } }.map { $0 + 1 } ?? 0
+      return Array(rows[start..<min(start + 2, rows.count)])
+    }
+    #expect(all == rows)
+    #expect(asked == [nil, rows[1].id, rows[3].id])
+  }
+
+  @Test func startsOverWhenTheCursorRowIsGone() async throws {
+    let (a, b, c) = (Row(id: UUID()), Row(id: UUID()), Row(id: UUID()))
+    // What the server answers, call by call.
+    var answers: [Result<[Row], Error>] = [
+      .success([a, b]), .failure(APIError.http(404, "Unknown cursor")),
+      .success([a, b]), .success([b, c]), .success([]),
+    ]
+    var asked: [UUID?] = []
+    let all = try await APIClient.everyPage(limit: 2) { (before: UUID?) -> [Row] in
+      asked.append(before)
+      return try answers.removeFirst().get()
+    }
+    #expect(asked == [nil, b.id, nil, b.id, c.id])
+    // b moved between pages and came back twice.
+    #expect(all == [a, b, c])
   }
 
   @Test func onlyAMissingServerFallsBackToTheSavedCopy() {
@@ -305,6 +434,7 @@ import Testing
     manifest.items[UUID()] = "ready"
     manifest.wiki["large-language-models"] = 3
     manifest.chats[UUID()] = try #require(ISODate.parse("2026-10-28T19:54:13.728123Z"))
+    manifest.itemsUntil = "2026-10-30T12:00:00.123456Z"
     let data = try JSONEncoder().encode(manifest)
     #expect(try JSONDecoder().decode(OfflineSync.Manifest.self, from: data) == manifest)
   }

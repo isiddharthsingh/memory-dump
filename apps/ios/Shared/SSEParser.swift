@@ -29,8 +29,9 @@ struct SSEParser {
       let citations = (try? JSONDecoder.api.decode(DoneData.self, from: json).citations) ?? []
       return .done(citations)
     case "error":
+      // The message is written for people and shown as is.
       let message = (try? JSONDecoder.api.decode(ErrorData.self, from: json).message)
-      return .error(message ?? "stream error")
+      return .error(message ?? "Something went wrong on the server. Try again.")
     default:
       return nil
     }

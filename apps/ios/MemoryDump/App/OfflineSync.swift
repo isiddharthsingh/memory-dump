@@ -1,9 +1,12 @@
 import Foundation
 
 /// Keeps the whole account readable offline, not just what has been opened.
-/// Every GET saves its answer (see APIClient), so this walks the Library in
-/// the pages it scrolls by, then fetches each item, wiki page and chat that
-/// changed since the last walk. Runs when the app becomes active.
+/// Every GET saves its answer (see APIClient). The server says which items
+/// changed or went since the last run (`/items/changes`); this fetches those,
+/// and walks the Library in the pages it scrolls by only when something did,
+/// or when the server can't say and every item is compared. Then it fetches
+/// each wiki page and chat that changed since the last walk. Runs when the
+/// app becomes active.
 enum OfflineSync {
   /// What the last walk saved: each item's status, each page's version and
   /// each chat's last change. Stored with the account's saved copies.
@@ -11,6 +14,9 @@ enum OfflineSync {
     var items: [UUID: String] = [:]
     var wiki: [String: Int] = [:]
     var chats: [UUID: Date] = [:]
+    /// The `until` of the last /items/changes, sent back as its `since`.
+    /// Kept only once a run has finished with no errors.
+    var itemsUntil: String?
   }
 
   private static let manifestKey = "offline-sync"
@@ -25,23 +31,30 @@ enum OfflineSync {
       saves.read(manifestKey, user: user).flatMap { try? JSONDecoder().decode(Manifest.self, from: $0) }
       ?? Manifest()
     do {
-      var items: [ItemSummary] = []
-      while true {
-        let page = try await live(api) {
-          try await api.listItems(limit: LibraryModel.pageSize, offset: items.count)
-        }
-        items += page
-        if page.count < LibraryModel.pageSize { break }
+      let changes = try await live(api) { try await api.itemChanges(since: manifest.itemsUntil) }
+      // An item that couldn't be fetched is tried again next run, which a
+      // delta from a later `until` would skip: then `until` stays put.
+      var missed = false
+      func save(_ id: UUID) async throws {
+        manifest.items[id] = try await fetch(api) { try await api.item(id).status }
+        if manifest.items[id] == nil { missed = true }
       }
-      let ids = Set(items.map(\.id))
-      // Deleted since the last walk, here or on another device: drop the copies too.
-      for id in manifest.items.keys where !ids.contains(id) {
+      func forget(_ id: UUID) {
         saves.remove("/items/\(id.lower)", user: user)
         saves.remove("/items/\(id.lower)/related", user: user)
+        manifest.items[id] = nil
       }
-      manifest.items = manifest.items.filter { ids.contains($0.key) }
-      for item in items where manifest.items[item.id] != item.status {
-        manifest.items[item.id] = try await fetch(api) { try await api.item(item.id).status }
+      if changes.full {
+        let items = try await walkLibrary(api)
+        let ids = Set(items.map(\.id))
+        // Deleted since the last walk, here or on another device: drop the copies too.
+        for id in manifest.items.keys where !ids.contains(id) { forget(id) }
+        for item in items where manifest.items[item.id] != item.status { try await save(item.id) }
+      } else {
+        for id in changes.deleted { forget(id) }
+        for id in changes.changed where !changes.deleted.contains(id) { try await save(id) }
+        // The saved Library pages still show the rows as they were.
+        if !changes.changed.isEmpty || !changes.deleted.isEmpty { _ = try await walkLibrary(api) }
       }
 
       let pages = try await live(api) { try await api.wiki() }
@@ -51,7 +64,7 @@ enum OfflineSync {
       for slug in manifest.wiki.keys where !slugs.contains(slug) {
         do {
           _ = try await live(api) { try await api.wikiPage(slug) }
-        } catch APIError.http(404, _) {
+        } catch APIError.http(404, _, _) {
           saves.remove("/wiki/\(slug)", user: user)
         } catch APIError.http {
         }
@@ -70,6 +83,7 @@ enum OfflineSync {
       for chat in chats where manifest.chats[chat.id] != chat.updatedAt {
         manifest.chats[chat.id] = try await fetch(api) { try await api.chat(chat.id).updatedAt }
       }
+      if !missed { manifest.itemsUntil = changes.until }
     } catch {
       // Offline or signed out: keep what got saved, and pick up from there next time.
     }
@@ -78,6 +92,14 @@ enum OfflineSync {
       let data = try? JSONEncoder().encode(manifest)
     else { return }
     saves.write(data, manifestKey, user: user)
+  }
+
+  /// Every Library page, in the pages the Library scrolls by (its first page,
+  /// then `before` its last row), so offline scrolling finds the same copies.
+  private static func walkLibrary(_ api: APIClient) async throws -> [ItemSummary] {
+    try await APIClient.everyPage(limit: LibraryModel.pageSize) { before in
+      try await live(api) { try await api.listItems(limit: LibraryModel.pageSize, before: before) }
+    }
   }
 
   /// Runs one request. With the server out of reach, APIClient answers with

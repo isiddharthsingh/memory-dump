@@ -94,13 +94,13 @@ final class LibraryModel {
     let count = max(Self.pageSize, items.count)
     let requested = filter
     // First load of this filter: last time's copy while the server is asked.
-    if !loaded, let page = try? await fetch(limit: count, offset: 0, from: .saved), requested == filter {
+    if !loaded, let page = try? await fetch(limit: count, from: .saved), requested == filter {
       items = Self.dedupe(page)
       hasMore = page.count == count
       loaded = true
     }
     do {
-      let page = try await fetch(limit: count, offset: 0)
+      let page = try await fetch(limit: count)
       guard requested == filter else { return }
       items = Self.dedupe(page)
       hasMore = page.count == count
@@ -111,13 +111,20 @@ final class LibraryModel {
     loaded = true
   }
 
+  /// The page after the last row, the same page OfflineSync saves for it.
   func loadMore() async {
-    guard hasMore, !isLoadingMore else { return }
+    guard hasMore, !isLoadingMore, let last = items.last else { return }
     isLoadingMore = true
     defer { isLoadingMore = false }
-    guard let page = try? await fetch(limit: Self.pageSize, offset: items.count) else { return }
-    items = Self.dedupe(items + page)
-    hasMore = page.count == Self.pageSize
+    do {
+      let page = try await fetch(limit: Self.pageSize, before: last.id)
+      items = Self.dedupe(items + page)
+      hasMore = page.count == Self.pageSize
+    } catch where error.isUnknownCursor {
+      // The last row was deleted (on another device, say): start again from the top.
+      await reload()
+    } catch {
+    }
   }
 
   /// Keeps polling while something is still being saved or analyzed, so rows
@@ -129,13 +136,13 @@ final class LibraryModel {
     }
   }
 
-  private func fetch(limit: Int, offset: Int, from api: APIClient = .shared) async throws
+  private func fetch(limit: Int, before: UUID? = nil, from api: APIClient = .shared) async throws
     -> [ItemSummary]
   {
     switch filter {
-    case .all: try await api.listItems(limit: limit, offset: offset)
-    case .source(let s): try await api.listItems(limit: limit, offset: offset, source: s)
-    case .tag(let t): try await api.listItems(limit: limit, offset: offset, tag: t)
+    case .all: try await api.listItems(limit: limit, before: before)
+    case .source(let s): try await api.listItems(limit: limit, before: before, source: s)
+    case .tag(let t): try await api.listItems(limit: limit, before: before, tag: t)
     }
   }
 

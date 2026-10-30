@@ -146,6 +146,10 @@ struct Chat: Codable, Identifiable {
   var turns: [ChatTurn]
   var createdAt: Date
   var updatedAt: Date
+  /// The server's version these turns are built on, sent back with the next
+  /// save. Nil, sent as 0, for a new chat, and for copies saved on the phone
+  /// before chats had versions (a save from one meets a 409 and merges).
+  var version: Int?
 
   /// A turn still streaming was cut off (the app quit, or Stop). Keep what
   /// arrived; with nothing, fail it so it shows Try again.
@@ -156,6 +160,15 @@ struct Chat: Codable, Identifiable {
         ? .failed(title: "No answer", detail: "This answer stopped before it started.") : .done
     }
   }
+
+  /// Another device saved the chat since this one's copy: the server's turns
+  /// in order, each replaced by the local turn with the same id, then the
+  /// local turns the server doesn't have, in local order.
+  static func merge(server: [ChatTurn], local: [ChatTurn]) -> [ChatTurn] {
+    let mine = Dictionary(local.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+    let theirs = Set(server.map(\.id))
+    return server.map { mine[$0.id] ?? $0 } + local.filter { !theirs.contains($0.id) }
+  }
 }
 
 /// A chat in History: just its questions, so the list doesn't download every answer.
@@ -164,8 +177,19 @@ struct ChatSummary: Codable, Identifiable {
   var questions: [String]
   let createdAt: Date
   var updatedAt: Date
+  let version: Int
 
   var title: String { questions.first ?? "New chat" }
+}
+
+/// What changed in the Library since the `until` of the last call.
+struct ItemChanges: Codable {
+  /// The server can't say what changed since `since`: walk the whole list.
+  let full: Bool
+  let changed: [UUID]
+  let deleted: [UUID]
+  /// A UTC timestamp, kept as the server wrote it and sent back as `since`.
+  let until: String
 }
 
 struct TagCount: Codable, Hashable {

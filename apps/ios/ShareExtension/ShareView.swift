@@ -56,13 +56,15 @@ final class ShareModel {
         let reason =
           switch error {
           case APIError.signedOut: "Sign in to Memory Dump and it sends."
+          // It sends once the app is updated.
+          case APIError.updateRequired: error.localizedDescription
           case is ShareQueue.InProgress: "Memory Dump is sending it."
           default: "Your server didn’t answer. It sends when it’s back."
           }
         phase = .queued(reason)
         await finish(after: .seconds(1.8))
       case .refused(let error):
-        if case APIError.http(let status, let detail) = error {
+        if case APIError.http(let status, let detail, _) = error {
           phase = .failed(detail.isEmpty ? "HTTP \(status)" : "\(status) · \(detail)")
         } else {
           phase = .failed(error.localizedDescription)

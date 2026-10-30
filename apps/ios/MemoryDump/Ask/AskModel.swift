@@ -17,7 +17,9 @@ final class AskModel {
 
   private var stream: Task<Void, Never>?
   /// Server writes run one after another, so an older copy of a chat never
-  /// lands after a newer one, or after the chat is deleted.
+  /// lands after a newer one, or after the chat is deleted. Each copy carries
+  /// the version it was built on; one another device got ahead of is merged
+  /// onto the server's turns there too (see `put`).
   private var writes: Task<Void, Never>?
   /// Chats whose last save failed; sent again when History loads.
   private var unsaved: [UUID: Chat] = [:]
@@ -118,7 +120,7 @@ final class AskModel {
     let deleted = await afterWrites { [weak self] () async -> Bool in
       do {
         try await APIClient.shared.deleteChat(id)
-      } catch APIError.http(404, _) {
+      } catch APIError.http(404, _, _) {
         // Never reached the server.
       } catch {
         return false
@@ -147,7 +149,8 @@ final class AskModel {
               $0.status = .done
             }
           case .error(let message):
-            update(chat, turn) { $0.status = Self.failure(APIError.http(500, message)) }
+            // Already written for people to read.
+            update(chat, turn) { $0.status = .failed(title: "Couldn’t get an answer", detail: message) }
           }
         }
         update(chat, turn) { if $0.isStreaming { $0.status = .done } }
@@ -194,9 +197,10 @@ final class AskModel {
       // Signed out or switched accounts while this waited: never save into another account.
       guard SessionStore.shared.current()?.user.id == owner else { return }
       do {
-        _ = try await APIClient.shared.saveChat(snapshot)
+        let saved = try await Self.put(snapshot)
         self?.unsaved[snapshot.id] = nil
-      } catch APIError.http(let status, _) where (400..<500).contains(status) {
+        self?.took(saved)
+      } catch APIError.http(let status, _, _) where (400..<500).contains(status) {
         // Rejected (too long, say); sending the same copy again won't help.
         self?.unsaved[snapshot.id] = nil
       } catch {
@@ -205,10 +209,42 @@ final class AskModel {
     }
   }
 
+  /// Saves the copy, and returns it with the version the server gave it. A
+  /// 409 means another device saved the chat after this copy's version: merge
+  /// onto the server's turns and save again with the server's version.
+  private static func put(_ snapshot: Chat) async throws -> Chat {
+    var chat = snapshot
+    var conflicts = 0
+    while true {
+      do {
+        chat.version = try await APIClient.shared.saveChat(chat).version
+        return chat
+      } catch APIError.http(409, _, _) where conflicts < 3 {
+        conflicts += 1
+        let server = try await APIClient.shared.chat(chat.id)
+        chat.turns = Chat.merge(server: server.turns, local: chat.turns)
+        chat.version = server.version
+      }
+    }
+  }
+
+  /// The server has this copy: the open chat moves to its version and shows
+  /// any turns another device added. Turns changed here since the copy was
+  /// taken keep this device's version.
+  private func took(_ saved: Chat) {
+    guard var open = chat, open.id == saved.id else { return }
+    let count = open.turns.count
+    open.turns = Chat.merge(server: saved.turns, local: open.turns)
+    open.version = saved.version
+    chat = open
+    if open.turns.count != count { record(open) }
+  }
+
   /// Puts the chat at the top of History without waiting for the server.
   private func record(_ chat: Chat) {
     let summary = ChatSummary(
-      id: chat.id, questions: chat.turns.map(\.question), createdAt: chat.createdAt, updatedAt: chat.updatedAt)
+      id: chat.id, questions: chat.turns.map(\.question), createdAt: chat.createdAt,
+      updatedAt: chat.updatedAt, version: chat.version ?? 0)
     history?.removeAll { $0.id == chat.id }
     history?.insert(summary, at: 0)
   }

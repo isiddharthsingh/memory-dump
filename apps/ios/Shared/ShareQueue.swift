@@ -35,6 +35,8 @@ enum ShareQueue {
 
   private static var directory: URL { AppGroup.directory("ShareQueue") }
   private static var isFlushing = false
+  /// No flush before this: the Retry-After of the last 429 or 503.
+  private(set) static var notBefore: Date?
 
   static func enqueueLink(_ url: URL, note: String?, title: String?) throws -> QueuedShare {
     let entry = QueuedShare(id: UUID(), queuedAt: .now, note: note, kind: .link(url), title: title)
@@ -95,8 +97,11 @@ enum ShareQueue {
       case .link(let url):
         _ = try await api.ingest(url, note: entry.note)
       case .file(let name, let mimeType):
+        // The entry's id, so a resend after a timeout gets the item the
+        // server already made. A link needs none: the server dedupes on URL.
         _ = try await api.ingestFile(
-          at: bytesURL(entry.id), name: name, mimeType: mimeType, note: entry.note)
+          at: bytesURL(entry.id), name: name, mimeType: mimeType, note: entry.note,
+          idempotencyKey: entry.id.lower)
       }
       remove(entry)
       return .sent
@@ -110,8 +115,9 @@ enum ShareQueue {
   /// Sends the queue oldest first. Stops when the server can't be reached or
   /// won't take more, since every share after would wait too; one that waits
   /// for its own reason (a 500, another sender) doesn't hold up the rest.
+  /// Sends nothing until the server's Retry-After has passed.
   static func flush(using api: APIClient = .shared) async -> (sent: Int, refused: Int) {
-    guard !isFlushing else { return (0, 0) }
+    guard !isFlushing, (notBefore ?? .distantPast) <= .now else { return (0, 0) }
     isFlushing = true
     defer { isFlushing = false }
     var sent = 0
@@ -121,29 +127,33 @@ enum ShareQueue {
       switch await send(entry, using: api) {
       case .sent: sent += 1
       case .refused: refused += 1
-      case .waiting(let error): if holdsUpQueue(error) { return (sent, refused) }
+      case .waiting(let error):
+        if let seconds = error.retryAfter { notBefore = .now + seconds }
+        if holdsUpQueue(error) { return (sent, refused) }
       }
     }
     return (sent, refused)
   }
 
   /// A share waits when sending it again later can work: no answer, a
-  /// cancelled send, a server that is down, busy or rate-limiting, or a
-  /// session that needs a sign-in. A 4xx refusal would only repeat.
+  /// cancelled send, a server that is down, busy or rate-limiting, a session
+  /// that needs a sign-in, or a build the server wants updated. A 4xx
+  /// refusal would only repeat.
   static func waits(after error: Error) -> Bool {
     if error is CancellationError || error is URLError || error is InProgress { return true }
     switch error as? APIError {
-    case .signedOut?: return true
-    case .http(let status, _)?: return status == 408 || status == 429 || status >= 500
+    case .signedOut?, .updateRequired?: return true
+    case .http(let status, _, _)?: return status == 408 || status == 429 || status >= 500
     default: return false
     }
   }
 
-  /// Whether every share would wait after this: no server, no session, a rate limit.
+  /// Whether every share would wait after this: no server, no session, a
+  /// rate limit, a build too old.
   static func holdsUpQueue(_ error: Error) -> Bool {
     switch error as? APIError {
-    case .signedOut?: return true
-    case .http(let status, _)?: return status == 408 || status == 429 || error.isUnreachable
+    case .signedOut?, .updateRequired?: return true
+    case .http(let status, _, _)?: return status == 408 || status == 429 || error.isUnreachable
     default: return error.isUnreachable || error is CancellationError
     }
   }

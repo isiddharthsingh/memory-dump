@@ -1,40 +1,12 @@
 import Foundation
 import Observation
 
-enum APIError: LocalizedError, Equatable {
-  case signedOut
-  /// The server answered with a non-2xx status. The text is FastAPI's `detail`.
-  case http(Int, String)
-  /// Sign-in or sign-up was refused; the text says why, ready to show.
-  case auth(String)
-  /// `APIClient.saved` has no copy of this.
-  case notSaved
-
-  var errorDescription: String? {
-    switch self {
-    case .signedOut: "Not signed in."
-    case .http(let status, let detail): detail.isEmpty ? "HTTP \(status)" : detail
-    case .auth(let message): message
-    case .notSaved: "Not saved on this phone yet."
-    }
-  }
-}
-
-extension Error {
-  /// The request never got an answer: no network, a wrong address, or the
-  /// server (or the proxy in front of it) is down.
-  var isUnreachable: Bool {
-    if let error = self as? URLError { return error.code != .cancelled }
-    if case .http(let status, _)? = self as? APIError { return [502, 503, 504].contains(status) }
-    return false
-  }
-}
-
-/// The backend API. Every authorized call adds the access token, and after a
-/// 401 refreshes it once (see SessionStore.refresh) and tries again.
+/// The backend API, under /v1. Every authorized call adds the access token,
+/// and after a 401 refreshes it once (see SessionStore.refresh) and tries again.
 ///
 /// Every GET's answer is saved for the signed-in account (SavedResponses).
 /// When the server can't be reached, a GET returns that saved copy instead.
+/// A copy saved with an ETag is sent as If-None-Match, and a 304 returns it.
 @Observable
 final class APIClient {
   static let shared = APIClient()
@@ -42,13 +14,30 @@ final class APIClient {
   /// them before the server answers. Throws APIError.notSaved when there's none.
   static let saved = APIClient(savedOnly: true)
 
+  /// No URLCache: SavedResponses is the cache, and URLSession's own would
+  /// answer a conditional GET's 304 with its copy instead of passing it on.
+  static let session: URLSession = {
+    let config = URLSessionConfiguration.default
+    config.urlCache = nil
+    config.requestCachePolicy = .reloadIgnoringLocalCacheData
+    return URLSession(configuration: config)
+  }()
+
+  /// This build's CFBundleVersion, sent as X-App-Build with every request.
+  static let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+
   /// The last request couldn't reach the server, so reads are saved copies.
   private(set) var isOffline = false
+  /// What a 426 said: the server no longer takes this build. Every request
+  /// fails with it, without going out, until `checkBuildAgain()`.
+  private(set) var updateRequired: String?
+  /// Called once when a 426 sets `updateRequired`. The app asks for an update.
+  var onUpdateRequired: ((String) -> Void)?
 
   private let savedOnly: Bool
   private let saves = SavedResponses.shared
   private let store = SessionStore.shared
-  private let http = URLSession.shared
+  private let http = APIClient.session
   private let decoder = JSONDecoder.api
 
   private init(savedOnly: Bool = false) {
@@ -57,15 +46,22 @@ final class APIClient {
 
   // MARK: Items
 
+  /// Newest first. `before` is the last item of the previous page.
   func listItems(
-    limit: Int? = nil, offset: Int? = nil, status: String? = nil, tag: String? = nil,
+    limit: Int? = nil, before: UUID? = nil, status: String? = nil, tag: String? = nil,
     source: String? = nil
   ) async throws -> [ItemSummary] {
     let query: [String: String?] = [
-      "limit": limit.map(String.init), "offset": offset.map(String.init), "status": status,
+      "limit": limit.map(String.init), "before": before?.lower, "status": status,
       "tag": tag, "source": source,
     ]
     return try await send("/items", query: query)
+  }
+
+  /// What changed since the `until` of the last call; nil `since` the first time.
+  /// Not saved: each answer is good for one sync.
+  func itemChanges(since: String?) async throws -> ItemChanges {
+    try await send("/items/changes", query: ["since": since], saves: false)
   }
 
   func item(_ id: UUID) async throws -> ItemDetail {
@@ -110,9 +106,11 @@ final class APIClient {
   }
 
   /// Multipart upload streamed from disk, so a large PDF never sits in memory.
-  func ingestFile(at file: URL, name: String, mimeType: String, note: String?) async throws
-    -> ItemSummary
-  {
+  /// The server keeps `idempotencyKey` with the item, so sending the same
+  /// upload again after a timeout returns that item instead of a second one.
+  func ingestFile(
+    at file: URL, name: String, mimeType: String, note: String?, idempotencyKey: String? = nil
+  ) async throws -> ItemSummary {
     let boundary = "memorydump-\(UUID().uuidString)"
     let body = try Multipart.write(
       file: file, name: name, mimeType: mimeType, note: note, boundary: boundary)
@@ -120,6 +118,7 @@ final class APIClient {
     let (data, _) = try await authorized { token in
       var req = try self.request("/ingest/file", method: "POST", token: token, timeout: Self.shareTimeout)
       req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+      if let idempotencyKey { req.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key") }
       return req
     } perform: { req in
       try await self.http.upload(for: req, fromFile: body)
@@ -166,17 +165,26 @@ final class APIClient {
 
   // MARK: Chats
 
+  static let chatPageSize = 200
+
+  /// Every chat, most recently changed first, read a page at a time.
   func chats() async throws -> [ChatSummary] {
-    try await send("/chats")
+    try await Self.everyPage(limit: Self.chatPageSize) { before in
+      try await self.send("/chats", query: ["limit": String(Self.chatPageSize), "before": before?.lower])
+    }
   }
 
   func chat(_ id: UUID) async throws -> Chat {
     try await send("/chats/\(id.lower)")
   }
 
-  /// Creates or replaces the chat; the app picks the id.
+  /// Creates or replaces the chat; the app picks the id. `chat.version` is the
+  /// server's version this copy was built on (0 for a new chat); a 409 means
+  /// another device saved it since. The answer carries the new version.
   func saveChat(_ chat: Chat) async throws -> ChatSummary {
-    try await send("/chats/\(chat.id.lower)", method: "PUT", body: ChatBody(turns: chat.turns))
+    try await send(
+      "/chats/\(chat.id.lower)", method: "PUT",
+      body: ChatBody(turns: chat.turns, version: chat.version ?? 0))
   }
 
   func deleteChat(_ id: UUID) async throws {
@@ -213,7 +221,7 @@ final class APIClient {
       body: ["push_token": token, "apns_env": apnsEnv, "platform": "ios"])
   }
 
-  /// `/healthz` is unauthenticated.
+  /// `/healthz` is unauthenticated and outside /v1.
   func health() async -> Bool {
     guard let req = try? request("/healthz", token: nil),
       let result = try? await http.data(for: req)
@@ -230,25 +238,30 @@ final class APIClient {
 
   private struct ChatBody: Encodable {
     let turns: [ChatTurn]
+    let version: Int
   }
 
   /// `saveAs` saves a write's answer as the copy of the GET at that path, for
-  /// writes that answer with the thing they changed.
+  /// writes that answer with the thing they changed. `saves: false` keeps a
+  /// GET's answer off the disk.
   private func send<T: Decodable>(
     _ path: String, method: String = "GET", query: [String: String?] = [:],
-    body: (any Encodable)? = nil, saveAs: String? = nil, timeout: TimeInterval? = nil
+    body: (any Encodable)? = nil, saveAs: String? = nil, saves: Bool = true,
+    timeout: TimeInterval? = nil
   ) async throws -> T {
     let data = try await data(
-      path, method: method, query: query, body: body, saveAs: saveAs, timeout: timeout)
+      path, method: method, query: query, body: body, saveAs: saveAs, saves: saves,
+      timeout: timeout)
     return try decoder.decode(T.self, from: data)
   }
 
   private func data(
     _ path: String, method: String = "GET", query: [String: String?] = [:],
-    body: (any Encodable)? = nil, saveAs: String? = nil, timeout: TimeInterval? = nil
+    body: (any Encodable)? = nil, saveAs: String? = nil, saves keep: Bool = true,
+    timeout: TimeInterval? = nil
   ) async throws -> Data {
     let isRead = method == "GET"
-    let key = isRead ? Self.savedKey(path, query) : saveAs
+    let key = keep ? (isRead ? Self.savedKey(path, query) : saveAs) : nil
     let user = store.current()?.user.id
     if savedOnly {
       guard isRead, let key, let user, let saved = saves.read(key, user: user) else {
@@ -256,27 +269,75 @@ final class APIClient {
       }
       return saved
     }
+    // The copy a 304 stands for, and its ETag.
+    var cached: (data: Data, etag: String)?
+    if isRead, let key, let user, let etag = saves.etag(key, user: user),
+      let data = saves.read(key, user: user)
+    {
+      cached = (data, etag)
+    }
     do {
-      let (data, _) = try await authorized { token in
-        try self.request(path, method: method, query: query, body: body, token: token, timeout: timeout)
+      let (data, resp) = try await authorized { token in
+        var req = try self.request(
+          path, method: method, query: query, body: body, token: token, timeout: timeout)
+        if let cached { req.setValue(cached.etag, forHTTPHeaderField: "If-None-Match") }
+        return req
       } perform: { req in
         try await self.http.data(for: req)
       }
       // Set only on a change: every set re-renders the views that show it.
       if isOffline { isOffline = false }
+      // Unchanged since the saved copy; the server did answer, so not offline.
+      if resp.statusCode == 304, let cached { return cached.data }
       // Not if the account signed out while this was on its way.
-      if let key, let user, store.current()?.user.id == user { saves.write(data, key, user: user) }
+      if let key, let user, store.current()?.user.id == user {
+        saves.write(data, key, user: user, etag: resp.value(forHTTPHeaderField: "ETag"))
+      }
       return data
     } catch let error where error.isUnreachable {
-      if !isOffline { isOffline = true }
+      // Reads are what show saved copies; a write that fails changes none.
+      if isRead, !isOffline { isOffline = true }
       // A read falls back to the saved copy; a write has to fail.
       if isRead, let key, let user, let saved = saves.read(key, user: user) { return saved }
       throw error
     }
   }
 
+  /// Every page of a list that pages by `before`, the id of the previous
+  /// page's last row, until a short page. When that row is gone by the time
+  /// the next page is asked for, starts again from the top (a few times).
+  static func everyPage<T: Identifiable>(
+    limit: Int, _ page: (UUID?) async throws -> [T]
+  ) async throws -> [T] where T.ID == UUID {
+    var restarts = 0
+    while true {
+      do {
+        var rows: [T] = []
+        var before: UUID?
+        while true {
+          let next = try await page(before)
+          rows += next
+          guard next.count == limit, let last = next.last else { break }
+          before = last.id
+        }
+        // A row that changed while paging can show up on two pages.
+        var seen = Set<UUID>()
+        return rows.filter { seen.insert($0.id).inserted }
+      } catch let error where error.isUnknownCursor && restarts < 3 {
+        restarts += 1
+      }
+    }
+  }
+
+  /// Lets requests out again after a 426, to find out whether the server
+  /// still refuses this build.
+  func checkBuildAgain() {
+    updateRequired = nil
+  }
+
   /// What a GET is saved under: its path and sorted query, without the server
-  /// address, so a new address still finds the copies.
+  /// address or the /v1 prefix, so a new address or API version still finds
+  /// the copies.
   static func savedKey(_ path: String, _ query: [String: String?]) -> String {
     let items = queryItems(query)
     guard !items.isEmpty else { return path }
@@ -295,13 +356,15 @@ final class APIClient {
   }
 
   /// Builds the request with the current access token, and after a 401 builds it
-  /// again with a refreshed one. Throws APIError.http for any other non-2xx.
+  /// again with a refreshed one. Throws APIError for any other non-2xx but a
+  /// 304, which only a request with If-None-Match gets.
   private func authorized<R>(
     _ make: (String) throws -> URLRequest,
     perform: (URLRequest) async throws -> (R, URLResponse),
     detail: (R) async throws -> Data = { $0 as? Data ?? Data() }
   ) async throws -> (R, HTTPURLResponse) {
     guard !savedOnly else { throw APIError.notSaved }
+    if let updateRequired { throw APIError.updateRequired(updateRequired) }
     guard var session = store.current() else { throw APIError.signedOut }
     var (result, resp) = try await perform(make(session.accessToken))
     if (resp as? HTTPURLResponse)?.statusCode == 401 {
@@ -309,26 +372,45 @@ final class APIClient {
       (result, resp) = try await perform(make(session.accessToken))
     }
     let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-    guard let http = resp as? HTTPURLResponse, (200..<300).contains(status) else {
+    guard let http = resp as? HTTPURLResponse, (200..<300).contains(status) || status == 304 else {
       if status == 401 {
         // Refused even with fresh tokens: the account behind the session is gone.
         store.expire()
         throw APIError.signedOut
       }
-      throw APIError.http(status, FastAPIError.detail(in: try await detail(result)))
+      let error = APIError(status: status, body: try await detail(result), response: resp as? HTTPURLResponse)
+      if case .updateRequired(let message) = error, updateRequired == nil {
+        updateRequired = message
+        onUpdateRequired?(error.localizedDescription)
+      }
+      throw error
     }
     return (result, http)
   }
 
-  fileprivate func request(
+  /// Outside the API's /v1: the routes SuperTokens serves itself, and the
+  /// health check.
+  private static let unversioned: Set<String> = [
+    "/auth/signin", "/auth/signup", "/auth/signout", "/auth/session/refresh", "/healthz",
+  ]
+
+  /// Where a path is on the server. Callers and saved copies use the path
+  /// without /v1.
+  static func route(_ path: String) -> String {
+    unversioned.contains(path) ? path : "/v1" + path
+  }
+
+  func request(
     _ path: String, method: String = "GET", query: [String: String?] = [:],
     body: (any Encodable)? = nil, token: String?, timeout: TimeInterval? = nil
   ) throws -> URLRequest {
-    var url = Server.url.appending(path: path)
+    var url = Server.url.appending(path: Self.route(path))
     let items = Self.queryItems(query)
     if !items.isEmpty { url.append(queryItems: items) }
     var req = URLRequest(url: url)
     req.httpMethod = method
+    // The server answers builds it no longer supports with 426.
+    req.setValue(Self.build, forHTTPHeaderField: "X-App-Build")
     // A read has a saved copy to fall back on, so don't wait the default
     // minute on a server that's asleep or off the network.
     if let timeout {
@@ -342,95 +424,6 @@ final class APIClient {
       req.httpBody = try JSONEncoder().encode(body)
     }
     return req
-  }
-}
-
-/// SuperTokens' sign-in, sign-up and refresh routes, with header-based
-/// sessions: requests send `st-auth-mode: header`, tokens come back in the
-/// `st-access-token` and `st-refresh-token` response headers.
-enum AuthAPI {
-  static func signIn(email: String, password: String) async throws -> Session {
-    try await session("/auth/signin", [("email", email), ("password", password)])
-  }
-
-  static func signUp(email: String, password: String, displayName: String?) async throws -> Session {
-    var fields = [("email", email), ("password", password)]
-    if let displayName { fields.append(("name", displayName)) }
-    return try await session("/auth/signup", fields)
-  }
-
-  /// New tokens for old. SuperTokens rotates the refresh token each time, and a
-  /// refresh token used again after its replacement ends the session.
-  static func refresh(session: Session) async throws -> Session {
-    var req = try APIClient.shared.request(
-      "/auth/session/refresh", method: "POST", token: session.refreshToken)
-    req.setValue("header", forHTTPHeaderField: "st-auth-mode")
-    let (data, resp) = try await URLSession.shared.data(for: req)
-    let http = resp as? HTTPURLResponse
-    guard let http, http.statusCode == 200, let tokens = Tokens(http) else {
-      throw APIError.http(http?.statusCode ?? 0, FastAPIError.detail(in: data))
-    }
-    return Session(accessToken: tokens.access, refreshToken: tokens.refresh, user: session.user)
-  }
-
-  private struct Tokens {
-    let access: String
-    let refresh: String
-
-    init?(_ response: HTTPURLResponse) {
-      guard let access = response.value(forHTTPHeaderField: "st-access-token"), !access.isEmpty,
-        let refresh = response.value(forHTTPHeaderField: "st-refresh-token"), !refresh.isEmpty
-      else { return nil }
-      self.access = access
-      self.refresh = refresh
-    }
-  }
-
-  private struct Form: Encodable {
-    struct Field: Encodable {
-      let id: String
-      let value: String
-    }
-    let formFields: [Field]
-  }
-
-  /// Signs in or up, then loads the profile with the new access token.
-  private static func session(_ path: String, _ fields: [(String, String)]) async throws -> Session {
-    let form = Form(formFields: fields.map { .init(id: $0, value: $1) })
-    var req = try APIClient.shared.request(path, method: "POST", body: form, token: nil)
-    req.setValue("header", forHTTPHeaderField: "st-auth-mode")
-    let (data, resp) = try await URLSession.shared.data(for: req)
-    let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-    guard status == 200 else { throw APIError.http(status, FastAPIError.detail(in: data)) }
-    if let problem = try JSONDecoder().decode(AuthResult.self, from: data).problem {
-      throw APIError.auth(problem)
-    }
-    guard let http = resp as? HTTPURLResponse, let tokens = Tokens(http) else {
-      throw APIError.auth("The server didn’t start a session.")
-    }
-    let me = try APIClient.shared.request("/auth/me", token: tokens.access)
-    let (profile, meResp) = try await URLSession.shared.data(for: me)
-    let meStatus = (meResp as? HTTPURLResponse)?.statusCode ?? 0
-    guard (200..<300).contains(meStatus) else {
-      throw APIError.http(meStatus, FastAPIError.detail(in: profile))
-    }
-    let user = try JSONDecoder.api.decode(User.self, from: profile)
-    return Session(accessToken: tokens.access, refreshToken: tokens.refresh, user: user)
-  }
-}
-
-/// FastAPI errors look like {"detail": "..."}; validation errors carry a list.
-/// SuperTokens' own /auth routes answer {"message": "..."}.
-enum FastAPIError {
-  static func detail(in data: Data) -> String {
-    guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-      return String(data: data, encoding: .utf8) ?? ""
-    }
-    if let s = obj["detail"] as? String { return s }
-    if let list = obj["detail"] as? [[String: Any]], let msg = list.first?["msg"] as? String {
-      return msg
-    }
-    return obj["message"] as? String ?? ""
   }
 }
 

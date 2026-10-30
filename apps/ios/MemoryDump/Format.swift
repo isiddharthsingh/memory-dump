@@ -128,8 +128,11 @@ enum Format {
   static func friendlyIngestError(_ raw: String?, url: String = "") -> String {
     if isUploadedFile(url) { return "Couldn’t process this file" }
     let e = raw ?? ""
-    // The server only fetches addresses on the open internet.
+    // The server only fetches addresses on the open internet, pages up to
+    // 5 MB, and waits only so long for a site.
     if e.hasPrefix("NotPublic") { return "This link points to a private network" }
+    if e.hasPrefix("TooLarge") { return "This page is too large to save" }
+    if e.hasPrefix("TimeoutError") { return "The site took too long to answer" }
     if e.contains(/(?i)name or service not known|nodename nor servname|getaddrinfo|connecterror|connection refused/) {
       return "Couldn’t reach this site"
     }
@@ -148,8 +151,15 @@ enum Format {
     if error is URLError {
       return ("Can’t reach your server", "Check your connection and try again.")
     }
-    if case APIError.http(429, _) = error {
+    if case APIError.http(429, _, _) = error {
       return ("Hourly limit reached", "Try again in a little while.")
+    }
+    // Claude or Voyage is out for a moment, and the server says so.
+    if case APIError.http(503, let detail, _) = error, !detail.isEmpty {
+      return ("Ask is unavailable right now", detail)
+    }
+    if case APIError.updateRequired = error {
+      return ("Update Memory Dump", error.localizedDescription)
     }
     if (error as? APIError) == .signedOut {
       return ("You’ve been signed out", "Sign in again to keep asking.")

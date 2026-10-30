@@ -67,6 +67,14 @@ struct RootView: View {
       }
     }
     .animation(.snappy, value: app.toast)
+    .alert(
+      "Update Memory Dump",
+      isPresented: Binding(get: { app.updateNotice != nil }, set: { if !$0 { app.updateNotice = nil } })
+    ) {
+      Button("OK") {}
+    } message: {
+      Text(app.updateNotice ?? "")
+    }
     .tint(Palette.accent)
     // On the scene rather than preferredColorScheme, which doesn't go back
     // to the iPhone's setting once it has been set.
