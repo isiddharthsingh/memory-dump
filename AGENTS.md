@@ -13,14 +13,15 @@ Two deployables in one repo:
 
 ## Backend — commands
 
-All commands assume `cd backend` unless noted. The compose file mounts `.` into the containers, so code changes hot-reload.
+All commands assume `cd backend` unless noted. `docker-compose.yml` is the stack as it runs in production (only the API's port published, no reload); `docker compose up` also merges `docker-compose.override.yml`, which publishes the databases, mounts `.` into the containers so code changes hot-reload, and builds the api image with the dev extras (pytest, ruff, mypy).
 
 ```bash
-docker compose up --build              # full stack (postgres + redis + supertokens + api + worker)
+docker compose up --build              # full stack (postgres + redis + supertokens + migrate + api + worker)
+docker compose -f docker-compose.yml up -d --build   # production: no override
 docker compose up postgres redis supertokens   # infra only, then run api/worker on host
                                        # with SUPERTOKENS_CONNECTION_URI=http://localhost:3567
 
-docker compose exec api alembic upgrade head            # migrations (also runs at api startup)
+docker compose exec api alembic upgrade head            # migrations (the one-off `migrate` service runs them before api and worker start)
 docker compose exec api alembic revision -m "msg" --autogenerate
 
 docker compose exec api pytest                          # all tests
@@ -32,7 +33,9 @@ docker compose exec api ruff format .
 docker compose exec api mypy app                        # type-check
 ```
 
-Worker entry point: `arq app.workers.worker.WorkerSettings` (the `worker` compose service runs this). Functions registered there: `ingest_item`, `ingest_file`, `synthesize_topics`, `forget_item`, `compact_topics`, `weekly_digest`. A cron job runs `compact_topics` nightly at 03:14 UTC.
+Worker entry point: `arq app.workers.worker.WorkerSettings` (the `worker` compose service runs this). Functions registered there: `ingest_item`, `ingest_file`, `synthesize_topics`, `forget_item`, `compact_topics`, `compact_user`, `weekly_digest`, `digest_user`. Cron jobs: `compact_topics` nightly at 03:14 UTC and `weekly_digest` on Sundays at 16:00 UTC (each only queues one job per user), `requeue_stuck` every 5 minutes and at startup, `observe_queue` every minute.
+
+`SUPERTOKENS_API_KEY` reaches the core (as `API_KEYS`), `migrate`, `api` and `worker` from one place, your shell or `backend/.env` (compose interpolation, where the shell wins), so they can't disagree; the core takes only letters, digits, `=` and `-` in it.
 
 `pytest-asyncio` is in `asyncio_mode = "auto"` — don't decorate async tests with `@pytest.mark.asyncio`.
 
@@ -58,12 +61,12 @@ The server address is not entered in the app. A `Server address` pre-build scrip
 
 ### Ingest pipeline (per-item, async)
 
-`POST /ingest` (`app/api/ingest.py`) inserts an `Item` row with `status="pending"` and enqueues `ingest_item` on arq. `(user_id, url)` is unique, so sharing a saved URL again returns the saved item, re-queued if it had failed; uploads get a `file://<item id>/<filename>` placeholder URL so files with the same name stay separate. The worker in `app/workers/ingest.py` runs the full pipeline:
+`POST /ingest` (`app/api/ingest.py`) inserts an `Item` row with `status="pending"` and enqueues `ingest_item` on arq. `(user_id, url)` is unique, so sharing a saved URL again returns the saved item, re-queued if it had failed; uploads get a `file://<item id>/<filename>` placeholder URL so files with the same name stay separate. `POST /ingest/file` streams the upload into upload storage (`app/storage.py`: the shared `uploads` volume, or an S3-compatible bucket with `STORAGE_BACKEND=s3`) before the row is written, records its `upload_key`, and takes an `Idempotency-Key` header (the app sends its queue entry's id), unique per user, so a resend after a timeout returns the first item. The worker in `app/workers/ingest.py` runs the full pipeline:
 
 1. `app/extractors/` — per-source extractor selected by `get_extractor(source)`. `source` is detected from the URL (`youtube` / `twitter` / `instagram` / `webpage`). Posts on X come from the FxTwitter API (`api.fxtwitter.com`, the open-source FxEmbed project, no auth), which has the full text of long posts, quoted posts and X Article bodies, with X's oEmbed as the fallback; a post that links out also gets the linked page through that page's own extractor. Anyone who can sign up picks the URLs the server fetches, so every extractor fetches through `public_client()` (`app/extractors/webpage.py`): its `PublicOnlyTransport` resolves and checks the address as each connection opens, redirects and changed DNS answers included, and refuses anything that isn't public (this machine, the compose network, private ranges, `.local` names, cloud metadata) with `NotPublic`, which the app shows as "This link points to a private network". A consequence: pages on your own network (a NAS, `http://<mac>.local`) can't be saved. YouTube metadata goes through yt-dlp instead, which only ever talks to YouTube. Build any new extractor's client with `public_client()`. Extractors return `Key: value` sections separated by blank lines, which the app's reader parses, so no section value may contain a blank line. HTML is parsed with `selectolax.lexbor` (selectolax 1.0 removed the `selectolax.parser` backend).
 2. `app/ai/analyze.py` — Claude (`CLAUDE_ANALYSIS_MODEL`, Haiku by default) returns title, summary, tags, and the **lexical anchors**: `people`, `handles`, `brands_products`, `topics`. These anchors are persisted as Postgres `ARRAY(Text)` columns AND folded into the text that gets embedded — they're what makes proper-noun queries work.
 3. `app/ai/embed.py` — `chunk_text` + Voyage `voyage-3-large` (1024-dim) into `item_chunks.embedding`. Re-ingest is idempotent: existing chunks for the item are deleted before insert.
-4. Status transitions: `pending → processing → ready` (or `failed` with `error` text). `POST /items/{id}/retry` re-enqueues.
+4. Status transitions: `pending → processing → ready` (or `failed` with `error` text). `POST /items/{id}/retry` re-enqueues. Every enqueue (save, re-share of a failed item, retry, an edited note) bumps `items.ingest_generation` and queues the job for that generation under the job id `ingest:<id>:<generation>`. A job claims the item only while its generation is current, and saves under the item's row lock only if it still is, so a job overtaken by a newer request writes nothing and two runs never interleave chunks (`(item_id, ord)` is unique).
 5. On success, the worker enqueues `synthesize_topics` for that item via the shared arq Redis (`ctx["redis"].enqueue_job(...)`).
 
 If you add a new source type, the work is: new extractor in `app/extractors/`, register it in `get_extractor`, and make sure the URL→source detector in the ingest API recognizes it.
@@ -72,7 +75,9 @@ If you add a new source type, the work is: new extractor in `app/extractors/`, r
 
 `app/workers/synthesize.py` + `app/ai/synthesize.py`. After each successful ingest, Claude (`CLAUDE_SYNTHESIS_MODEL`, Sonnet) **patches** existing `topic_pages` rather than regenerating them. Pages are markdown with `[[wikilinks]]`; `backlinks` and `source_item_ids` are tracked on the row, `version` increments per patch. `topic_page_chunks` mirrors `item_chunks` so wiki content participates in the same retrieval fusion.
 
-`compact_topics` (nightly) is the GC pass that merges/prunes drifted pages.
+No writer holds a transaction across a Claude call. Synthesis drafts each page from a copy read without a lock, then writes all its drafts in one short transaction under the per-user wiki lock (`lock_wiki`), only if no page's `version` changed meanwhile; a page that did is drafted again on the new copy (up to 3 rounds, then the job runs again later). A failed try writes nothing. `items.wiki_status` goes `pending` (ingest done) → `done`, or `failed` when synthesis gave up.
+
+`compact_topics` (nightly) queues one `compact_user` job per user, the GC pass: it queues `forget_item` again for items the user's pages still cite that no longer exist, then merges near-duplicate pages Claude proposes, each written under the lock only if none of its pages changed since.
 
 Deleting an item leaves no trace of it. `DELETE /items/{id}` enqueues `forget_item` (also in `app/workers/synthesize.py`) before it deletes, so a delete never lands without its cleanup; the job retries until the item is gone. Pages only that item supported are deleted at once, along with the Ask history source cards and `[item:…]` / `[wiki:…]` markers that point at the item or those pages (a chat's `updated_at` is left alone, so History keeps its order). Then each page that cites the item or links to a deleted page is rewritten in its own transaction: Claude (`CLAUDE_SYNTHESIS_MODEL`, `FORGET_SYSTEM`) rewrites it, `forget_in_body` removes whatever is still cited only to the item and unlinks links to deleted pages, and the page is re-embedded with its `version` bumped. Last, stub pages nothing links to any more are deleted. Rate limits and overloads retry with backoff like ingest, and a retry picks up the pages still left. Synthesis and `forget_item` both take a per-user Postgres advisory lock (`_lock_wiki`), so neither writes a page from a copy the other has changed; a job that waits 30 s for it runs again later instead of holding a worker. Synthesis keeps nothing when its item was deleted while Claude was writing.
 
@@ -80,8 +85,8 @@ Deleting an item leaves no trace of it. `DELETE /items/{id}` enqueues `forget_it
 
 `app/ai/retrieval.py` is the single source of truth and is used by both endpoints. The pipeline:
 
-1. **Dense**: pgvector HNSW over `item_chunks.embedding` ∪ `topic_page_chunks.embedding`, query embedded with Voyage `input_type="query"`.
-2. **BM25**: Postgres `tsvector` full-text over the same two tables. The GIN index on the lexical-anchor arrays is what gives proper-noun queries deterministic recall.
+1. **Dense**: pgvector HNSW over `item_chunks.embedding` ∪ `topic_page_chunks.embedding`, query embedded with Voyage `input_type="query"` (cached in Redis for a day). The indexes hold every user's chunks and the user filter applies after them, so the query turns on pgvector 0.8's iterative scan (`hnsw.iterative_scan = relaxed_order`) to keep scanning until it has this user's nearest chunks. When the query can't be embedded, search goes on with keywords only.
+2. **BM25**: Postgres `tsvector` full-text over the same two tables: the stored `fts` column on each chunk and the item's or page's `fts_doc`, each with a GIN index. The GIN index on the lexical-anchor arrays is what gives proper-noun queries deterministic recall. After these two queries `hybrid_search` commits, so no pooled connection is held while Voyage reranks and Claude answers.
 3. **Reciprocal Rank Fusion** merges the two ranked lists.
 4. **Voyage `rerank-2.5`** reorders the top candidates.
 5. `/ask` (`app/ai/ask.py`) feeds the reranked context to Claude (`CLAUDE_ASK_MODEL`, Opus) which must cite as `[item:UUID]` / `[wiki:slug]`. `/search` returns the hits directly, minus chunks found only by the dense search whose rerank score is under `_MIN_SCORE` (`app/api/search.py`): nearest neighbours exist even for a query that matches nothing.
@@ -90,7 +95,7 @@ If you change the chunking or embedding model, both `items` and `topic_pages` ne
 
 ### Ask history (`/chats`)
 
-`app/api/chats.py`: each `chats` row holds one conversation's turns as JSONB, under an id the app picks. The app PUTs the whole chat when a question is asked and again when the answer finishes; `GET /chats` returns only each chat's questions for History, and `GET /chats/{id}` the full turns. Turn JSON uses single-word keys (`status`, `error: {title, detail}`) because the app encodes request bodies with a plain `JSONEncoder`, without snake_case conversion. On iOS, `AskModel` sends every chat write through one serial queue, so an older copy never lands after a newer one or after a delete.
+`app/api/chats.py`: each `chats` row holds one conversation's turns as JSONB, under an id the app picks. The app PUTs the whole chat when a question is asked and again when the answer finishes; `GET /chats` returns only each chat's questions for History, a page at a time (`before=<last chat id>`), and `GET /chats/{id}` the full turns. Each save bumps `chats.version`; a PUT that names the version it was built on (0 for a new chat) gets 409 when another device saved in between, and the app merges by turn id and saves again (`Chat.merge`). A PUT without a version always wins. Turn JSON uses single-word keys (`status`, `error: {title, detail}`) because the app encodes request bodies with a plain `JSONEncoder`, without snake_case conversion. On iOS, `AskModel` sends every chat write through one serial queue, so an older copy never lands after a newer one or after a delete.
 
 ### Share queue (iOS)
 
@@ -106,13 +111,22 @@ SuperTokens (self-hosted core, `supertokens-python` SDK) owns accounts, password
 
 The app's `users` table holds only `id` (the SuperTokens user ID), `display_name` and `created_at`; the email and password live in SuperTokens. The EmailPassword `sign_up` override creates the `users` row for every new login, including ones made from the dashboard, and the optional `name` sign-up field becomes `display_name`. Migration `0006_supertokens` imported the pre-SuperTokens accounts into the core with their Argon2 hashes and their old ids as external user IDs, so it needs the core running.
 
-Owner-scoped routes depend on `app/deps.py:get_current_user`, which runs SuperTokens' `verify_session()` and loads the `users` row, and filter by `user_id`, so no user sees another's items, wiki, chats or devices (`tests/test_ownership.py`, `tests/test_chats.py`). `DELETE /auth/me` deletes the row, relying on `ON DELETE CASCADE` foreign keys to remove everything the user owns, then deletes the SuperTokens user and its sessions. Deleting a user from the dashboard removes only the login; the library stays until the row is deleted. `/ingest` and `/ask` are rate-limited per user per hour in Redis (`app/auth/rate_limit.py`).
+Owner-scoped routes depend on `app/deps.py:get_current_user`, which runs SuperTokens' `verify_session()` and loads the `users` row, and filter by `user_id`, so no user sees another's items, wiki, chats or devices (`tests/test_ownership.py`, `tests/test_chats.py`). `DELETE /auth/me` deletes the row, relying on `ON DELETE CASCADE` foreign keys to remove everything the user owns, then deletes the SuperTokens user and its sessions. Deleting a user from the dashboard removes only the login; the library stays until the row is deleted. `/ingest` (with `PATCH /items/{id}` and `/items/{id}/retry`, which re-run the pipeline), `/ask` and `/search` are rate-limited per user, and `/auth/signin` and `/auth/signup` per client address, by token buckets in Redis (`app/auth/rate_limit.py`); a 429 carries `Retry-After`. When Redis can't be reached, requests go through.
 
 SuperTokens rotates refresh tokens, and a refresh token used again after its replacement has been used ends the session (theft detection). On iOS the session is stored in the shared Keychain (`apps/ios/Shared/SessionStore.swift`) and attached by `apps/ios/Shared/APIClient.swift`, which refreshes once after a 401; `AuthAPI` there speaks SuperTokens' header-based protocol directly. The official SuperTokens iOS SDK isn't used: its URL protocol buffers whole responses and drops upload bodies, which would break `/ask/stream` and file uploads. The app and the share extension can both refresh, so `SessionStore.refresh` holds a `flock()` on a file in the App Group and re-reads the Keychain after taking it. Keep that lock if you touch refresh.
 
 ### Push
 
 `app/notifications.py` sends straight to APNs over HTTP/2 with a token-based `.p8` key (`APNS_KEY_PATH`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC` in `.env`; the worker mounts `secrets/` at `/run/secrets`). With no key path, pushes are skipped. The iOS app can't receive them until it is signed by a paid team with the `aps-environment` entitlement (see iOS — commands). Each `devices` row stores the hex token and `apns_env` (`sandbox` for Xcode builds, `production` for TestFlight/App Store), which picks the APNs host. Tokens APNs reports as gone (410 / BadDeviceToken) are deleted.
+
+### Reliability: what puts work back and what stops runaway load
+
+- **Lost jobs** (`app/workers/reconcile.py`, every 5 minutes): the API commits an item and then queues its job, and Redis keeps the queue in an append-only file synced every second, so a crash or restart can still lose one. `requeue_stuck` queues again pending items untouched for 10 minutes and ready items whose `wiki_status` is still `pending` after 30; their job ids make arq refuse any that still exist. Items `processing` past `JOB_TIMEOUT_S` + 5 minutes turn `failed`, tombstones older than `TOMBSTONE_DAYS` go, and uploads abandoned for a week are swept.
+- **Retries**: transient failures (a provider's 429/5xx/529, timeouts, connection errors; a site's 5xx or timeout) retry with exponential backoff with jitter, or after the provider's Retry-After; provider failures get 8 tries, site failures 3. Anything else fails at once.
+- **Providers** (`app/ai/clients.py`): one client per process; calls in flight per provider are capped across all processes by a Redis lease set (`ANTHROPIC_MAX_CONCURRENCY`, `VOYAGE_MAX_CONCURRENCY`), of which jobs may hold three quarters, so Ask and Search always find one; after 5 transient failures in a row a process stops calling that provider for 30 s (`ProviderUnavailable`, which the API answers with 503 and Retry-After). Ask has its own timeout (`ASK_TIMEOUT_S`). Tokens are counted per user, day and model in `llm_usage` (`app/usage.py`) and in Prometheus.
+- **Timeouts and caps**: Postgres ends statements after `DB_STATEMENT_TIMEOUT_MS` and idle transactions after `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS`; `get_current_user` commits after loading the user so a request holds no connection while it waits on Claude. Link extraction gets `EXTRACT_TIMEOUT_S` and reads at most `EXTRACT_MAX_BYTES` of a page, counted after decompression (`TooLarge`). Request bodies are capped (`BodyLimit` in `app/observability.py`: 10 MB, uploads 26 MB) before Starlette reads them.
+- **Sync** (`app/api/items.py`): `GET /items` pages by `before=<last item id>` on `(created_at, id)`, which a deleted cursor item survives through its tombstone. `GET /items/changes?since=<until>` lists ids changed and deleted since a previous call, so the app's offline sync refreshes only those. Item, wiki page and chat detail GETs carry an ETag and answer `If-None-Match` with 304.
+- **Health and metrics**: `/livez` (the process answers), `/readyz` (Postgres and Redis answer within 2 s; the compose healthcheck), `/metrics` for Prometheus (only with `Authorization: Bearer $METRICS_TOKEN`; the worker serves its own on `WORKER_METRICS_PORT`, including queue depth and the oldest job's wait). The worker's healthcheck is `arq --check`. Errors go to Sentry when `SENTRY_DSN` is set.
 
 ### DB & migrations
 
@@ -129,4 +143,7 @@ All Claude/Voyage model IDs are env-overridable in `app/config.py` (`CLAUDE_ANAL
 - iOS navigation: three tabs (Library, Wiki, Ask), each a `NavigationStack` whose path lives in `Router`; `Route.item` / `Route.wiki` are the detail screens. In-app links use `memorydump://wiki/<slug>` and `memorydump://cite/item:<id>`; `LinkRewriter` turns `[[slug]]` and `[item:<id>]` tokens into them and `Router.open` handles them.
 - iOS colors come from `Palette` and `Swatch` in `Design/Theme.swift`, each with a light and a dark value; don't hardcode `.white` or `.black` for anything that sits on the page. Text on an ink, accent or failed fill uses `Palette.onInk`, titles on a topic pastel use `Palette.onPastel`, and shadows use `Palette.shadow(_:)`. The Settings › Appearance choice (`Appearance`, in UserDefaults) sets the window's interface style, so sheets and alerts follow it.
 - Swift 6 with main-actor default isolation. Closures handed to system APIs that call back on other queues (NSItemProvider, AVAudioEngine, Speech) must be `@Sendable` or built in a `nonisolated` function, or they trap at runtime.
-- Logs are structlog JSON (`app/logging_setup.py`) — don't add `print()` in worker or API code.
+- Logs are JSON lines through structlog (`app/logging_setup.py`; `LOG_FORMAT=console` for a terminal), stdlib `logging` included, each carrying the request id, job, user and item from structlog's context vars. Don't add `print()` in worker or API code.
+- Every call to Claude or Voyage goes through `app/ai/clients.py` (`claude`, `claude_stream`, `voyage_embed`, `voyage_rerank`), never a client of its own: that's where the per-provider concurrency cap, the circuit breaker, timeouts and token-usage recording live.
+- Jobs are decorated with `@job` (`app/workers/jobs.py`) and meet a transient failure (`app/errors.is_transient`) with `raise later(ctx, ...)`, but check `last_try(ctx, exc)` first and record the failure (the item's `status`, its `wiki_status`) instead: arq drops a job past `MAX_TRIES` without running it. Queue jobs with `app.queue.enqueue` (it carries the request id), with a `_job_id` whenever queueing the same work twice must not run it twice.
+- Routes are served under `/v1` and, for builds from before it, unversioned (`app/main.py`); the app calls `/v1` (`APIClient.route`) and sends `X-App-Build`, and `MIN_APP_BUILD` turns older builds away with 426.

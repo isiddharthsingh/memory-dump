@@ -39,10 +39,14 @@ docker compose up --build
 ```
 
 This starts Postgres, Redis, the SuperTokens core (accounts and sessions), the
-api and the worker. Migrations run automatically at api startup. Smoke test:
+api and the worker; a one-off `migrate` service runs the migrations before the
+api and worker start. `docker compose up` merges `docker-compose.override.yml`
+(published database ports, hot reload); in production run
+`docker compose -f docker-compose.yml up -d` behind a TLS-terminating proxy.
+Smoke test:
 
 ```bash
-curl http://localhost:8000/healthz                                       # {"status":"ok"}
+curl http://localhost:8000/readyz                                        # {"status":"ok"}
 
 # sign up; the access token comes back in the st-access-token header
 TOKEN=$(curl -s -D - -o /dev/null -X POST http://localhost:8000/auth/signup \
@@ -50,16 +54,16 @@ TOKEN=$(curl -s -D - -o /dev/null -X POST http://localhost:8000/auth/signup \
   -d '{"formFields":[{"id":"email","value":"me@example.com"},{"id":"password","value":"a-long-pass-123"}]}' \
   | awk 'tolower($1)=="st-access-token:" {print $2}' | tr -d '\r')
 
-curl -X POST http://localhost:8000/ingest \
+curl -X POST http://localhost:8000/v1/ingest \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
 
 # poll until ready
 curl -s -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8000/items | jq '.[0].status'
+  http://localhost:8000/v1/items | jq '.[0].status'
 
-curl -X POST http://localhost:8000/ask \
+curl -X POST http://localhost:8000/v1/ask \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"question":"what music video did I save?"}'
@@ -107,34 +111,44 @@ Push needs a paid Apple Developer account. Once you have one, set
 
 ## API
 
+The app's routes live under `/v1`; they are also served unversioned for app
+builds from before it. SuperTokens' own routes and the health checks are not
+versioned.
+
 | Method | Path                  | Purpose                                 |
 |--------|-----------------------|-----------------------------------------|
-| GET    | `/healthz`            | liveness (no auth)                      |
+| GET    | `/livez`, `/healthz`  | liveness (no auth)                      |
+| GET    | `/readyz`             | Postgres and Redis answer (no auth)     |
+| GET    | `/metrics`            | Prometheus (`Bearer $METRICS_TOKEN`)    |
 | POST   | `/auth/signup`        | create an account (SuperTokens, no auth) |
 | POST   | `/auth/signin`        | sign in (SuperTokens, no auth)          |
 | POST   | `/auth/session/refresh` | new tokens for the refresh token      |
 | POST   | `/auth/signout`       | end this session                        |
-| GET    | `/auth/me`            | the signed-in account                   |
-| DELETE | `/auth/me`            | delete the account and everything in it |
-| POST   | `/ingest`             | submit a URL                            |
-| GET    | `/items`              | list (filter by `status`, `tag`, `source`) |
-| GET    | `/items/tags`         | tag counts for the chip filter         |
-| GET    | `/items/{id}`         | item detail                             |
-| POST   | `/items/{id}/retry`   | re-queue a failed item                  |
-| DELETE | `/items/{id}`         | delete                                  |
-| POST   | `/search`             | hybrid retrieval (returns SearchHits)   |
-| POST   | `/ask`                | RAG answer with citations               |
-| GET    | `/chats`              | Ask history: each chat's questions      |
-| GET    | `/chats/{id}`         | one chat with its answers               |
-| PUT    | `/chats/{id}`         | save a chat (the app picks the id)      |
-| DELETE | `/chats/{id}`         | delete a chat                           |
-| GET    | `/wiki`               | list topic pages                        |
-| GET    | `/wiki/{slug}`        | topic page markdown                     |
+| GET    | `/v1/auth/me`         | the signed-in account                   |
+| DELETE | `/v1/auth/me`         | delete the account and everything in it |
+| POST   | `/v1/ingest`          | submit a URL                            |
+| POST   | `/v1/ingest/file`     | upload a PDF or image (`Idempotency-Key`) |
+| GET    | `/v1/items`           | list (filter by `status`, `tag`, `source`; page with `before=<id>`) |
+| GET    | `/v1/items/changes`   | ids changed and deleted since `since`   |
+| GET    | `/v1/items/tags`      | tag counts for the chip filter         |
+| GET    | `/v1/items/{id}`      | item detail (ETag)                      |
+| PATCH  | `/v1/items/{id}`      | edit the note, re-run the pipeline      |
+| POST   | `/v1/items/{id}/retry` | re-queue a failed item                 |
+| DELETE | `/v1/items/{id}`      | delete                                  |
+| POST   | `/v1/search`          | hybrid retrieval (returns SearchHits)   |
+| POST   | `/v1/ask`             | RAG answer with citations               |
+| GET    | `/v1/chats`           | Ask history: each chat's questions (page with `before=<id>`) |
+| GET    | `/v1/chats/{id}`      | one chat with its answers (ETag)        |
+| PUT    | `/v1/chats/{id}`      | save a chat (the app picks the id; `version` → 409 on conflict) |
+| DELETE | `/v1/chats/{id}`      | delete a chat                           |
+| GET    | `/v1/wiki`            | list topic pages                        |
+| GET    | `/v1/wiki/{slug}`     | topic page markdown (ETag)              |
 
-Everything except `/healthz`, sign-up, sign-in and refresh takes
+Everything except the health checks, metrics, sign-up, sign-in and refresh takes
 `Authorization: Bearer <access token>`. Send `st-auth-mode: header` with sign-up
 and sign-in so the tokens come back as `st-access-token` and `st-refresh-token`
-response headers.
+response headers. Saving, editing and retrying, Ask and Search are rate-limited
+per user, sign-in and sign-up per address; a 429 or 503 carries `Retry-After`.
 
 ## Architecture
 

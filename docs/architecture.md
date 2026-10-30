@@ -16,7 +16,7 @@ research citations lives in the `plans/` directory used during planning.
                               HTTPS (bearer)
                                   │
                        ┌──────────▼────────────┐
-                       │  FastAPI              │
+                       │  FastAPI  (/v1)       │
                        │   POST /ingest        │
                        │   GET  /items         │
                        │   GET  /wiki          │
@@ -29,12 +29,37 @@ research citations lives in the `plans/` directory used during planning.
                        │  arq workers (Redis)  │
                        │  1. Ingest pipeline   │
                        │  2. Wiki synthesizer  │
+                       │  3. Reconciler (5 min)│
                        └──────────┬────────────┘
                                   │
                        ┌──────────▼────────────┐
                        │  Postgres + pgvector  │
                        └───────────────────────┘
 ```
+
+## Consistency and failure
+
+One Postgres primary holds everything, so every write is strongly consistent;
+when it is down, writes fail. The app chooses availability at its end: reads
+fall back to its offline copy and shares wait in its queue, both catching up
+later. What spans two systems has no shared transaction, so each such write is
+made safe to repeat and something repeats it:
+
+- Postgres then Redis (an item, then its job): job ids carry the item's
+  generation, so queueing again never runs twice, and a reconciler re-queues
+  what the queue lost.
+- Upload storage then Postgres (the file, then its row): the file goes first,
+  and abandoned files are swept.
+- Many devices writing one chat: a version check turns a lost update into a
+  409 the app merges.
+- Wiki pages: Claude drafts outside any transaction; drafts are written under a
+  per-user lock only if the page's version hasn't moved.
+
+Work that would otherwise grow without bound has a cap: per-user and per-address
+rate limits, a cross-process cap on calls to Claude and Voyage with a circuit
+breaker, statement and idle-transaction timeouts, a size cap on fetched pages and
+request bodies, and keyset pagination with a change feed instead of offsets.
+`AGENTS.md` has the specifics.
 
 ## Why hybrid retrieval, not pure embeddings
 
