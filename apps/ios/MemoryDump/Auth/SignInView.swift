@@ -1,19 +1,16 @@
 import SwiftUI
 
-/// Sign in or create an account. The server address is part of the form, since
-/// Memory Dump is self-hosted.
+/// Sign in or create an account. The server is the one the app was built for.
 struct SignInView: View {
   @Environment(AppModel.self) private var app
   @State private var creating = false
   @State private var name = ""
   @State private var email = ""
   @State private var password = ""
-  @State private var server = ""
-  @State private var editingServer = false
   @State private var busy = false
   @State private var error: String?
 
-  private var canSubmit: Bool { !email.isEmpty && !password.isEmpty && !server.isEmpty }
+  private var canSubmit: Bool { !email.isEmpty && !password.isEmpty }
 
   var body: some View {
     ScrollView {
@@ -40,26 +37,6 @@ struct SignInView: View {
         field("Password") {
           SecureField(creating ? "At least 10 characters" : "Your password", text: $password)
             .textContentType(creating ? .newPassword : .password)
-        }
-
-        if editingServer {
-          field("Server address") {
-            TextField(verbatim("https://memory.example.com"), text: $server)
-              .keyboardType(.URL)
-              .textInputAutocapitalization(.never)
-              .autocorrectionDisabled()
-          }
-        } else {
-          Button {
-            editingServer = true
-          } label: {
-            HStack {
-              Text("Server: \(Format.domain(server))").foregroundStyle(Palette.ink2)
-              Text("Change").foregroundStyle(Palette.accent)
-            }
-            .font(.subheadline)
-          }
-          .accessibilityLabel("Server \(Format.domain(server)). Change")
         }
 
         if let error {
@@ -98,11 +75,6 @@ struct SignInView: View {
     }
     .scrollDismissesKeyboard(.interactively)
     .background(Palette.bg)
-    .onAppear {
-      // Show the saved address as one line; with none saved, show the field.
-      server = app.serverURL?.absoluteString ?? ""
-      editingServer = server.isEmpty
-    }
   }
 
   private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
@@ -123,15 +95,13 @@ struct SignInView: View {
     do {
       if creating {
         try await app.signUp(
-          server: server, email: email, password: password,
+          email: email, password: password,
           displayName: name.trimmingCharacters(in: .whitespaces).nilIfEmpty)
       } else {
-        try await app.signIn(server: server, email: email, password: password)
+        try await app.signIn(email: email, password: password)
       }
-    } catch APIError.notConfigured {
-      error = "Enter your server’s address, starting with https://."
     } catch is URLError {
-      error = "Can’t reach \(Format.domain(server)). Check the address."
+      error = "Can’t reach \(Format.domain(Server.url.absoluteString)). Check your connection and try again."
     } catch {
       self.error = error.localizedDescription
     }

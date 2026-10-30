@@ -28,20 +28,14 @@ final class AppModel {
     }
   }
 
-  var serverURL: URL? { store.serverURL }
-
   // MARK: Session
 
-  func signIn(server: String, email: String, password: String) async throws {
-    let base = try base(from: server)
-    finishSignIn(try await AuthAPI.signIn(base: base, email: email, password: password), server: server)
+  func signIn(email: String, password: String) async throws {
+    finishSignIn(try await AuthAPI.signIn(email: email, password: password))
   }
 
-  func signUp(server: String, email: String, password: String, displayName: String?) async throws {
-    let base = try base(from: server)
-    let session = try await AuthAPI.signUp(
-      base: base, email: email, password: password, displayName: displayName)
-    finishSignIn(session, server: server)
+  func signUp(email: String, password: String, displayName: String?) async throws {
+    finishSignIn(try await AuthAPI.signUp(email: email, password: password, displayName: displayName))
   }
 
   func signOut() async {
@@ -59,13 +53,8 @@ final class AppModel {
     session = nil
   }
 
-  func setServer(_ raw: String) {
-    store.setServerURL(raw)
-  }
-
-  private func finishSignIn(_ session: Session, server: String) {
+  private func finishSignIn(_ session: Session) {
     Haptics.success()
-    store.setServerURL(server)
     store.save(session)
     self.session = session
     Task { await registerForPush() }
@@ -76,14 +65,6 @@ final class AppModel {
   private static func forgetSavedCopies() {
     SavedResponses.shared.clear()
     ImageCache.clear()
-  }
-
-  private func base(from server: String) throws -> URL {
-    let cleaned = server.trimmingCharacters(in: .whitespacesAndNewlines).replacing(/\/+$/, with: "")
-    guard let url = URL(string: cleaned), url.scheme?.hasPrefix("http") == true, url.host() != nil else {
-      throw APIError.notConfigured
-    }
-    return url
   }
 
   // MARK: Becoming active

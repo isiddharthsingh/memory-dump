@@ -143,8 +143,8 @@ enum Format {
     if raw.contains(/(?i)credit balance/) {
       return ("Ask is unavailable right now", "Your server’s AI provider rejected the request: the account is out of credits.")
     }
-    if error is URLError || (error as? APIError) == .notConfigured {
-      return ("Can’t reach your server", "Check the server address in Settings.")
+    if error is URLError {
+      return ("Can’t reach your server", "Check your connection and try again.")
     }
     if case APIError.http(429, _) = error {
       return ("Hourly limit reached", "Try again in a little while.")

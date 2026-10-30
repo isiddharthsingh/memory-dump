@@ -2,7 +2,6 @@ import Foundation
 import Observation
 
 enum APIError: LocalizedError, Equatable {
-  case notConfigured
   case signedOut
   /// The server answered with a non-2xx status. The text is FastAPI's `detail`.
   case http(Int, String)
@@ -13,7 +12,6 @@ enum APIError: LocalizedError, Equatable {
 
   var errorDescription: String? {
     switch self {
-    case .notConfigured: "Server URL not configured."
     case .signedOut: "Not signed in."
     case .http(let status, let detail): detail.isEmpty ? "HTTP \(status)" : detail
     case .auth(let message): message
@@ -113,8 +111,8 @@ final class APIClient {
     let body = try Multipart.write(
       file: file, name: name, mimeType: mimeType, note: note, boundary: boundary)
     defer { try? FileManager.default.removeItem(at: body) }
-    let (data, _) = try await authorized { base, token in
-      var req = try self.request(base, "/ingest/file", method: "POST", token: token)
+    let (data, _) = try await authorized { token in
+      var req = try self.request("/ingest/file", method: "POST", token: token)
       req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
       return req
     } perform: { req in
@@ -135,9 +133,9 @@ final class APIClient {
     AsyncThrowingStream { continuation in
       let task = Task {
         do {
-          let (bytes, _) = try await authorized { base, token in
+          let (bytes, _) = try await authorized { token in
             var req = try self.request(
-              base, "/ask/stream", method: "POST", body: ["question": question], token: token)
+              "/ask/stream", method: "POST", body: ["question": question], token: token)
             req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
             return req
           } perform: { req in
@@ -211,8 +209,7 @@ final class APIClient {
 
   /// `/healthz` is unauthenticated.
   func health() async -> Bool {
-    guard let base = store.serverURL,
-      let req = try? request(base, "/healthz", token: nil),
+    guard let req = try? request("/healthz", token: nil),
       let result = try? await http.data(for: req)
     else { return false }
     return (result.1 as? HTTPURLResponse)?.statusCode == 200
@@ -253,8 +250,8 @@ final class APIClient {
       return saved
     }
     do {
-      let (data, _) = try await authorized { base, token in
-        try self.request(base, path, method: method, query: query, body: body, token: token)
+      let (data, _) = try await authorized { token in
+        try self.request(path, method: method, query: query, body: body, token: token)
       } perform: { req in
         try await self.http.data(for: req)
       }
@@ -293,17 +290,16 @@ final class APIClient {
   /// Builds the request with the current access token, and after a 401 builds it
   /// again with a refreshed one. Throws APIError.http for any other non-2xx.
   private func authorized<R>(
-    _ make: (URL, String) throws -> URLRequest,
+    _ make: (String) throws -> URLRequest,
     perform: (URLRequest) async throws -> (R, URLResponse),
     detail: (R) async throws -> Data = { $0 as? Data ?? Data() }
   ) async throws -> (R, HTTPURLResponse) {
     guard !savedOnly else { throw APIError.notSaved }
-    guard let base = store.serverURL else { throw APIError.notConfigured }
     guard var session = store.current() else { throw APIError.signedOut }
-    var (result, resp) = try await perform(make(base, session.accessToken))
+    var (result, resp) = try await perform(make(session.accessToken))
     if (resp as? HTTPURLResponse)?.statusCode == 401 {
       session = try await store.refresh(after: session)
-      (result, resp) = try await perform(make(base, session.accessToken))
+      (result, resp) = try await perform(make(session.accessToken))
     }
     let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
     guard let http = resp as? HTTPURLResponse, (200..<300).contains(status) else {
@@ -318,10 +314,10 @@ final class APIClient {
   }
 
   fileprivate func request(
-    _ base: URL, _ path: String, method: String = "GET", query: [String: String?] = [:],
+    _ path: String, method: String = "GET", query: [String: String?] = [:],
     body: (any Encodable)? = nil, token: String?
   ) throws -> URLRequest {
-    var url = base.appending(path: path)
+    var url = Server.url.appending(path: path)
     let items = Self.queryItems(query)
     if !items.isEmpty { url.append(queryItems: items) }
     var req = URLRequest(url: url)
@@ -340,26 +336,23 @@ final class APIClient {
 
 /// SuperTokens' sign-in, sign-up and refresh routes, with header-based
 /// sessions: requests send `st-auth-mode: header`, tokens come back in the
-/// `st-access-token` and `st-refresh-token` response headers. They take the
-/// server address explicitly so sign-in can try an address before it is saved.
+/// `st-access-token` and `st-refresh-token` response headers.
 enum AuthAPI {
-  static func signIn(base: URL, email: String, password: String) async throws -> Session {
-    try await session(base, "/auth/signin", [("email", email), ("password", password)])
+  static func signIn(email: String, password: String) async throws -> Session {
+    try await session("/auth/signin", [("email", email), ("password", password)])
   }
 
-  static func signUp(base: URL, email: String, password: String, displayName: String?)
-    async throws -> Session
-  {
+  static func signUp(email: String, password: String, displayName: String?) async throws -> Session {
     var fields = [("email", email), ("password", password)]
     if let displayName { fields.append(("name", displayName)) }
-    return try await session(base, "/auth/signup", fields)
+    return try await session("/auth/signup", fields)
   }
 
   /// New tokens for old. SuperTokens rotates the refresh token each time, and a
   /// refresh token used again after its replacement ends the session.
-  static func refresh(base: URL, session: Session) async throws -> Session {
+  static func refresh(session: Session) async throws -> Session {
     var req = try APIClient.shared.request(
-      base, "/auth/session/refresh", method: "POST", token: session.refreshToken)
+      "/auth/session/refresh", method: "POST", token: session.refreshToken)
     req.setValue("header", forHTTPHeaderField: "st-auth-mode")
     let (data, resp) = try await URLSession.shared.data(for: req)
     let http = resp as? HTTPURLResponse
@@ -391,11 +384,9 @@ enum AuthAPI {
   }
 
   /// Signs in or up, then loads the profile with the new access token.
-  private static func session(_ base: URL, _ path: String, _ fields: [(String, String)])
-    async throws -> Session
-  {
+  private static func session(_ path: String, _ fields: [(String, String)]) async throws -> Session {
     let form = Form(formFields: fields.map { .init(id: $0, value: $1) })
-    var req = try APIClient.shared.request(base, path, method: "POST", body: form, token: nil)
+    var req = try APIClient.shared.request(path, method: "POST", body: form, token: nil)
     req.setValue("header", forHTTPHeaderField: "st-auth-mode")
     let (data, resp) = try await URLSession.shared.data(for: req)
     let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
@@ -406,7 +397,7 @@ enum AuthAPI {
     guard let http = resp as? HTTPURLResponse, let tokens = Tokens(http) else {
       throw APIError.auth("The server didn’t start a session.")
     }
-    let me = try APIClient.shared.request(base, "/auth/me", token: tokens.access)
+    let me = try APIClient.shared.request("/auth/me", token: tokens.access)
     let (profile, meResp) = try await URLSession.shared.data(for: me)
     let meStatus = (meResp as? HTTPURLResponse)?.statusCode ?? 0
     guard (200..<300).contains(meStatus) else {

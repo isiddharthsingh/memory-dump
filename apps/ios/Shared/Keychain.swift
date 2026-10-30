@@ -17,10 +17,6 @@ enum Keychain {
     return status == errSecSuccess ? out as? Data : nil
   }
 
-  static func string(_ key: String) -> String? {
-    data(key).flatMap { String(data: $0, encoding: .utf8) }
-  }
-
   static func set(_ data: Data, for key: String) {
     let attrs: [String: Any] = [
       kSecValueData as String: data,
@@ -32,10 +28,6 @@ enum Keychain {
       guard status == errSecItemNotFound else { return status }
       return SecItemAdd(q.merging(attrs) { $1 } as CFDictionary, nil)
     }
-  }
-
-  static func set(_ string: String, for key: String) {
-    set(Data(string.utf8), for: key)
   }
 
   static func delete(_ key: String) {

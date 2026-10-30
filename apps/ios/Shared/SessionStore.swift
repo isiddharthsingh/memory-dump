@@ -1,8 +1,8 @@
 import Foundation
 
-/// The signed-in session and the server address, kept in the shared Keychain so
-/// the share extension uses the same ones as the app. Every read goes to the
-/// Keychain, because the other process can rotate the tokens at any time.
+/// The signed-in session, kept in the shared Keychain so the share extension
+/// uses the same one as the app. Every read goes to the Keychain, because the
+/// other process can rotate the tokens at any time.
 final class SessionStore {
   static let shared = SessionStore()
 
@@ -11,21 +11,6 @@ final class SessionStore {
 
   private enum Key {
     static let session = "session"
-    static let server = "server_url"
-  }
-
-  var serverURL: URL? {
-    Keychain.string(Key.server).flatMap(URL.init(string:))
-  }
-
-  func setServerURL(_ raw: String?) {
-    let cleaned = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
-      .replacing(/\/+$/, with: "")
-    if let cleaned, !cleaned.isEmpty {
-      Keychain.set(cleaned, for: Key.server)
-    } else {
-      Keychain.delete(Key.server)
-    }
   }
 
   func current() -> Session? {
@@ -56,9 +41,8 @@ final class SessionStore {
       guard let now = current() else { throw APIError.signedOut }
       // The other process (or another request here) refreshed first.
       if now.refreshToken != stale.refreshToken { return now }
-      guard let base = serverURL else { throw APIError.notConfigured }
       do {
-        let fresh = try await AuthAPI.refresh(base: base, session: now)
+        let fresh = try await AuthAPI.refresh(session: now)
         save(fresh)
         return fresh
       } catch APIError.http(401, _) {

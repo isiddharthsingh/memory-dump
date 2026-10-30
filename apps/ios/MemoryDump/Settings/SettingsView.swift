@@ -5,7 +5,6 @@ struct SettingsView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(\.openURL) private var openURL
   @AppStorage(Appearance.key) private var appearance = Appearance.system
-  @State private var server = ""
   @State private var health: Bool?
   @State private var checking = false
   @State private var queued = 0
@@ -43,23 +42,12 @@ struct SettingsView: View {
         }
         .listRowBackground(Palette.card)
 
-        Section {
-          LabeledContent("Address") {
-            TextField(verbatim("https://memory.example.com"), text: $server)
-              .keyboardType(.URL)
-              .textInputAutocapitalization(.never)
-              .autocorrectionDisabled()
-              .multilineTextAlignment(.trailing)
-              .onSubmit { saveServer() }
-          }
+        Section("Server") {
+          LabeledContent("Address", value: Format.domain(Server.url.absoluteString))
           LabeledContent("Status") {
             Text(statusLabel.text).foregroundStyle(statusLabel.color)
           }
           Button("Test connection") { Task { await check() } }
-        } header: {
-          Text("Server")
-        } footer: {
-          Text("Memory Dump is self-hosted. Point the app at your own server.")
         }
         .listRowBackground(Palette.card)
 
@@ -96,10 +84,7 @@ struct SettingsView: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
-          Button("Done") {
-            saveServer()
-            dismiss()
-          }
+          Button("Done") { dismiss() }
         }
       }
       .confirmationDialog("Discard \(Format.plural(queued, "queued share"))?", isPresented: $confirmDiscard, titleVisibility: .visible) {
@@ -127,14 +112,12 @@ struct SettingsView: View {
       }
     }
     .task {
-      server = app.serverURL?.absoluteString ?? ""
       queued = ShareQueue.count
       await check()
     }
   }
 
   private var statusLabel: (text: String, color: Color) {
-    if server.isEmpty { return ("Not set", Palette.ink2) }
     if checking { return ("Checking…", Palette.ink2) }
     switch health {
     case true?: return ("Connected", Palette.ready)
@@ -143,13 +126,7 @@ struct SettingsView: View {
     }
   }
 
-  private func saveServer() {
-    guard server != app.serverURL?.absoluteString else { return }
-    app.setServer(server)
-  }
-
   private func check() async {
-    saveServer()
     checking = true
     health = await APIClient.shared.health()
     checking = false

@@ -47,7 +47,7 @@ final class ShareModel {
         discard(payload)
       } catch is URLError {
         keep(payload)
-      } catch APIError.signedOut, APIError.notConfigured {
+      } catch APIError.signedOut {
         discard(payload)
         phase = .failed("Open Memory Dump and sign in first.")
       } catch APIError.http(let status, let detail) {
