@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from collections.abc import Callable, Coroutine
 from typing import Annotated
 
@@ -90,7 +91,9 @@ def rate_limit(bucket: str, limit_attr: str) -> Callable[..., Coroutine[None, No
 
 
 # SuperTokens' routes that check a password.
-AUTH_PATHS = frozenset({"/auth/signin", "/auth/signup"})
+# SuperTokens also answers these with a trailing slash and under a tenant
+# (/auth/public/signin), and the dashboard signs in at /auth/dashboard/api/signin.
+AUTH_PATH = re.compile(r"/auth(?:/.+)?/sign(?:in|up)/*")
 
 
 class AuthRateLimit:
@@ -103,7 +106,11 @@ class AuthRateLimit:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http" and scope["method"] == "POST" and scope["path"] in AUTH_PATHS:
+        if (
+            scope["type"] == "http"
+            and scope["method"] == "POST"
+            and AUTH_PATH.fullmatch(scope["path"])
+        ):
             client = scope.get("client")
             address = client[0] if client else "unknown"
             wait = await take(f"rl:auth:{address}", get_settings().rate_limit_auth_per_hour)

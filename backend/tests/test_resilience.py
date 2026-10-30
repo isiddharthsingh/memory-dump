@@ -19,7 +19,7 @@ from app import kv
 from app.ai import clients, embed
 from app.ai.clients import _Breaker
 from app.api import search as search_api
-from app.auth.rate_limit import take
+from app.auth.rate_limit import AUTH_PATH, take
 from app.config import get_settings
 from app.errors import ProviderUnavailable, is_transient
 from app.extractors.webpage import NotPublic, TooLarge, _CappedClient
@@ -220,14 +220,22 @@ def test_sign_in_attempts_are_capped_per_address(
     try:
         attempt = form(unique_email("limit"), password="wrong-password-123")
         headers = {"st-auth-mode": "header"}
-        for _ in range(2):
-            assert client.post("/auth/signin", json=attempt, headers=headers).status_code == 200
-        refused = client.post("/auth/signin", json=attempt, headers=headers)
+        # Every spelling SuperTokens answers draws from the one bucket.
+        for path in ("/auth/signin", "/auth/signin/"):
+            assert client.post(path, json=attempt, headers=headers).status_code == 200
+        refused = client.post("/auth/public/signin", json=attempt, headers=headers)
         assert refused.status_code == 429
         assert int(refused.headers["retry-after"]) > 0
         assert refused.json() == {"detail": "Too many attempts. Try again later."}
     finally:
         _clear(client, key)
+
+
+def test_auth_limit_matches_every_sign_in_route() -> None:
+    for path in ("/auth/signup/", "/auth/public/signup", "/auth/dashboard/api/signin"):
+        assert AUTH_PATH.fullmatch(path)
+    for path in ("/auth/signup/email/exists", "/auth/session/refresh", "/auth/signout"):
+        assert not AUTH_PATH.fullmatch(path)
 
 
 def test_search_is_rate_limited_per_user(
