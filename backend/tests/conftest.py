@@ -5,10 +5,10 @@ the real Postgres, Redis and SuperTokens core. The helpers sign up throwaway
 accounts the way the app does: SuperTokens' /auth/signup, header-based tokens.
 """
 
+import asyncio
 import os
 import uuid
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -42,13 +42,14 @@ def jobs(monkeypatch: pytest.MonkeyPatch) -> Iterator[Jobs]:
 
     monkeypatch.setattr(queue, "get_arq_pool", pool)
     yield queued
-    # The uploads the worker would have read and deleted.
-    from app.config import get_settings
+    # The uploads no worker got to.
+    from app.api.ingest import _MIME_TO_EXT
+    from app.storage import get_storage
 
     for function, item_id, *_ in queued:
         if function == "ingest_file":
-            for path in Path(get_settings().uploads_dir).glob(f"{item_id}.*"):
-                path.unlink(missing_ok=True)
+            for ext in set(_MIME_TO_EXT.values()):
+                asyncio.run(get_storage().delete(f"{item_id}.{ext}"))
 
 
 def unique_email(prefix: str = "test") -> str:

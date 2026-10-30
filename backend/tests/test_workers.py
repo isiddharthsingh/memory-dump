@@ -1,10 +1,12 @@
 """Jobs against Postgres, with extraction, Claude and Voyage stubbed: ingest
-fencing and giving up, the reconciler, synthesis drafting a page again,
-nightly compaction, the digest fan-out, and the search queries.
+fencing and giving up, kept uploads and their thumbnails, the reconciler and
+its storage sweep, synthesis drafting a page again, nightly compaction, the
+digest fan-out, and the search queries.
 
 Run via `docker compose exec api pytest tests/test_workers.py`.
 """
 
+import io
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime, timedelta
@@ -15,10 +17,13 @@ import httpx
 import pytest
 from arq import Retry
 from fastapi.testclient import TestClient
+from PIL import Image
 from sqlalchemy import create_engine, func, insert, select, update
 
+from app import thumbnails
 from app.ai import retrieval
 from app.ai.analyze import Analysis
+from app.ai.providers import VisionResult
 from app.ai.synthesize import PatchedPage, ProposedSlugs
 from app.config import get_settings
 from app.db.models import EMBED_DIM, Item, ItemChunk, ItemTombstone, TopicPage
@@ -28,6 +33,7 @@ from app.main import app
 from app.storage import get_storage
 from app.workers import compact as compact_worker
 from app.workers import ingest as ingest_worker
+from app.workers import reconcile
 from app.workers import synthesize as synthesize_worker
 from app.workers.compact import compact_user
 from app.workers.digest import digest_user, weekly_digest
@@ -380,3 +386,145 @@ def test_a_superseded_upload_job_leaves_the_file_to_the_newer_one(
         assert _row(db, item_id).status == "processing"
     finally:
         run(get_storage().delete, key)
+
+
+def test_an_upload_is_kept_with_a_thumbnail_only_its_owner_sees_until_deleted(
+    client: TestClient,
+    account: tuple[dict[str, str], uuid.UUID],
+    db: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    jobs: Jobs,
+) -> None:
+    headers, user_id = account
+    item_id = uuid.uuid4()
+    key = f"{item_id}.png"
+    _item(
+        db,
+        user_id,
+        id=item_id,
+        source="image",
+        title="shot.png",
+        upload_key=key,
+        upload_mime="image/png",
+    )
+    png = io.BytesIO()
+    Image.new("RGB", (2400, 1600), "navy").save(png, "PNG")
+
+    async def chunks() -> AsyncIterator[bytes]:
+        yield png.getvalue()
+
+    class Vision:
+        async def analyze_image(self, data: bytes, mime_type: str) -> VisionResult:
+            return VisionResult(Analysis("A navy square", "Navy.", [], [], [], [], []), "")
+
+    async def embed_texts(texts: list[str], input_type: str) -> list[list[float]]:
+        return [[0.1] * EMBED_DIM for _ in texts]
+
+    monkeypatch.setattr(ingest_worker, "get_vision_provider", Vision)
+    monkeypatch.setattr(ingest_worker, "embed_texts", embed_texts)
+    run = client.portal.call  # type: ignore[union-attr]
+    store = get_storage()
+    run(store.save, key, chunks())
+    try:
+        assert run(ingest_file, {"job_try": 1}, str(item_id), None, None, 0) == "ready"
+        row = _row(db, item_id)
+        assert (row.status, row.upload_key, row.file_key) == ("ready", None, key)
+        assert row.thumbnail_url == f"/items/{item_id}/thumbnail"
+        assert run(store.read, key) == png.getvalue()
+
+        resp = client.get(f"/v1{row.thumbnail_url}", headers=headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.headers["content-type"] == "image/jpeg"
+        assert Image.open(io.BytesIO(resp.content)).size == (1200, 800)
+        stranger = signup(client)
+        try:
+            assert client.get(f"/v1{row.thumbnail_url}", headers=stranger).status_code == 404
+        finally:
+            client.delete("/v1/auth/me", headers=stranger)
+
+        assert client.delete(f"/v1/items/{item_id}", headers=headers).status_code == 204
+        for gone in (key, thumbnails.key(item_id)):
+            with pytest.raises(FileNotFoundError):
+                run(store.read, gone)
+    finally:
+        run(store.delete, key)
+        run(store.delete, thumbnails.key(item_id))
+
+
+def test_the_sweep_deletes_only_files_whose_item_is_gone(
+    client: TestClient,
+    account: tuple[dict[str, str], uuid.UUID],
+    db: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, user_id = account
+    kept = _item(db, user_id)
+    gone = uuid.uuid4()
+    deleted: list[str] = []
+
+    class Store:
+        async def keys_older_than(self, seconds: float) -> list[str]:
+            return [f"{kept}.png", thumbnails.key(kept), f"{gone}.pdf", thumbnails.key(gone), "x"]
+
+        async def delete(self, key: str) -> None:
+            deleted.append(key)
+
+    monkeypatch.setattr(reconcile, "get_storage", Store)
+    assert client.portal.call(reconcile._sweep_files) == 3  # type: ignore[union-attr]
+    assert sorted(deleted) == sorted([f"{gone}.pdf", thumbnails.key(gone), "x"])
+
+
+def test_an_upload_it_cant_draw_is_kept_and_a_failed_one_is_deleted(
+    client: TestClient,
+    account: tuple[dict[str, str], uuid.UUID],
+    db: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, user_id = account
+    undrawable, failing = uuid.uuid4(), uuid.uuid4()
+    for item_id in (undrawable, failing):
+        _item(
+            db,
+            user_id,
+            id=item_id,
+            source="image",
+            title="x.png",
+            upload_key=f"{item_id}.png",
+            upload_mime="image/png",
+        )
+
+    async def chunks() -> AsyncIterator[bytes]:
+        yield b"not a PNG at all"
+
+    class Vision:
+        async def analyze_image(self, data: bytes, mime_type: str) -> VisionResult:
+            if failing_now:
+                raise ValueError("Claude can't read it")
+            return VisionResult(Analysis("Noise", "Noise.", [], [], [], [], []), "")
+
+    async def embed_texts(texts: list[str], input_type: str) -> list[list[float]]:
+        return [[0.1] * EMBED_DIM for _ in texts]
+
+    monkeypatch.setattr(ingest_worker, "get_vision_provider", Vision)
+    monkeypatch.setattr(ingest_worker, "embed_texts", embed_texts)
+    run = client.portal.call  # type: ignore[union-attr]
+    store = get_storage()
+    keys = [f"{undrawable}.png", f"{failing}.png", thumbnails.key(failing)]
+    for key in keys:
+        run(store.save, key, chunks())
+    try:
+        failing_now = False
+        assert run(ingest_file, {"job_try": 1}, str(undrawable), None, None, 0) == "ready"
+        row = _row(db, undrawable)
+        assert (row.status, row.file_key, row.thumbnail_url) == ("ready", keys[0], None)
+        assert run(store.read, keys[0]) == b"not a PNG at all"
+
+        failing_now = True
+        assert run(ingest_file, {"job_try": 1}, str(failing), None, None, 0) == "failed"
+        assert _row(db, failing).status == "failed"
+        for gone in keys[1:]:
+            with pytest.raises(FileNotFoundError):
+                run(store.read, gone)
+    finally:
+        for key in keys:
+            run(store.delete, key)

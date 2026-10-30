@@ -1,8 +1,9 @@
-"""Retries, backoff, the provider breaker and slots, rate limits, caps, and
-upload storage. Run via `docker compose exec api pytest tests/test_resilience.py`
+"""Retries, backoff, the provider breaker and slots, rate limits, caps, upload
+storage and thumbnails. Run via `docker compose exec api pytest tests/test_resilience.py`
 (the slot and bucket tests use the stack's Redis)."""
 
 import gzip
+import io
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
@@ -10,12 +11,15 @@ from types import SimpleNamespace
 from typing import Any
 
 import httpx
+import pypdfium2 as pdfium  # type: ignore[import-untyped]
 import pytest
 import structlog
+from botocore import exceptions as boto_error  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
+from PIL import Image
 from voyageai.error import InvalidRequestError, RateLimitError
 
-from app import kv
+from app import kv, thumbnails
 from app.ai import clients, embed
 from app.ai.clients import _Breaker
 from app.api import search as search_api
@@ -29,6 +33,12 @@ from app.workers.jobs import MAX_DELAY_S, last_try, later
 from tests.conftest import form, signup, unique_email
 
 REQUEST = httpx.Request("GET", "https://example.com/")
+
+
+def _storage(code: int) -> boto_error.ClientError:
+    return boto_error.ClientError(
+        {"Error": {"Code": str(code)}, "ResponseMetadata": {"HTTPStatusCode": code}}, "GetObject"
+    )
 
 
 def _status(code: int) -> httpx.HTTPStatusError:
@@ -48,6 +58,10 @@ def test_transient_failures_are_the_ones_worth_another_try() -> None:
     assert not is_transient(InvalidRequestError("bad input"))
     assert not is_transient(NotPublic("10.0.0.1"))
     assert not is_transient(httpx.UnsupportedProtocol("intent://open"))
+    # Upload storage that's down or overloaded, not one that refuses.
+    assert is_transient(boto_error.EndpointConnectionError(endpoint_url="http://seaweedfs:8333"))
+    assert is_transient(_storage(503))
+    assert not is_transient(_storage(403))
 
 
 def test_backoff_doubles_with_jitter_and_honors_retry_after() -> None:
@@ -168,7 +182,7 @@ async def test_redirect_bodies_are_never_read() -> None:
     assert str(resp.url) == "https://example.com/to"
 
 
-async def test_local_storage_round_trip_and_sweep(tmp_path: Any) -> None:
+async def test_local_storage_round_trip_and_old_keys(tmp_path: Any) -> None:
     store = LocalStorage(str(tmp_path))
 
     async def chunks() -> AsyncIterator[bytes]:
@@ -180,13 +194,36 @@ async def test_local_storage_round_trip_and_sweep(tmp_path: Any) -> None:
     abandoned = tmp_path / "old.pdf"
     abandoned.write_bytes(b"1")
     os.utime(abandoned, (0, 0))
-    assert await store.sweep() == 1
-    assert not abandoned.exists()
-    assert (tmp_path / "x.pdf").exists()
+    assert await store.keys_older_than(60) == ["old.pdf"]
+    with pytest.raises(FileNotFoundError):
+        await store.read("missing.pdf")
     with pytest.raises(ValueError):
         await store.read("../etc/passwd")
     await store.delete("x.pdf")
     await store.delete("x.pdf")
+
+
+def test_thumbnails_scale_images_draw_a_pdfs_first_page_and_skip_the_rest() -> None:
+    wide = io.BytesIO()
+    Image.new("RGBA", (3000, 1500), (255, 0, 0, 0)).save(wide, "PNG")
+    thumb = Image.open(io.BytesIO(thumbnails.make(wide.getvalue(), "image/png") or b""))
+    assert (thumb.format, thumb.size) == ("JPEG", (1200, 600))
+    # Transparent is white, not black.
+    assert min(thumb.convert("RGB").getpixel((0, 0))) > 240  # type: ignore[arg-type]
+
+    pdf = pdfium.PdfDocument.new()
+    pdf.new_page(612, 792)
+    letter = io.BytesIO()
+    pdf.save(letter)
+    pdf.close()
+    page = Image.open(io.BytesIO(thumbnails.make(letter.getvalue(), "application/pdf") or b""))
+    assert page.format == "JPEG"
+    # The top 4:3 of a page drawn 1200 px tall.
+    width, height = page.size
+    assert 900 < width < 1200 and height == width * 3 // 4
+
+    assert thumbnails.make(b"not an image", "image/png") is None
+    assert thumbnails.make(b"%PDF-1.4 cut short", "application/pdf") is None
 
 
 async def test_a_bucket_allows_its_allowance_then_says_how_long_to_wait() -> None:
