@@ -12,9 +12,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Thumbnails and reels are read as this user (app/sandbox.py), which can't
-# read the worker's environment or its secrets.
-RUN useradd --system --no-create-home --shell /usr/sbin/nologin sandbox
+# Thumbnails and reels are read as these users, one per child (USERS in
+# app/sandbox.py): none can read the worker's environment or secrets, or
+# another child's work. Their uids are far from the system's (Postgres and
+# Redis run as 999) and a host's own users, whose processes would count
+# against the same per-user limits.
+RUN for i in 0 1 2 3 4 5 6 7; do \
+        groupadd --system --gid "6100$i" "sandbox$i" \
+        && useradd --system --uid "6100$i" --gid "6100$i" --no-create-home \
+            --shell /usr/sbin/nologin "sandbox$i"; \
+    done
 
 RUN pip install uv==0.5.7
 
@@ -36,8 +43,8 @@ RUN python -c "import faster_whisper; faster_whisper.download_model('base')"
 ENV HF_HUB_OFFLINE=1
 
 COPY . .
-# The sandbox user runs the children from this code, whatever the checkout's
-# permissions were; nothing else here is its to read (.dockerignore keeps
+# The sandbox users run the children from this code, whatever the checkout's
+# permissions were; nothing else here is theirs to read (.dockerignore keeps
 # secrets out of the image).
 RUN chmod -R a+rX /app/app
 

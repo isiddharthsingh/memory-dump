@@ -5,9 +5,9 @@ in the image).
 
 Anyone who can sign up picks the reels read here, so `fetch` reads each in a
 child process (`python -m app.extractors.reel <url> <folder>`) that may use at
-most MEMORY_CAP, gets none of the worker's environment (its keys), runs as
-the sandbox user (app/sandbox.py), and is killed after the time it is given,
-with the ffmpeg it and yt-dlp start. The child writes what it has to
+most MEMORY_CAP, gets none of the worker's environment (its keys), runs as a
+sandbox user of its own (app/sandbox.py), and is killed after the time it is
+given, with the ffmpeg it and yt-dlp start. The child writes what it has to
 reel.json in a folder of its own inside one the parent owns, its frames first
 and then its transcript, so a reel that takes too long to transcribe still
 gives its caption and frames. The parent takes from it only what a reel could
@@ -84,52 +84,58 @@ async def fetch(url: str, timeout_s: float) -> Reel | None:
     read; what the child had by `timeout_s` when it takes longer (see above)."""
     # A helper killed with the child may still be letting go of the folder.
     with tempfile.TemporaryDirectory(prefix="reel-", ignore_cleanup_errors=True) as root:
-        # The child's own folder, in one it can only pass through: it can't
-        # move the folder the parent reads from, or put a link in its place.
-        folder = Path(root) / "out"
         try:
-            os.mkdir(folder)
-            os.chmod(root, 0o711)
-            sandbox.give(folder)
-            child = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-m",
-                "app.extractors.reel",
-                url,
-                str(folder),
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-                env=child_env(),
-                # A group of its own, so the ffmpeg it starts can be killed with it.
-                start_new_session=True,
-                **sandbox.credentials(),
-            )
+            async with sandbox.user() as user:
+                return await _run(url, Path(root), user, timeout_s)
         except OSError as exc:
-            # Out of space, processes or file descriptors, or no sandbox user:
-            # the post's page is read instead.
+            # Out of space, processes or file descriptors, or no sandbox user
+            # free: the post's page is read instead.
             log.warning("reel: couldn't start reading it: %r", exc)
             return None
-        try:
-            async with asyncio.timeout(timeout_s):
-                assert child.stderr
-                errors = await sandbox.read_at_most(child.stderr, sandbox.MAX_ERRORS)
-                await child.wait()
-            if child.returncode:
-                reason = (errors or b"").decode(errors="replace").strip()[-500:]
-                # A photo has no video. Anything else (Instagram asking to sign
-                # in, Whisper failing) means reels are going unread.
-                level = logging.INFO if child.returncode == NO_VIDEO else logging.WARNING
-                log.log(level, "reel: %s", reason or f"exit {child.returncode}")
-        except TimeoutError:
-            log.warning("reel: reading it took over %ss", timeout_s)
-        finally:
-            # Also when the job is cancelled: never leave one reading.
-            if child.returncode is None:
-                with contextlib.suppress(ProcessLookupError):
-                    os.killpg(child.pid, signal.SIGKILL)
-                await child.wait()
-        return read(folder)
+
+
+async def _run(url: str, root: Path, user: dict[str, Any], timeout_s: float) -> Reel | None:
+    # The child's own folder, which only it may open, in one it can only pass
+    # through: it can't move the folder the parent reads from, or put a link
+    # in its place.
+    folder = root / "out"
+    os.mkdir(folder, 0o700)
+    os.chmod(root, 0o711)
+    sandbox.give(folder, user)
+    child = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "app.extractors.reel",
+        url,
+        str(folder),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+        env=child_env(),
+        # A group of its own, so the ffmpeg it starts can be killed with it.
+        start_new_session=True,
+        **user,
+    )
+    try:
+        async with asyncio.timeout(timeout_s):
+            assert child.stderr
+            errors = await sandbox.read_at_most(child.stderr, sandbox.MAX_ERRORS)
+            await child.wait()
+        if child.returncode:
+            reason = (errors or b"").decode(errors="replace").strip()[-500:]
+            # A photo has no video. Anything else (Instagram asking to sign
+            # in, Whisper failing) means reels are going unread.
+            level = logging.INFO if child.returncode == NO_VIDEO else logging.WARNING
+            log.log(level, "reel: %s", reason or f"exit {child.returncode}")
+    except TimeoutError:
+        log.warning("reel: reading it took over %ss", timeout_s)
+    finally:
+        # Also when the job is cancelled: never leave one reading.
+        if child.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(child.pid, signal.SIGKILL)
+            await child.wait()
+    return read(folder)
 
 
 def child_env() -> dict[str, str]:
@@ -303,7 +309,7 @@ def _ffmpeg(*args: str) -> bytes:
 def _main() -> None:
     """The child: `<url> <folder>`. Exits NO_VIDEO when the post has no video,
     or 1 when it can't be read, with the reason on stderr."""
-    sandbox.limit_memory(MEMORY_CAP)
+    sandbox.limit(MEMORY_CAP)
     url, folder = sys.argv[1], Path(sys.argv[2])
     try:
         video, info = _download(url, folder)

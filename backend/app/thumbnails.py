@@ -10,9 +10,9 @@ Anyone who can sign up picks the files drawn here, so `draw` draws each in a
 child process (`python -m app.thumbnails`) that may use at most MEMORY_CAP and
 is killed after TIMEOUT_S: an image built to decode into gigabytes, or a PDF
 built to render forever, costs that process and not the worker. It gets none
-of the worker's environment (its keys and passwords) and runs as the sandbox
-user (app/sandbox.py), so a file that exploits a decoder bug finds nothing to
-steal, and what it sends back is kept only if it is a JPEG of at most
+of the worker's environment (its keys and passwords) and runs as a sandbox
+user of its own (app/sandbox.py), so a file that exploits a decoder bug finds
+nothing to steal, and what it sends back is kept only if it is a JPEG of at most
 MAX_JPEG_BYTES. Images over MAX_PIXELS aren't decoded at all.
 """
 
@@ -24,6 +24,7 @@ import io
 import logging
 import sys
 import uuid
+from typing import Any
 
 import pypdfium2 as pdfium  # type: ignore[import-untyped]
 from PIL import Image, ImageOps
@@ -55,22 +56,27 @@ def path(item_id: uuid.UUID) -> str:
 async def draw(data: bytes, mime: str) -> bytes | None:
     """`make` in a child process with a time and memory limit (see above)."""
     try:
-        child = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "app.thumbnails",
-            mime,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=child_env(),
-            **sandbox.credentials(),
-        )
+        async with sandbox.user() as user:
+            return await _draw(data, mime, user)
     except OSError as exc:
-        # Out of processes or file descriptors, or no sandbox user: the upload
-        # is still saved.
+        # Out of processes or file descriptors, or no sandbox user free: the
+        # upload is still saved.
         log.warning("no thumbnail for a %s: couldn't start drawing it: %r", mime, exc)
         return None
+
+
+async def _draw(data: bytes, mime: str, user: dict[str, Any]) -> bytes | None:
+    child = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "app.thumbnails",
+        mime,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=child_env(),
+        **user,
+    )
     try:
         async with asyncio.timeout(TIMEOUT_S):
             jpeg, errors = await _exchange(child, data)
@@ -173,7 +179,7 @@ def _first_page(data: bytes) -> Image.Image:
 def _main() -> None:
     """The child: the file on stdin, its mime type as the argument, the JPEG on
     stdout, or exit 1 with the reason on stderr."""
-    sandbox.limit_memory(MEMORY_CAP)
+    sandbox.limit(MEMORY_CAP)
     jpeg = make(sys.stdin.buffer.read(), sys.argv[1])
     if jpeg is None:
         sys.exit(1)
