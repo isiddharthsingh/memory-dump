@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from app.ai.clients import claude
 from app.config import get_settings
-from app.extractors.base import ExtractedContent
+from app.extractors.base import ExtractedContent, flatten
 
 ANALYSIS_SYSTEM = """You are an analyst summarizing a single piece of saved \
 web content (a YouTube video, a tweet, an Instagram post, or a web article) \
@@ -33,6 +33,14 @@ Rules:
 
 MAX_TEXT_CHARS = 24_000  # ~6k tokens; leaves headroom for system + image
 
+# Asked only when there are frames, so other saves keep the system prompt's keys.
+FRAMES_NOTE = """The {count} images above are frames taken evenly through the \
+video. Add one more key, "on_screen": the text the frames show that the \
+transcript doesn't say (names, @handles, titles, numbers, code, labels of \
+charts and lists), as plain lines; "" when there is none.
+
+"""
+
 
 @dataclass
 class Analysis:
@@ -43,6 +51,8 @@ class Analysis:
     handles: list[str]
     brands_products: list[str]
     topics: list[str]
+    # Text a video's frames show, kept with its raw text so search finds it.
+    on_screen: str | None = None
 
 
 def _truncate(text: str | None, limit: int = MAX_TEXT_CHARS) -> str:
@@ -82,6 +92,13 @@ async def analyze(
                 },
             }
         )
+    for frame in content.frames:
+        user_blocks.append(
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/jpeg", "data": frame},
+            }
+        )
 
     body_text = _truncate(content.raw_text)
     prompt = (
@@ -90,7 +107,8 @@ async def analyze(
         f"Site: {content.site_name or ''}\n"
         f"Author: {content.author or ''}\n\n"
         f"Content:\n{body_text or '(no body extracted)'}\n\n"
-        "Return ONLY the JSON object as specified."
+        + (FRAMES_NOTE.format(count=len(content.frames)) if content.frames else "")
+        + "Return ONLY the JSON object as specified."
     )
     user_blocks.append({"type": "text", "text": prompt})
 
@@ -122,6 +140,10 @@ async def analyze(
         val = data.get(key) or []
         return [str(x).strip() for x in val if isinstance(x, str | int | float) and str(x).strip()]
 
+    on_screen = data.get("on_screen") if content.frames else None
+    if isinstance(on_screen, list):
+        # "Plain lines" sometimes come back as a list of them.
+        on_screen = "\n".join(_strs("on_screen"))
     return Analysis(
         title=(data.get("title") or content.title or None),
         summary=data.get("summary") or None,
@@ -130,4 +152,5 @@ async def analyze(
         handles=_strs("handles"),
         brands_products=_strs("brands_products"),
         topics=_strs("topics"),
+        on_screen=(flatten(on_screen) or None) if isinstance(on_screen, str) else None,
     )

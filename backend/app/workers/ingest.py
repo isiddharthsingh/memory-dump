@@ -105,6 +105,13 @@ def _text_for_embed(analysis: Analysis, raw_text: str | None) -> str:
     )
 
 
+def _with_on_screen(raw_text: str | None, on_screen: str | None) -> str | None:
+    """A video's raw text with the text its frames show, as its own section."""
+    if not on_screen:
+        return raw_text
+    return "\n\n".join(part for part in (raw_text, "On screen:\n" + on_screen) if part)
+
+
 async def _save(
     claim: _Claim,
     *,
@@ -220,7 +227,8 @@ async def ingest_item(ctx: dict[str, Any], item_id: str, generation: int | None 
         async with asyncio.timeout(get_settings().extract_timeout_s):
             content = await extractor.extract(claim.url, share_text=claim.share_text)
         analysis = await analyze(content, url=claim.url, source=claim.source)
-        chunks = chunk_text(_text_for_embed(analysis, content.raw_text))
+        raw_text = _with_on_screen(content.raw_text, analysis.on_screen)
+        chunks = chunk_text(_text_for_embed(analysis, raw_text))
         embeddings = await embed_texts(chunks, input_type="document") if chunks else []
     except Exception as exc:
         return await _failed(ctx, claim, exc)
@@ -229,7 +237,7 @@ async def ingest_item(ctx: dict[str, Any], item_id: str, generation: int | None 
         claim,
         title=analysis.title or content.title or claim.url,
         analysis=analysis,
-        raw_text=content.raw_text,
+        raw_text=raw_text,
         thumbnail_url=content.thumbnail_url,
         chunks=chunks,
         embeddings=embeddings,
