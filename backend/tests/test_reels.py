@@ -29,6 +29,7 @@ from app.config import get_settings
 from app.extractors import instagram, reel
 from app.extractors.base import ExtractedContent
 from app.extractors.instagram import InstagramExtractor
+from tests.conftest import alive
 
 URL = "https://www.instagram.com/reel/DfH83beRoH0/"
 
@@ -278,13 +279,6 @@ async def test_the_child_gets_no_secrets_and_is_killed_when_it_takes_too_long(
     assert _running() == 0
 
 
-def _alive(pid: int) -> bool:
-    try:
-        return Path(f"/proc/{pid}/stat").read_text().split()[2] != "Z"
-    except OSError:
-        return False
-
-
 async def test_a_child_out_of_time_still_gives_the_frames_it_wrote(
     child_script: Callable[[str], Path],
 ) -> None:
@@ -298,7 +292,7 @@ async def test_a_child_out_of_time_still_gives_the_frames_it_wrote(
     got = await reel.fetch(URL, timeout_s=1)
     assert got == reel.Reel(None, "a", "cap", None, [JPEG], None)
     # The helper went with it.
-    assert not _alive(int((folder / "helper.pid").read_text()))
+    assert not alive(int((folder / "helper.pid").read_text()))
 
 
 async def test_a_reel_that_fails_is_a_warning_but_a_post_without_video_is_not(
@@ -319,14 +313,17 @@ async def test_the_child_runs_as_the_sandbox_user_in_a_folder_of_its_own(
     child_script: Callable[[str], Path], caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger=reel.__name__)
-    # It may write in its folder but not move it: that is in one it can't change.
+    # It may write in its folder but not move it: that is in one it can't
+    # change. No other sandbox user may look inside it.
     child_script(
-        'id -u >&2\ntouch "$4/mine" || echo "cannot write" >&2\n'
+        'id -u >&2\nstat -c %a "$4" >&2\ntouch "$4/mine" || echo "cannot write" >&2\n'
         'mv "$4" "$4.moved" 2>/dev/null && echo moved >&2\nexit 1'
     )
     assert await reel.fetch(URL, timeout_s=5) is None
-    uid = pwd.getpwnam(sandbox.USER).pw_uid
-    assert [r.getMessage() for r in caplog.records if r.name == reel.__name__] == [f"reel: {uid}"]
+    [said] = [r.getMessage() for r in caplog.records if r.name == reel.__name__]
+    uid, mode = said.removeprefix("reel: ").split()
+    assert pwd.getpwuid(int(uid)).pw_name in sandbox.USERS
+    assert mode == "700"
 
 
 def _answer(**data: Any) -> SimpleNamespace:

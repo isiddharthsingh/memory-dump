@@ -56,6 +56,14 @@ def jobs(monkeypatch: pytest.MonkeyPatch) -> Iterator[Jobs]:
                 asyncio.run(get_storage().delete(f"{item_id}.{ext}"))
 
 
+def alive(pid: int) -> bool:
+    """Whether `pid` runs, and isn't a zombie (Linux: /proc)."""
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().split()[2] != "Z"
+    except OSError:
+        return False
+
+
 @pytest.fixture
 def child_script(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[str], Path]]:
     """Points `sys.executable` at a shell script with the given body, standing

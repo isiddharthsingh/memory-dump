@@ -37,7 +37,7 @@ from app.extractors.webpage import NotPublic, TooLarge, _CappedClient
 from app.main import app
 from app.storage import LocalStorage
 from app.workers.jobs import MAX_DELAY_S, last_try, later
-from tests.conftest import form, signup, unique_email
+from tests.conftest import alive, form, signup, unique_email
 
 REQUEST = httpx.Request("GET", "https://example.com/")
 
@@ -278,7 +278,19 @@ async def test_thumbnails_are_drawn_in_a_child_killed_when_it_takes_too_long(
     assert await thumbnails.draw(png.getvalue(), "image/png") is None
 
 
-async def test_children_run_as_the_sandbox_user_and_cant_read_the_workers_environment() -> None:
+def _sandbox_uids() -> set[int]:
+    return {pwd.getpwnam(name).pw_uid for name in sandbox.USERS}
+
+
+async def _run(user: dict[str, Any], *argv: str) -> str:
+    child = await asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.PIPE, env=sandbox.env(("PATH", "PYTHONPATH")), **user
+    )
+    out, _ = await child.communicate()
+    return out.decode()
+
+
+async def test_each_child_runs_as_a_sandbox_user_of_its_own() -> None:
     probe = (
         "import os\n"
         "print(os.getuid())\n"
@@ -289,14 +301,113 @@ async def test_children_run_as_the_sandbox_user_and_cant_read_the_workers_enviro
         "    except PermissionError:\n"
         "        pass\n"
     )
-    child = await asyncio.create_subprocess_exec(
-        sys.executable, "-c", probe, stdout=asyncio.subprocess.PIPE, **sandbox.credentials()
+    async with sandbox.user() as first, sandbox.user() as second:
+        # Two at once never share a user, so neither can trace, signal or
+        # read the other, whose file may be another person's.
+        assert first["user"] != second["user"]
+        assert {first["user"], second["user"]} <= _sandbox_uids()
+        # Nor the worker's environment.
+        assert (await _run(first, sys.executable, "-c", probe)).split() == [str(first["user"])]
+
+
+async def test_what_a_child_leaves_running_is_killed_when_it_is_done() -> None:
+    async with sandbox.user() as user:
+        # Out of the child's process group, where killing the group misses it.
+        left = int(await _run(user, "sh", "-c", "setsid sleep 30 >/dev/null 2>&1 & echo $!"))
+        assert alive(left)
+    assert not alive(left)
+
+
+async def test_with_every_sandbox_user_busy_no_child_starts() -> None:
+    async with contextlib.AsyncExitStack() as stack:
+        for _ in sandbox.USERS:
+            await stack.enter_async_context(sandbox.user())
+        with pytest.raises(BlockingIOError):
+            async with sandbox.user():
+                pass
+    async with sandbox.user() as user:
+        assert user["user"] in _sandbox_uids()
+
+
+def test_sandbox_users_are_far_from_other_services_uids() -> None:
+    # Per-user limits (processes, among others) count every container's
+    # processes of a uid: Postgres and Redis run as 999, a host's own users
+    # from 1000.
+    assert min(_sandbox_uids()) >= 60_000
+
+
+async def test_a_user_another_process_holds_is_not_handed_out() -> None:
+    # Say a script run beside the worker, reading a reel of its own.
+    hold = (
+        "import asyncio\nfrom app import sandbox\n"
+        "async def hold():\n"
+        "    async with sandbox.user() as user:\n"
+        "        print(user['user'], flush=True)\n"
+        "        await asyncio.sleep(30)\n"
+        "asyncio.run(hold())"
     )
-    out, _ = await child.communicate()
-    assert out.decode().split() == [str(pwd.getpwnam(sandbox.USER).pw_uid)]
+    holder = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", hold, stdout=asyncio.subprocess.PIPE
+    )
+    assert holder.stdout
+    held = int(await holder.stdout.readline())
+    try:
+        async with sandbox.user() as user:
+            assert user["user"] != held
+    finally:
+        holder.kill()
+        await holder.wait()
+    # Its lock went with it: every user is free again.
+    async with contextlib.AsyncExitStack() as stack:
+        for _ in sandbox.USERS:
+            await stack.enter_async_context(sandbox.user())
 
 
-async def test_without_the_sandbox_user_no_child_starts_as_root(
+async def test_a_user_whose_processes_outlive_the_kill_isnt_handed_out_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sandbox, "KILL_TRIES", 2)
+    async with sandbox.user() as user:
+        stuck = user["user"]
+        # One that won't go: it would be running beside the next child.
+        monkeypatch.setattr(
+            sandbox, "_running_as", lambda uid: iter([1 << 22] if uid == stuck else [])
+        )
+    try:
+        assert stuck in sandbox._quarantined
+        monkeypatch.undo()
+        async with contextlib.AsyncExitStack() as stack:
+            taken = [await stack.enter_async_context(sandbox.user()) for _ in sandbox.USERS[1:]]
+            assert stuck not in {u["user"] for u in taken}
+            with pytest.raises(BlockingIOError):
+                async with sandbox.user():
+                    pass
+    finally:
+        os.close(sandbox._quarantined.pop(stuck))
+
+
+async def test_a_kill_leaves_alone_a_process_that_isnt_the_users() -> None:
+    # A pid can pass to another process between the look at /proc and the kill.
+    other = await asyncio.create_subprocess_exec("sleep", "30")
+    try:
+        sandbox._kill(other.pid, min(_sandbox_uids()))
+        assert alive(other.pid)
+    finally:
+        other.kill()
+        await other.wait()
+
+
+async def test_a_child_caps_its_own_memory_and_processes() -> None:
+    probe = (
+        "import resource\nfrom app import sandbox\nsandbox.limit(1 << 30)\n"
+        "print(*resource.getrlimit(resource.RLIMIT_AS), *resource.getrlimit(resource.RLIMIT_NPROC))"
+    )
+    async with sandbox.user() as user:
+        limits = (await _run(user, sys.executable, "-c", probe)).split()
+    assert limits == [str(1 << 30)] * 2 + [str(sandbox.MAX_PROCESSES)] * 2
+
+
+async def test_without_the_sandbox_users_no_child_starts_as_root(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     def missing(name: str) -> None:
@@ -304,7 +415,8 @@ async def test_without_the_sandbox_user_no_child_starts_as_root(
 
     monkeypatch.setattr(pwd, "getpwnam", missing)
     with pytest.raises(PermissionError):
-        sandbox.credentials()
+        async with sandbox.user():
+            pass
     # Neither child starts, and neither save fails over it.
     caplog.set_level(logging.WARNING)
     assert await thumbnails.draw(b"png", "image/png") is None
@@ -318,8 +430,8 @@ async def test_a_thumbnail_child_is_sandboxed_and_only_a_bounded_jpeg_is_kept(
     caplog.set_level(logging.WARNING, logger=thumbnails.__name__)
     child_script("cat > /dev/null\nid -u >&2\nexit 1")
     assert await thumbnails.draw(b"png", "image/png") is None
-    uid = str(pwd.getpwnam(sandbox.USER).pw_uid)
-    assert [r.getMessage() for r in caplog.records if r.name == thumbnails.__name__] == [uid]
+    [said] = [r.getMessage() for r in caplog.records if r.name == thumbnails.__name__]
+    assert int(said) in _sandbox_uids()
     child_script("cat > /dev/null\nprintf '\\377\\330a jpeg'")
     assert await thumbnails.draw(b"png", "image/png") == b"\xff\xd8a jpeg"
     # Whatever a child taken over by a decoder bug sends back.
