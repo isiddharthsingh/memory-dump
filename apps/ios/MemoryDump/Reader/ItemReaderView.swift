@@ -127,13 +127,15 @@ struct ItemReaderView: View {
     let note = it.shareText ?? model.reader.note
     let style = ItemCardView.style(source: it.source, url: it.url, hasImage: it.thumbnailUrl != nil)
     let isPost = if case .post = style { true } else { false }
-    // A tweet's text is its card, so it isn't repeated as the article.
-    let tweetInHero = it.source == "twitter" && model.reader.bodySection == "Tweet"
+    // A post's text is its card. Below it goes the article or video it links
+    // to, and nothing when the post (or its photo) is all there is.
+    let post = it.source == "twitter" ? model.reader.post : nil
+    let hasArticle = it.source != "twitter" || (model.reader.bodySection.map { $0 != "Tweet" } ?? false)
     return ScrollView {
       VStack(alignment: .leading, spacing: 0) {
         ReaderHero(
           item: it, style: style, author: model.reader.author,
-          postText: tweetInHero ? model.reader.body ?? title : title, topInset: topInset
+          postText: post ?? title, topInset: topInset
         ) { open(it) }
 
         if !isPost {
@@ -149,7 +151,7 @@ struct ItemReaderView: View {
         status(it).padding(.horizontal, 16).padding(.top, 20)
         if let note { noteCard(note) }
         if let summary = it.summary { gist(summary) }
-        if it.status == "ready", !tweetInHero { article }
+        if it.status == "ready", hasArticle { article }
         connections
         details(it)
       }

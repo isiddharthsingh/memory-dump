@@ -163,6 +163,8 @@ struct ReaderContent: Equatable {
   let body: String?
   /// The section the body came from: "Body", "Transcript", "Tweet"…
   let bodySection: String?
+  /// A post's own text. Its body is the article it links to, when there is one.
+  let post: String?
   let note: String?
   /// The video's channel or the post's author.
   let author: String?
@@ -172,7 +174,7 @@ struct ReaderContent: Equatable {
 
   init(rawText: String?) {
     guard let rawText, !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-      self.init(body: nil, bodySection: nil, note: nil, author: nil, isStub: true)
+      self.init(body: nil, bodySection: nil, post: nil, note: nil, author: nil, isStub: true)
       return
     }
     var sections: [String: String] = [:]
@@ -184,14 +186,18 @@ struct ReaderContent: Equatable {
     }
     let section = Self.bodyPriority.first { sections[$0]?.isEmpty == false }
     let body = section.flatMap { sections[$0] }
+    // A post that links to a video carries the video's Channel too, after its own Author.
     self.init(
-      body: body, bodySection: section, note: sections["User note"],
-      author: sections["Channel"] ?? sections["Author"], isStub: (body?.count ?? 0) < 40)
+      body: body, bodySection: section, post: sections["Tweet"], note: sections["User note"],
+      author: sections["Author"] ?? sections["Channel"], isStub: (body?.count ?? 0) < 40)
   }
 
-  private init(body: String?, bodySection: String?, note: String?, author: String?, isStub: Bool) {
+  private init(
+    body: String?, bodySection: String?, post: String?, note: String?, author: String?, isStub: Bool
+  ) {
     self.body = body
     self.bodySection = bodySection
+    self.post = post
     self.note = note
     self.author = author
     self.isStub = isStub

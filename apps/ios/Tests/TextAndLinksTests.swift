@@ -92,7 +92,15 @@ import Testing
     let post = ReaderContent(rawText: "Author: Maya Okafor\n\nTweet:\nShipped my first solo iOS app last month.")
     #expect(post.body == "Shipped my first solo iOS app last month.")
     #expect(post.bodySection == "Tweet")
+    #expect(post.post == "Shipped my first solo iOS app last month.")
     #expect(post.author == "Maya Okafor")
+    // A post linking to a video: the post stays the post, the transcript is the body,
+    // and the byline is the post's author rather than the video's channel.
+    let linked = ReaderContent(
+      rawText: "Author: Simon Willison\n\nTweet:\nSpotted this\n\nLink: https://youtu.be/x\n\nChannel: De Staat\n\nTranscript:\nmusic")
+    #expect(linked.post == "Spotted this")
+    #expect(linked.bodySection == "Transcript")
+    #expect(linked.author == "Simon Willison")
     let video = ReaderContent(rawText: "Title: T\n\nChannel: Home Barista Lab\n\nTranscript:\nhello")
     #expect(video.bodySection == "Transcript")
     #expect(video.author == "Home Barista Lab")
