@@ -37,8 +37,9 @@ ENV HF_HUB_OFFLINE=1
 
 COPY . .
 # The sandbox user runs the children from this code, whatever the checkout's
-# permissions were.
-RUN chmod -R a+rX /app
+# permissions were; nothing else here is its to read (.dockerignore keeps
+# secrets out of the image).
+RUN chmod -R a+rX /app/app
 
 ENV PYTHONPATH=/app
 

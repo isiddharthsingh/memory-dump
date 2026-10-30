@@ -1,0 +1,14 @@
+# Kept out of the image, at any depth: secrets, which would be baked into its
+# layers, and local caches. The stack reads .env from the repo root at run
+# time.
+**/.env
+**/.env.*
+**/secrets
+**/*.p8
+**/*.pem
+**/*.key
+**/.git
+**/__pycache__
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
