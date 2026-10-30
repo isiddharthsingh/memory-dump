@@ -3,16 +3,18 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
-from arq import Retry
-from sqlalchemy import Text, delete, func, or_, select, text
+import structlog
+from sqlalchemy import Text, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.synthesize import (
     WIKILINK_RE,
+    PatchedPage,
     embed_page_chunks,
     forget_in_body,
     patch_page,
@@ -21,35 +23,59 @@ from app.ai.synthesize import (
 )
 from app.db.models import Chat, Item, TopicPage, TopicPageChunk
 from app.db.session import get_sessionmaker
-from app.workers.ingest import TRANSIENT, _is_anthropic_overloaded
+from app.errors import is_transient
+from app.workers.jobs import job, last_try, later
 
 log = logging.getLogger(__name__)
 
 # `[item:<id>]` and `[wiki:<slug>]` in an Ask answer, as the app reads them.
 _ANSWER_MARKER_RE = re.compile(r"\s*\[(item|wiki):([^\]]+)\]")
 
-
-def _later(ctx: dict[str, Any], first: int) -> Retry:
-    """Runs the job again after `first` seconds, doubling per try (cap 30m)."""
-    return Retry(defer=min(first * 2 ** (ctx.get("job_try", 1) - 1), 30 * 60))
+# Times a job drafts a page again because another job changed it meanwhile.
+MAX_ROUNDS = 3
 
 
-async def _lock_wiki(session: AsyncSession, user_id: uuid.UUID, ctx: dict[str, Any]) -> None:
-    """Holds the user's wiki until the transaction ends, so synthesis and
-    forget_item never write a page from a copy the other has since changed.
-    Waits up to 30 s, then runs the job again later, so jobs queued behind a
-    long synthesis neither hold a worker slot nor run into job_timeout."""
+class WikiBusy(Exception):
+    """The user's wiki stayed locked for 30 s, or kept changing under a draft.
+    The job runs again later."""
+
+
+class _NotDeletedYet(Exception):
+    pass
+
+
+class _PageChanged(Exception):
+    pass
+
+
+async def lock_wiki(session: AsyncSession, user_id: uuid.UUID) -> None:
+    """Holds the user's wiki until the transaction ends. Every writer of a
+    user's pages (synthesis, forget_item, compaction) writes under it, and only
+    from what it reads under it: the Claude calls come first, outside any
+    transaction, and the page's `version` is checked again here. So the lock
+    is held for a few queries, never for a Claude call. Waits up to 30 s, then
+    raises WikiBusy."""
     await session.execute(text("SET LOCAL lock_timeout = '30s'"))
     try:
         await session.execute(select(func.pg_advisory_xact_lock(func.hashtext(f"wiki:{user_id}"))))
     except DBAPIError as exc:
         if getattr(exc.orig, "sqlstate", None) != "55P03":  # lock_not_available
             raise
-        raise _later(ctx, 15) from exc
+        raise WikiBusy(f"wiki of {user_id} is locked") from exc
     await session.execute(text("SET LOCAL lock_timeout TO DEFAULT"))
 
 
-async def _replace_chunks(
+async def read_pages(user_id: uuid.UUID, slugs: list[str]) -> dict[str, TopicPage]:
+    async with get_sessionmaker()() as session:
+        pages = (
+            await session.execute(
+                select(TopicPage).where(TopicPage.user_id == user_id, TopicPage.slug.in_(slugs))
+            )
+        ).scalars()
+        return {p.slug: p for p in pages}
+
+
+async def replace_chunks(
     session: AsyncSession, page: TopicPage, chunks_with_emb: list[tuple[str, list[float]]]
 ) -> None:
     """Swaps a page's search chunks for freshly embedded ones."""
@@ -62,75 +88,166 @@ async def _replace_chunks(
         )
 
 
+def retry_or_give_up(ctx: dict[str, Any], exc: Exception, what: str) -> None:
+    """Raises Retry for a busy wiki or a transient failure, unless this is
+    the last try; then the caller records that it gave up."""
+    busy = isinstance(exc, WikiBusy | _NotDeletedYet)
+    if (busy or is_transient(exc)) and not last_try(ctx):
+        log.warning("%s: retrying later: %r", what, exc)
+        raise later(ctx, 15 if busy else 60, exc) from exc
+    log.error("%s: giving up: %r", what, exc, exc_info=exc)
+
+
+@dataclass(frozen=True)
+class _Snapshot:
+    item_id: uuid.UUID
+    user_id: uuid.UUID
+    title: str
+    summary: str | None
+    raw_text: str | None
+    topics: list[str]
+    tags: list[str]
+    existing_slugs: list[str]
+
+
+@dataclass(frozen=True)
+class _Draft:
+    # The page version it was written from; None for a page that didn't exist.
+    based_on: int | None
+    page: PatchedPage
+    chunks: list[tuple[str, list[float]]]
+
+
+@job
 async def synthesize_topics(ctx: dict[str, Any], item_id: str) -> str:
     """Fold a freshly-ingested item into AI-maintained topic pages.
 
     All page reads/writes are scoped to `item.user_id` so wiki synthesis
-    only ever touches the owner's pages.
+    only ever touches the owner's pages. Claude drafts each page from a copy
+    read without any lock; the drafts are written together in one short
+    transaction under the wiki lock, and only if none of the pages changed
+    since. A page that did is drafted again on top of the new copy. A failed
+    try writes nothing, so a retry starts clean.
     """
     item_uuid = uuid.UUID(item_id)
-    Session = get_sessionmaker()
+    try:
+        return await _synthesize(item_uuid)
+    except Exception as exc:
+        retry_or_give_up(ctx, exc, f"synthesize {item_id}")
+        await _set_wiki_status(item_uuid, "failed")
+        return "failed"
 
-    async with Session() as session:
-        item = await session.get(Item, item_uuid)
-        if item is None or item.status != "ready":
-            log.info("synthesize: item %s not ready", item_id)
-            return "skipped"
 
-        user_id = item.user_id
-        await _lock_wiki(session, user_id, ctx)
+async def _synthesize(item_id: uuid.UUID) -> str:
+    snap = await _snapshot(item_id)
+    if snap is None:
+        log.info("synthesize: item %s not ready", item_id)
+        return "skipped"
+    structlog.contextvars.bind_contextvars(item_id=str(item_id), user_id=str(snap.user_id))
 
-        existing_slugs_rows = await session.execute(
-            select(TopicPage.slug).where(TopicPage.user_id == user_id)
-        )
-        existing_slugs = [s for (s,) in existing_slugs_rows.all()]
+    proposed = await propose_slugs(
+        item_title=snap.title,
+        item_summary=snap.summary,
+        item_topics=snap.topics,
+        item_tags=snap.tags,
+        existing_slugs=snap.existing_slugs,
+    )
+    if not proposed.slugs:
+        log.info("synthesize: no slugs proposed for %s", item_id)
+        await _set_wiki_status(item_id, "done")
+        return "no_slugs"
 
-        proposed = await propose_slugs(
-            item_title=item.title or item.url,
-            item_summary=item.summary,
-            item_topics=item.topics or [],
-            item_tags=item.tags or [],
-            existing_slugs=existing_slugs,
-        )
-
-        if not proposed.slugs:
-            log.info("synthesize: no slugs proposed for %s", item_id)
-            return "no_slugs"
-
-        updated: list[str] = []
+    related = list(dict.fromkeys([*snap.existing_slugs, *proposed.slugs]))
+    drafts: dict[str, _Draft] = {}
+    for _ in range(MAX_ROUNDS):
+        pages = await read_pages(snap.user_id, proposed.slugs)
         for slug in proposed.slugs:
-            # Fetch (or create) the page — scoped to this user.
-            page = (
-                await session.execute(
-                    select(TopicPage)
-                    .where(TopicPage.user_id == user_id)
-                    .where(TopicPage.slug == slug)
-                )
-            ).scalar_one_or_none()
-            existing_body = page.body_md if page else ""
-            existing_title = page.title if page else None
-
+            page = pages.get(slug)
+            version = page.version if page else None
+            if slug in drafts and drafts[slug].based_on == version:
+                continue
             patched = await patch_page(
                 slug=slug,
-                existing_body=existing_body,
-                existing_title=existing_title,
-                item_id=item.id,
-                item_title=item.title or item.url,
-                item_summary=item.summary,
-                item_text=item.raw_text,
-                related_slugs=[s for s in existing_slugs if s != slug] + [s for s in proposed.slugs if s != slug],
+                existing_body=page.body_md if page else "",
+                existing_title=page.title if page else None,
+                item_id=item_id,
+                item_title=snap.title,
+                item_summary=snap.summary,
+                item_text=snap.raw_text,
+                related_slugs=[s for s in related if s != slug],
             )
+            drafts[slug] = _Draft(version, patched, await embed_page_chunks(patched.body_md))
+        outcome = await _write_drafts(snap, proposed.slugs, drafts)
+        if outcome is not None:
+            return outcome
+    raise WikiBusy(f"pages for {item_id} kept changing")
 
-            chunks_with_emb = await embed_page_chunks(patched.body_md)
 
+async def _snapshot(item_id: uuid.UUID) -> _Snapshot | None:
+    async with get_sessionmaker()() as session:
+        item = await session.get(Item, item_id)
+        if item is None or item.status != "ready":
+            return None
+        slugs = (
+            await session.execute(select(TopicPage.slug).where(TopicPage.user_id == item.user_id))
+        ).scalars()
+        return _Snapshot(
+            item_id=item.id,
+            user_id=item.user_id,
+            title=item.title or item.url,
+            summary=item.summary,
+            raw_text=item.raw_text,
+            topics=item.topics or [],
+            tags=item.tags or [],
+            existing_slugs=list(slugs),
+        )
+
+
+async def _write_drafts(snap: _Snapshot, slugs: list[str], drafts: dict[str, _Draft]) -> str | None:
+    """Writes every draft, or nothing: "deleted" when the item went while
+    Claude wrote, None when a page changed since its draft."""
+    async with get_sessionmaker()() as session:
+        await lock_wiki(session, snap.user_id)
+        # A delete after this check is cleaned up by forget_item, which waits
+        # for the lock.
+        if await session.scalar(select(Item.id).where(Item.id == snap.item_id)) is None:
+            log.info("synthesize: item %s was deleted", snap.item_id)
+            return "deleted"
+        pages = {
+            p.slug: p
+            for p in (
+                await session.execute(
+                    select(TopicPage).where(
+                        TopicPage.user_id == snap.user_id, TopicPage.slug.in_(slugs)
+                    )
+                )
+            ).scalars()
+        }
+        changed = [
+            s for s in slugs if (pages[s].version if s in pages else None) != drafts[s].based_on
+        ]
+        if changed:
+            log.info("synthesize: %s changed meanwhile, drafting again", changed)
+            return None
+        existing = set(
+            (
+                await session.execute(
+                    select(TopicPage.slug).where(TopicPage.user_id == snap.user_id)
+                )
+            ).scalars()
+        )
+
+        for slug in slugs:
+            patched = drafts[slug].page
+            page = pages.get(slug)
             if page is None:
                 page = TopicPage(
-                    user_id=user_id,
+                    user_id=snap.user_id,
                     slug=patched.slug,
                     title=patched.title,
                     body_md=patched.body_md,
                     backlinks=patched.backlinks or None,
-                    source_item_ids=[item.id],
+                    source_item_ids=[snap.item_id],
                     version=1,
                 )
                 session.add(page)
@@ -141,24 +258,21 @@ async def synthesize_topics(ctx: dict[str, Any], item_id: str) -> str:
                 page.backlinks = patched.backlinks or None
                 page.version = (page.version or 1) + 1
                 existing_ids = list(page.source_item_ids or [])
-                if item.id not in existing_ids:
-                    existing_ids.append(item.id)
+                if snap.item_id not in existing_ids:
+                    existing_ids.append(snap.item_id)
                 page.source_item_ids = existing_ids
 
-            await _replace_chunks(session, page, chunks_with_emb)
+            await replace_chunks(session, page, drafts[slug].chunks)
 
-            # Create stubs for any wikilink targets that don't exist yet,
-            # so links resolve cleanly in the UI. Skip slugs we're about to
-            # patch as main pages in this same call, and rely on ON CONFLICT
-            # over (user_id, slug) to absorb cross-worker races and
-            # within-session autoflush gaps.
+            # Create stubs for any wikilink targets that don't exist yet, so
+            # links resolve cleanly in the UI.
             for backlink_slug in patched.backlinks:
-                if backlink_slug in proposed.slugs or backlink_slug in existing_slugs:
+                if backlink_slug in slugs or backlink_slug in existing:
                     continue
-                stmt = (
+                await session.execute(
                     pg_insert(TopicPage)
                     .values(
-                        user_id=user_id,
+                        user_id=snap.user_id,
                         slug=backlink_slug,
                         title=backlink_slug.replace("-", " ").title(),
                         body_md="_pending_",
@@ -166,53 +280,61 @@ async def synthesize_topics(ctx: dict[str, Any], item_id: str) -> str:
                         source_item_ids=None,
                         version=1,
                     )
-                    .on_conflict_do_nothing(
-                        constraint="uq_topic_pages_user_slug"
-                    )
+                    .on_conflict_do_nothing(constraint="uq_topic_pages_user_slug")
                 )
-                await session.execute(stmt)
+                existing.add(backlink_slug)
 
-            existing_slugs = list({*existing_slugs, slug})
-            updated.append(slug)
-
-        # Deleted while Claude wrote? Then none of this is kept. A delete after
-        # this check is cleaned up by forget_item, which waits for the lock.
-        if await session.scalar(select(Item.id).where(Item.id == item_uuid)) is None:
-            log.info("synthesize: item %s was deleted", item_id)
-            return "deleted"
-
+        await session.execute(_wiki_status_stmt(snap.item_id, "done"))
         await session.commit()
-        log.info("synthesize: patched %d page(s) for %s: %s", len(updated), item_id, updated)
-        return f"ok:{','.join(updated)}"
+    log.info("synthesize: patched %d page(s) for %s: %s", len(slugs), snap.item_id, slugs)
+    return f"ok:{','.join(slugs)}"
 
 
+def _wiki_status_stmt(item_id: uuid.UUID, status: str) -> Any:
+    # Keeps updated_at: the item itself didn't change for the app.
+    return (
+        update(Item)
+        .where(Item.id == item_id)
+        .values(wiki_status=status, updated_at=Item.updated_at)
+    )
+
+
+async def _set_wiki_status(item_id: uuid.UUID, status: str) -> None:
+    async with get_sessionmaker()() as session:
+        await session.execute(_wiki_status_stmt(item_id, status))
+        await session.commit()
+
+
+@job
 async def forget_item(ctx: dict[str, Any], user_id: str, item_id: str) -> str:
     """Removes a deleted item from its owner's wiki and Ask history.
 
     Pages only it supported go at once, with the source cards that cite them.
     Then Claude rewrites each page that cites it or links to a page that's
-    gone, one page per transaction, and stub pages nothing links to any more
-    are deleted. Safe to run again: every step looks at what is still there,
-    so a retry picks up where the last try stopped.
+    gone, drafting from a copy outside any transaction and writing under the
+    wiki lock if the page hasn't changed since, and stub pages nothing links
+    to any more are deleted. Safe to run again: every step looks at what is
+    still there, so a retry picks up where the last try stopped. When it gives
+    up, the nightly compact_user finds the item still cited and queues it
+    again.
     """
     try:
-        return await _forget(ctx, uuid.UUID(user_id), uuid.UUID(item_id))
+        return await _forget(uuid.UUID(user_id), uuid.UUID(item_id))
     except Exception as exc:
-        if isinstance(exc, TRANSIENT) or _is_anthropic_overloaded(exc):
-            log.warning("forget: transient error for %s, retrying: %s", item_id, exc)
-            raise _later(ctx, 60) from exc
-        raise
+        retry_or_give_up(ctx, exc, f"forget {item_id}")
+        return "failed"
 
 
-async def _forget(ctx: dict[str, Any], user_id: uuid.UUID, item_id: uuid.UUID) -> str:
+async def _forget(user_id: uuid.UUID, item_id: uuid.UUID) -> str:
     Session = get_sessionmaker()
     cite = f"[item:{item_id}]"
+    structlog.contextvars.bind_contextvars(item_id=str(item_id), user_id=str(user_id))
 
     async with Session() as session:
         # The API queues this before it deletes, so wait for the delete to land.
         if await session.get(Item, item_id) is not None:
-            raise _later(ctx, 15)
-        await _lock_wiki(session, user_id, ctx)
+            raise _NotDeletedYet(str(item_id))
+        await lock_wiki(session, user_id)
         removed = await _drop_pages_of(session, user_id, item_id)
         await _scrub_chats(session, user_id, items={str(item_id)}, slugs=set(removed))
         rows = (
@@ -228,34 +350,19 @@ async def _forget(ctx: dict[str, Any], user_id: uuid.UUID, item_id: uuid.UUID) -
 
     rewritten: list[str] = []
     for page_id in todo:
-        async with Session() as session:
-            await _lock_wiki(session, user_id, ctx)
-            page = await session.get(TopicPage, page_id)
-            if page is None:
+        for _ in range(MAX_ROUNDS):
+            try:
+                slug = await _forget_in_page(user_id, item_id, page_id)
+                break
+            except _PageChanged:
                 continue
-            alive = set(
-                (await session.execute(select(TopicPage.slug).where(TopicPage.user_id == user_id)))
-                .scalars()
-                .all()
-            )
-            gone = _needs_forgetting(page.body_md, cite, alive)
-            if gone is None:
-                continue
-            rewrite = await remove_from_page(
-                body=page.body_md, item_id=item_id, gone_slugs=sorted(gone)
-            )
-            body = forget_in_body(rewrite or page.body_md, item_id, gone)
-            chunks_with_emb = await embed_page_chunks(body)
-
-            page.body_md = body
-            page.backlinks = sorted(set(WIKILINK_RE.findall(body)) - {page.slug}) or None
-            page.version = (page.version or 1) + 1
-            await _replace_chunks(session, page, chunks_with_emb)
-            await session.commit()
-            rewritten.append(page.slug)
+        else:
+            raise WikiBusy(f"page {page_id} kept changing")
+        if slug is not None:
+            rewritten.append(slug)
 
     async with Session() as session:
-        await _lock_wiki(session, user_id, ctx)
+        await lock_wiki(session, user_id)
         pages = (
             (await session.execute(select(TopicPage).where(TopicPage.user_id == user_id)))
             .scalars()
@@ -280,6 +387,44 @@ async def _forget(ctx: dict[str, Any], user_id: uuid.UUID, item_id: uuid.UUID) -
         stubs,
     )
     return f"removed:{len(removed)},rewrote:{len(rewritten)},stubs:{len(stubs)}"
+
+
+async def _forget_in_page(user_id: uuid.UUID, item_id: uuid.UUID, page_id: uuid.UUID) -> str | None:
+    """Rewrites one page without the item. Returns its slug once written,
+    None when there was nothing to do; raises _PageChanged when the page
+    changed under the draft."""
+    Session = get_sessionmaker()
+    async with Session() as session:
+        page = await session.get(TopicPage, page_id)
+        if page is None:
+            return None
+        alive = set(
+            (await session.execute(select(TopicPage.slug).where(TopicPage.user_id == user_id)))
+            .scalars()
+            .all()
+        )
+        gone = _needs_forgetting(page.body_md, f"[item:{item_id}]", alive)
+        if gone is None:
+            return None
+        version, body = page.version, page.body_md
+
+    rewrite = await remove_from_page(body=body, item_id=item_id, gone_slugs=sorted(gone))
+    body = forget_in_body(rewrite or body, item_id, gone)
+    chunks_with_emb = await embed_page_chunks(body)
+
+    async with Session() as session:
+        await lock_wiki(session, user_id)
+        page = await session.get(TopicPage, page_id)
+        if page is None:
+            return None
+        if page.version != version:
+            raise _PageChanged(str(page_id))
+        page.body_md = body
+        page.backlinks = sorted(set(WIKILINK_RE.findall(body)) - {page.slug}) or None
+        page.version = (page.version or 1) + 1
+        await replace_chunks(session, page, chunks_with_emb)
+        await session.commit()
+        return page.slug
 
 
 def _needs_forgetting(body: str, cite: str, alive: set[str]) -> set[str] | None:
