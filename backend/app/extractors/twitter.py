@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from app.extractors.base import ExtractedContent, detect_source, get_extractor
+from app.extractors.base import ExtractedContent, detect_source, flatten, get_extractor
 from app.extractors.webpage import TIMEOUT, USER_AGENT, public_client
 
 log = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ def compose(
     parts: list[str] = []
     if name:
         parts.append(f"Author: {name}")
-    if text := _flatten(tweet.get("text")):
+    if text := flatten(tweet.get("text")):
         parts.append("Tweet:\n" + text)
     if quoted := _quoted(tweet.get("quote")):
         parts.append("Quoted post:\n" + quoted)
@@ -96,7 +96,7 @@ def compose(
     if article:
         if title := article.get("title"):
             parts.append(f"Title: {title}")
-        if body := article_markdown(article) or _flatten(article.get("preview_text")):
+        if body := article_markdown(article) or flatten(article.get("preview_text")):
             parts.append("Body:\n" + body)
     elif link and linked and linked.raw_text and not linked.raw_text.startswith("URL:"):
         # Anything but the stub a bot-walled page leaves.
@@ -158,7 +158,7 @@ def article_markdown(article: dict[str, Any]) -> str:
                     if code.strip():
                         lines.append(code.strip())
             continue
-        text = _flatten(block.get("text"))
+        text = flatten(block.get("text"))
         if not text:
             continue
         prefix = f"{number}. " if kind == "ordered-list-item" else prefixes.get(kind, "")
@@ -169,7 +169,7 @@ def article_markdown(article: dict[str, Any]) -> str:
 def _quoted(quote: dict[str, Any] | None) -> str | None:
     if not quote or quote.get("type") == "tombstone":
         return None
-    text = _flatten(quote.get("text"))
+    text = flatten(quote.get("text"))
     title = (quote.get("article") or {}).get("title")
     body = text or title
     if not body:
@@ -203,10 +203,6 @@ def _thumbnail(tweet: dict[str, Any]) -> str | None:
         if m.get("thumbnail_url"):
             return m["thumbnail_url"]
     return ((tweet.get("card") or {}).get("image") or {}).get("url")
-
-
-def _flatten(text: str | None) -> str:
-    return _BLANK_LINES.sub("\n", text or "").strip()
 
 
 async def _from_oembed(
@@ -244,4 +240,4 @@ def _oembed_text(html: str) -> str:
 
     tree = HTMLParser(re.sub(r"<br\s*/?>", "\n", html))
     node = tree.css_first("blockquote p") or tree.body
-    return _flatten(node.text(separator="") if node else "")
+    return flatten(node.text(separator="") if node else "")

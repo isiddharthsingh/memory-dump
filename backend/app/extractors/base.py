@@ -17,6 +17,14 @@ class ExtractedContent:
     extra: dict[str, str] = field(default_factory=dict)
 
 
+def flatten(text: str | None) -> str:
+    """`text` without blank lines, so it stays one section of raw_text: the
+    app's reader splits sections at them. Line by line: a regex over the
+    whitespace takes quadratic time on a long run of it."""
+    lines = (line.rstrip() for line in (text or "").splitlines())
+    return "\n".join(line for line in lines if line).strip()
+
+
 class Extractor(Protocol):
     source: str
 
