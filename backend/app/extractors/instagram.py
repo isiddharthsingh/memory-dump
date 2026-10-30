@@ -53,16 +53,17 @@ class InstagramExtractor:
                 except Exception:
                     pass
 
-        title = meta.get("og:title")
-        description = meta.get("og:description")
+        # Both carry the caption, blank lines and all.
+        title = flatten(meta.get("og:title")) or None
+        description = flatten(meta.get("og:description"))
 
         parts: list[str] = []
         if title:
             parts.append(f"Title: {title}")
         if description:
             parts.append(f"Description: {description}")
-        if share_text:
-            parts.append("User note / caption:\n" + share_text)
+        if note := flatten(share_text):
+            parts.append("User note:\n" + note)
 
         extra: dict[str, str] = {}
         if image_b64:
