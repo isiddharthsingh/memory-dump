@@ -83,13 +83,18 @@ xcodegen                         # generates MemoryDump.xcodeproj from project.y
 open MemoryDump.xcodeproj
 ```
 
+The app talks to the server at `API_DOMAIN` in the repo's `.env`, read when
+the app is built, so people who install it only enter an email and password.
+Set it before you build: `https://<your domain>` for a deployed server, or
+`http://<your-mac>.local:8000` for the backend on your Mac with the phone on
+the same Wi-Fi (`scutil --get LocalHostName` prints the name). Without it the
+build uses `http://localhost:8000`, which only the simulator reaches, and a
+build for a phone stops with an error.
+
 Connect your iPhone and press Run. The project signs with the free Personal
 Team set in `project.yml`, so the install lasts 7 days; run it again from
-Xcode to renew it. Sign in
-with your server address, email and password. For the backend running on
-your Mac, use `http://<your-mac>.local:8000` with the phone on the same Wi-Fi
-(`scutil --get LocalHostName` prints the name), and allow Local Network access
-when asked. Share any link, PDF or image
+Xcode to renew it. Allow Local Network access when asked if the server is on
+your Mac. Share any link, PDF or image
 to **Memory Dump**: the extension saves it without leaving the app you were
 in, and keeps it for later if you're offline.
 

@@ -7,7 +7,7 @@ Guidance for AI coding agents (Claude Code, Codex and others) working in this re
 Two deployables in one repo:
 
 - `backend/` — FastAPI + Postgres (pgvector) + Redis + arq workers. Python 3.12. Run via `docker compose` from `backend/`. `.env` lives at the repo root and is loaded by both `api` and `worker` services.
-- `apps/ios/` — native SwiftUI app (iOS 26+) plus a Share Extension. Talks to the backend over HTTPS; the server address and session live in the shared Keychain, set from the sign-in screen and Settings.
+- `apps/ios/` — native SwiftUI app (iOS 26+) plus a Share Extension. Talks to the backend over HTTPS at `API_DOMAIN` from the root `.env`, compiled in at build time; the session lives in the shared Keychain.
 
 `docs/architecture.md` is the canonical condensed design doc; the README has the smoke-test curl recipes and the API table.
 
@@ -50,9 +50,9 @@ xcodebuild test -project MemoryDump.xcodeproj -scheme MemoryDump -destination 'p
 
 `project.yml` is the source of truth for targets, entitlements and Info.plist keys; edit it and re-run `xcodegen` instead of changing the generated project in Xcode. `DEVELOPMENT_TEAM` is the free Personal Team (`L53NYQQX76`) until a paid account exists: device installs expire after 7 days, and the app's `aps-environment` entitlement is left out because Personal Teams can't sign push. With a paid team, change the ID and add `aps-environment: development` back under the app target's entitlements.
 
-Three targets: `MemoryDump` (app), `ShareExtension`, `MemoryDumpTests` (Swift Testing). `Shared/` is compiled into both the app and the extension: the API client, models, Keychain session store and the offline share queue. The two processes share state through App Group `group.com.siddharthsingh.memorydump` (queue files, lock file) and a Keychain access group (session, server URL).
+Three targets: `MemoryDump` (app), `ShareExtension`, `MemoryDumpTests` (Swift Testing). `Shared/` is compiled into both the app and the extension: the API client, models, Keychain session store and the offline share queue. The two processes share state through App Group `group.com.siddharthsingh.memorydump` (queue files, lock file) and a Keychain access group (session).
 
-The simulator reaches the local backend at `http://localhost:8000`.
+The server address is not entered in the app. A `Server address` pre-build script in both the app and extension targets reads `API_DOMAIN` from the repo-root `.env` the way python-dotenv does (`export`, quotes, trailing `# comment`) and writes `Server.url` to `Generated/<target>/Server.swift` (gitignored, an optional source of each target; Xcode doesn't compile Swift a script writes to DerivedSources). With no `.env` or no `API_DOMAIN` it warns and uses the backend's default, `http://localhost:8000`, which only the simulator reaches: a build for a phone stops with an error instead. A phone on the Mac's Wi-Fi needs `http://<mac>.local:8000`; a deployed server needs https, and plain http to a public host warns because App Transport Security blocks it. Changing `.env` rebuilds with the new address; no `xcodegen` needed.
 
 ## Architecture — the parts that span multiple files
 
