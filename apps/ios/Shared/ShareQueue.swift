@@ -44,6 +44,9 @@ enum ShareQueue {
     return entry
   }
 
+  /// The largest file the server takes (MAX_UPLOAD_BYTES in backend/app/api/ingest.py).
+  nonisolated static let maxFileBytes = 5 * 1024 * 1024
+
   /// Moves the file into the queue.
   static func enqueueFile(at file: URL, name: String, mimeType: String, note: String?) throws
     -> QueuedShare

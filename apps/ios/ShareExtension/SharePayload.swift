@@ -3,8 +3,14 @@ import UniformTypeIdentifiers
 
 enum ShareError: LocalizedError {
   case nothingToSave
+  case tooLarge
 
-  var errorDescription: String? { "Couldn’t find a link or file in this share." }
+  var errorDescription: String? {
+    switch self {
+    case .nothingToSave: "Couldn’t find a link or file in this share."
+    case .tooLarge: "Files up to \(ShareQueue.maxFileBytes / (1024 * 1024)) MB can be saved."
+    }
+  }
 }
 
 /// What a share sheet item holds, reduced to the one thing to save.
@@ -45,6 +51,12 @@ enum SharePayload {
       _ = provider.loadFileRepresentation(for: type, openInPlace: false) { @Sendable url, _, error in
         guard let url else {
           continuation.resume(throwing: error ?? ShareError.nothingToSave)
+          return
+        }
+        // The server refuses a bigger file: say so now, before copying or queueing it.
+        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > ShareQueue.maxFileBytes {
+          try? FileManager.default.removeItem(at: folder)
+          continuation.resume(throwing: ShareError.tooLarge)
           return
         }
         let dest = folder.appending(path: url.lastPathComponent)
