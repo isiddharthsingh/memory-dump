@@ -314,7 +314,7 @@ async def ingest_file(
 async def _save_thumbnail(claim: _Claim, data: bytes, mime: str) -> str | None:
     """Stores the file's thumbnail and returns its URL, or None when the
     file can't be drawn."""
-    jpeg = await asyncio.to_thread(thumbnails.make, data, mime)
+    jpeg = await thumbnails.draw(data, mime)
     if jpeg is None:
         return None
 
