@@ -128,7 +128,7 @@ versioned.
 | GET    | `/v1/auth/me`         | the signed-in account                   |
 | DELETE | `/v1/auth/me`         | delete the account and everything in it |
 | POST   | `/v1/ingest`          | submit a URL                            |
-| POST   | `/v1/ingest/file`     | upload a PDF or image (`Idempotency-Key`) |
+| POST   | `/v1/ingest/file`     | upload a PDF or image, up to 5 MB (`Idempotency-Key`) |
 | GET    | `/v1/items`           | list (filter by `status`, `tag`, `source`; page with `before=<id>`) |
 | GET    | `/v1/items/changes`   | ids changed and deleted since `since`   |
 | GET    | `/v1/items/tags`      | tag counts for the chip filter         |
