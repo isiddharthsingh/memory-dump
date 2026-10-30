@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     ARRAY,
+    BigInteger,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -41,7 +43,12 @@ class User(Base):
 
 class Item(Base):
     __tablename__ = "items"
-    __table_args__ = (UniqueConstraint("user_id", "url", name="uq_items_user_url"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "url", name="uq_items_user_url"),
+        UniqueConstraint("user_id", "idempotency_key", name="uq_items_user_idempotency_key"),
+        Index("ix_items_user_created", "user_id", "created_at", "id"),
+        Index("ix_items_user_updated", "user_id", "updated_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -68,6 +75,20 @@ class Item(Base):
     share_text: Mapped[str | None] = mapped_column(Text)
     error: Mapped[str | None] = mapped_column(Text)
 
+    # Bumped each time the item is queued for ingest. A job carries the
+    # generation it was queued for and writes nothing once a newer request
+    # (an edited note, a retry) has moved it on.
+    ingest_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # The client's Idempotency-Key for an upload, so a resend returns this item.
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
+    # Where an uploaded file waits for the worker (app/storage.py), and its type.
+    upload_key: Mapped[str | None] = mapped_column(Text)
+    upload_mime: Mapped[str | None] = mapped_column(String(64))
+    # "pending" once ingest is done until synthesis folds the item into the
+    # wiki, then "done", or "failed" when synthesis gave up. Null for items
+    # from before it was tracked.
+    wiki_status: Mapped[str | None] = mapped_column(String(16))
+
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=func.now(), nullable=False
@@ -80,6 +101,7 @@ class Item(Base):
 
 class ItemChunk(Base):
     __tablename__ = "item_chunks"
+    __table_args__ = (UniqueConstraint("item_id", "ord", name="uq_item_chunks_item_ord"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     item_id: Mapped[uuid.UUID] = mapped_column(
@@ -162,6 +184,8 @@ class Chat(Base):
     )
     # The questions and answers in order; each one is a ChatTurn (app/api/schemas.py).
     turns: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    # Bumped by every save; a save that names an older version is refused.
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -172,6 +196,9 @@ class Chat(Base):
 
 class TopicPageChunk(Base):
     __tablename__ = "topic_page_chunks"
+    __table_args__ = (
+        UniqueConstraint("topic_page_id", "ord", name="uq_topic_page_chunks_page_ord"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     topic_page_id: Mapped[uuid.UUID] = mapped_column(
@@ -192,3 +219,41 @@ class TopicPageChunk(Base):
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBED_DIM))
 
     topic_page: Mapped[TopicPage] = relationship(back_populates="chunks")
+
+
+# How long a deleted item's tombstone is kept.
+TOMBSTONE_DAYS = 30
+
+
+class ItemTombstone(Base):
+    """A deleted item, kept for TOMBSTONE_DAYS so /items/changes can tell
+    clients to drop their copy, and so a list cursor naming it still works."""
+
+    __tablename__ = "item_tombstones"
+    __table_args__ = (Index("ix_item_tombstones_user_deleted", "user_id", "deleted_at"),)
+
+    item_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deleted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class LlmUsage(Base):
+    """Tokens a user spent per day and model (app/usage.py)."""
+
+    __tablename__ = "llm_usage"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    model: Mapped[str] = mapped_column(Text, primary_key=True)
+    calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    cache_read_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    cache_write_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
