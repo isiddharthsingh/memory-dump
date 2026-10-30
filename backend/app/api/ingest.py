@@ -23,9 +23,11 @@ router = APIRouter(
     prefix="/ingest", tags=["ingest"], dependencies=[Depends(_ingest_rate_limit)]
 )
 
-# 25 MB cap. Anthropic accepts PDFs up to ~32 MB; we leave headroom for
-# request overhead. Bigger uploads get a 413 instead of a worker failure.
-MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+# The largest file anyone can upload: 5 MB, kept in storage for good. Bigger
+# uploads get a 413 before anything is stored (BodyLimit in app/main.py refuses
+# a body much over it before it's read). The app checks it first too
+# (ShareQueue.maxFileBytes).
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 _CHUNK = 1024 * 1024
 
 # What we accept. Extensions are derived from the mime type for the stored
@@ -135,7 +137,7 @@ async def ingest_file(
     if file.size > MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=413,
-            detail=f"File too large ({file.size} bytes; max {MAX_UPLOAD_BYTES})",
+            detail=f"Files up to {MAX_UPLOAD_BYTES // (1024 * 1024)} MB can be saved",
         )
 
     source = "pdf" if mime == _PDF_MIME else "image"
