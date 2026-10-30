@@ -49,7 +49,7 @@ made safe to repeat and something repeats it:
   generation, so queueing again never runs twice, and a reconciler re-queues
   what the queue lost.
 - Upload storage then Postgres (the file, then its row): the file goes first,
-  and abandoned files are swept.
+  and files whose item is gone are swept.
 - Many devices writing one chat: a version check turns a lost update into a
   409 the app merges.
 - Wiki pages: Claude drafts outside any transaction; drafts are written under a

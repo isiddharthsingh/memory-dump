@@ -33,13 +33,14 @@ memory-dump/
 ## Backend — quickstart
 
 ```bash
-cp .env.example .env             # fill in the AI keys
+cp .env.example .env             # fill in the AI keys and the S3 key pair
+ln -s ../.env backend/.env       # compose reads SUPERTOKENS_API_KEY and S3_* from here
 cd backend
 docker compose up --build
 ```
 
-This starts Postgres, Redis, the SuperTokens core (accounts and sessions), the
-api and the worker; a one-off `migrate` service runs the migrations before the
+This starts Postgres, Redis, the SuperTokens core (accounts and sessions),
+SeaweedFS (uploaded files and their thumbnails), the api and the worker; a one-off `migrate` service runs the migrations before the
 api and worker start. `docker compose up` merges `docker-compose.override.yml`
 (published database ports, hot reload); in production run
 `docker compose -f docker-compose.yml up -d` behind a TLS-terminating proxy.
@@ -134,6 +135,7 @@ versioned.
 | GET    | `/v1/items/{id}`      | item detail (ETag)                      |
 | PATCH  | `/v1/items/{id}`      | edit the note, re-run the pipeline      |
 | POST   | `/v1/items/{id}/retry` | re-queue a failed item                 |
+| GET    | `/v1/items/{id}/thumbnail` | an upload's thumbnail (JPEG)       |
 | DELETE | `/v1/items/{id}`      | delete                                  |
 | POST   | `/v1/search`          | hybrid retrieval (returns SearchHits)   |
 | POST   | `/v1/ask`             | RAG answer with citations               |
