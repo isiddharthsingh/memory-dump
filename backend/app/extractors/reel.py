@@ -5,12 +5,13 @@ in the image).
 
 Anyone who can sign up picks the reels read here, so `fetch` reads each in a
 child process (`python -m app.extractors.reel <url> <folder>`) that may use at
-most MEMORY_CAP, gets none of the worker's environment (its keys), and is
-killed after the time it is given, with the ffmpeg it and yt-dlp start. The
-child writes what it has to reel.json in a folder the parent owns, its frames
-first and then its transcript, so a reel that takes too long to transcribe
-still gives its caption and frames; the parent checks what it wrote. yt-dlp
-runs only its Instagram extractor, which talks only to Instagram.
+most MEMORY_CAP, gets none of the worker's environment (its keys), runs as
+the sandbox user (app/sandbox.py), and is killed after the time it is given,
+with the ffmpeg it and yt-dlp start. The child writes what it has to
+reel.json in a folder of its own inside one the parent owns, its frames first
+and then its transcript, so a reel that takes too long to transcribe still
+gives its caption and frames. yt-dlp runs only its Instagram extractor, which
+talks only to Instagram.
 """
 
 from __future__ import annotations
@@ -21,7 +22,6 @@ import contextlib
 import json
 import logging
 import os
-import resource
 import signal
 import subprocess
 import sys
@@ -29,6 +29,8 @@ import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+from app import sandbox
 
 log = logging.getLogger(__name__)
 
@@ -68,22 +70,31 @@ async def fetch(url: str, timeout_s: float) -> Reel | None:
     """The reel at `url`, or None when the post has no video or it can't be
     read; what the child had by `timeout_s` when it takes longer (see above)."""
     # A helper killed with the child may still be letting go of the folder.
-    with tempfile.TemporaryDirectory(prefix="reel-", ignore_cleanup_errors=True) as folder:
+    with tempfile.TemporaryDirectory(prefix="reel-", ignore_cleanup_errors=True) as root:
+        # The child's own folder, in one it can only pass through: it can't
+        # move the folder the parent reads from, or put a link in its place.
+        folder = Path(root) / "out"
         try:
+            os.mkdir(folder)
+            os.chmod(root, 0o711)
+            sandbox.give(folder)
             child = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-m",
                 "app.extractors.reel",
                 url,
-                folder,
+                str(folder),
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
                 env=child_env(),
                 # A group of its own, so the ffmpeg it starts can be killed with it.
                 start_new_session=True,
+                **sandbox.credentials(),
             )
         except OSError as exc:
-            # Out of processes or file descriptors: the post's page is read instead.
+            # Out of space, processes or file descriptors, or no sandbox user:
+            # the post's page is read instead.
             log.warning("reel: couldn't start reading it: %r", exc)
             return None
         try:
@@ -103,11 +114,11 @@ async def fetch(url: str, timeout_s: float) -> Reel | None:
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(child.pid, signal.SIGKILL)
                 await child.wait()
-        return read(Path(folder))
+        return read(folder)
 
 
 def child_env() -> dict[str, str]:
-    return {name: os.environ[name] for name in _CHILD_ENV if name in os.environ}
+    return sandbox.env(_CHILD_ENV)
 
 
 def read(folder: Path) -> Reel | None:
@@ -249,10 +260,7 @@ def _ffmpeg(*args: str) -> bytes:
 def _main() -> None:
     """The child: `<url> <folder>`. Exits NO_VIDEO when the post has no video,
     or 1 when it can't be read, with the reason on stderr."""
-    # Never above a hard limit the worker already runs under.
-    _, hard = resource.getrlimit(resource.RLIMIT_AS)
-    cap = MEMORY_CAP if hard == resource.RLIM_INFINITY else min(MEMORY_CAP, hard)
-    resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
+    sandbox.limit_memory(MEMORY_CAP)
     url, folder = sys.argv[1], Path(sys.argv[2])
     try:
         video, info = _download(url, folder)

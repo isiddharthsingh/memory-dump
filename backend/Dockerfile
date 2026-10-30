@@ -12,6 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# Thumbnails and reels are read as this user (app/sandbox.py), which can't
+# read the worker's environment or its secrets.
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin sandbox
+
 RUN pip install uv==0.5.7
 
 WORKDIR /app
@@ -32,6 +36,9 @@ RUN python -c "import faster_whisper; faster_whisper.download_model('base')"
 ENV HF_HUB_OFFLINE=1
 
 COPY . .
+# The sandbox user runs the children from this code, whatever the checkout's
+# permissions were.
+RUN chmod -R a+rX /app
 
 ENV PYTHONPATH=/app
 

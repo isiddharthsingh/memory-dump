@@ -10,9 +10,9 @@ Anyone who can sign up picks the files drawn here, so `draw` draws each in a
 child process (`python -m app.thumbnails`) that may use at most MEMORY_CAP and
 is killed after TIMEOUT_S: an image built to decode into gigabytes, or a PDF
 built to render forever, costs that process and not the worker. It gets none
-of the worker's environment (its keys and passwords), so a file that exploits a
-decoder bug finds nothing to steal. Images over MAX_PIXELS aren't decoded at
-all.
+of the worker's environment (its keys and passwords) and runs as the sandbox
+user (app/sandbox.py), so a file that exploits a decoder bug finds nothing to
+steal. Images over MAX_PIXELS aren't decoded at all.
 """
 
 from __future__ import annotations
@@ -20,13 +20,13 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
-import os
-import resource
 import sys
 import uuid
 
 import pypdfium2 as pdfium  # type: ignore[import-untyped]
 from PIL import Image, ImageOps
+
+from app import sandbox
 
 log = logging.getLogger(__name__)
 
@@ -60,9 +60,11 @@ async def draw(data: bytes, mime: str) -> bytes | None:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=child_env(),
+            **sandbox.credentials(),
         )
     except OSError as exc:
-        # Out of processes or file descriptors: the upload is still saved.
+        # Out of processes or file descriptors, or no sandbox user: the upload
+        # is still saved.
         log.warning("no thumbnail for a %s: couldn't start drawing it: %r", mime, exc)
         return None
     try:
@@ -84,7 +86,7 @@ async def draw(data: bytes, mime: str) -> bytes | None:
 
 
 def child_env() -> dict[str, str]:
-    return {name: os.environ[name] for name in _CHILD_ENV if name in os.environ}
+    return sandbox.env(_CHILD_ENV)
 
 
 def make(data: bytes, mime: str) -> bytes | None:
@@ -143,10 +145,7 @@ def _first_page(data: bytes) -> Image.Image:
 def _main() -> None:
     """The child: the file on stdin, its mime type as the argument, the JPEG on
     stdout, or exit 1 with the reason on stderr."""
-    # Never above a hard limit the worker already runs under.
-    _, hard = resource.getrlimit(resource.RLIMIT_AS)
-    cap = MEMORY_CAP if hard == resource.RLIM_INFINITY else min(MEMORY_CAP, hard)
-    resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
+    sandbox.limit_memory(MEMORY_CAP)
     jpeg = make(sys.stdin.buffer.read(), sys.argv[1])
     if jpeg is None:
         sys.exit(1)
