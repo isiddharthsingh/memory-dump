@@ -53,3 +53,5 @@ data/
 postgres-data/
 redis-data/
 .claude/
+# The retrieval eval's questions name the real library's saved links
+backend/evals/questions.json
