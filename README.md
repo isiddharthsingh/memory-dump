@@ -139,7 +139,8 @@ versioned.
 | GET    | `/v1/items/{id}/thumbnail` | an upload's thumbnail (JPEG)       |
 | DELETE | `/v1/items/{id}`      | delete                                  |
 | POST   | `/v1/search`          | hybrid retrieval (returns SearchHits)   |
-| POST   | `/v1/ask`             | RAG answer with citations               |
+| POST   | `/v1/ask`             | RAG answer with citations; `history` for follow-ups, `item` or `topic` to ask about one item or wiki page |
+| POST   | `/v1/ask/stream`      | the same answer as server-sent events (`token`, `done`, `error`) |
 | GET    | `/v1/chats`           | Ask history: each chat's questions (page with `before=<id>`) |
 | GET    | `/v1/chats/{id}`      | one chat with its answers (ETag)        |
 | PUT    | `/v1/chats/{id}`      | save a chat (the app picks the id; `version` → 409 on conflict) |

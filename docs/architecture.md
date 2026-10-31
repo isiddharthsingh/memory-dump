@@ -70,8 +70,10 @@ Dense embeddings alone miss queries with proper nouns and identifiers —
 2. **Postgres `tsvector` / BM25** full-text (exact-name recall)
 3. **Reciprocal Rank Fusion** to merge the two ranked lists
 4. **Voyage `rerank-2.5`** to reorder the top-20 by relevance
-5. **Claude Opus 4.7** to compose the final answer with `[item:UUID]`
-   citations
+5. **Claude Opus 5.5** to compose the final answer with `[item:UUID]`
+   citations, after Claude Haiku turns the question (and any earlier turns
+   of the chat) into a standalone search query with optional source and
+   date filters
 
 ## Why the wiki synthesis layer
 
