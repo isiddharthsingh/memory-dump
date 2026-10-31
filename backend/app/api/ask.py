@@ -3,11 +3,12 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import ask as ask_module
+from app.ai.retrieval import Scope
 from app.api.schemas import AskRequest, AskResponse, CitationOut
 from app.auth.rate_limit import rate_limit
 from app.db.models import User
@@ -22,13 +23,34 @@ _ask_rate_limit = rate_limit("ask", "rate_limit_ask_per_hour")
 router = APIRouter(prefix="/ask", tags=["ask"], dependencies=[Depends(_ask_rate_limit)])
 
 
+def _history(body: AskRequest) -> list[ask_module.Turn]:
+    return [ask_module.Turn(question=t.question, answer=t.answer) for t in body.history]
+
+
+async def _scope(session: AsyncSession, user: User, body: AskRequest) -> Scope | None:
+    """The item or page the question is about. One the user doesn't have is
+    a 404, answered before the stream starts with a 200."""
+    try:
+        return await ask_module.resolve_scope(session, user.id, item=body.item, topic=body.topic)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
 @router.post("", response_model=AskResponse)
 async def ask_endpoint(
     body: AskRequest,
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> AskResponse:
-    result = await ask_module.ask(session, body.question, current_user.id)
+    scope = await _scope(session, current_user, body)
+    result = await ask_module.ask(
+        session,
+        body.question,
+        current_user.id,
+        history=_history(body),
+        scope=scope,
+        tz=ask_module.zone(body.zone),
+    )
     return AskResponse(
         answer=result.answer,
         citations=[
@@ -55,10 +77,15 @@ async def ask_stream_endpoint(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> StreamingResponse:
     user_id = current_user.id
+    scope = await _scope(session, current_user, body)
+    history = _history(body)
+    tz = ask_module.zone(body.zone)
 
     async def gen() -> AsyncIterator[bytes]:
         try:
-            async for evt in ask_module.ask_stream(session, body.question, user_id):
+            async for evt in ask_module.ask_stream(
+                session, body.question, user_id, history=history, scope=scope, tz=tz
+            ):
                 if isinstance(evt, ask_module.StreamToken):
                     yield _sse("token", {"text": evt.text})
                 else:

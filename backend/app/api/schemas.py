@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 
 class IngestRequest(BaseModel):
@@ -63,8 +63,32 @@ class SearchResponse(BaseModel):
     hits: list[SearchHit]
 
 
+class AskTurn(BaseModel):
+    """An earlier question in the chat and its answer, for a follow-up."""
+
+    question: str = Field(max_length=20_000)
+    answer: str = Field(default="", max_length=200_000)
+
+
 class AskRequest(BaseModel):
+    """Keys are single words because the app sends request bodies without
+    snake_case conversion."""
+
     question: str = Field(min_length=1, max_length=10_000)
+    # Oldest first; only the last few are used.
+    history: list[AskTurn] = Field(default_factory=list, max_length=500)
+    # Ask about one item, or one wiki page and the items it was written from.
+    item: uuid.UUID | None = None
+    topic: str | None = Field(default=None, min_length=1, max_length=255)
+    # The app's time zone (an IANA name), whose days "today" and "saved
+    # yesterday" mean; UTC without it.
+    zone: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def _one_scope(self) -> AskRequest:
+        if self.item is not None and self.topic is not None:
+            raise ValueError("ask about an item or a topic, not both")
+        return self
 
 
 class CitationOut(BaseModel):

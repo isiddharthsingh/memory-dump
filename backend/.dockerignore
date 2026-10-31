@@ -12,3 +12,5 @@
 **/.mypy_cache
 **/.pytest_cache
 **/.ruff_cache
+# The retrieval eval names the library's real saved links.
+evals

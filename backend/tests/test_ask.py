@@ -129,10 +129,10 @@ async def test_search_falls_back_to_keywords_when_the_query_cant_be_embedded(
 def test_an_unavailable_provider_is_a_503_with_retry_after(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def ask(*_: object) -> None:
+    async def ask(*_: object, **__: object) -> None:
         raise ProviderUnavailable("anthropic", 42)
 
-    async def ask_stream(*_: object) -> AsyncIterator[object]:
+    async def ask_stream(*_: object, **__: object) -> AsyncIterator[object]:
         raise RateLimitError("slow down")
         yield
 
