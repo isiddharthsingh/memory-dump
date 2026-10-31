@@ -13,7 +13,6 @@ no job walks every user and one user's failure is nobody else's. Each one:
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import uuid
@@ -23,11 +22,12 @@ from typing import Any
 import structlog
 from sqlalchemy import select, text
 
-from app.ai.clients import claude
-from app.ai.synthesize import WIKILINK_RE, _strip_json_fence, embed_page_chunks
+from app.ai.clients import claude_json
+from app.ai.synthesize import WIKILINK_RE, embed_page_chunks
 from app.config import get_settings
 from app.db.models import TopicPage
 from app.db.session import get_sessionmaker
+from app.errors import Refused
 from app.queue import enqueue, forget_job_id
 from app.workers.jobs import job, user_ids
 from app.workers.synthesize import lock_wiki, read_pages, replace_chunks, retry_or_give_up
@@ -35,15 +35,8 @@ from app.workers.synthesize import lock_wiki, read_pages, replace_chunks, retry_
 log = logging.getLogger(__name__)
 
 MERGE_SYSTEM = """You inspect a list of topic slugs from a personal wiki \
-and propose merges for slugs that clearly cover the same concept.
-
-Return STRICT JSON:
-{
-  "merges": [
-    {"keep": "canonical-slug", "absorb": ["dup-slug-1", "dup-slug-2"]},
-    ...
-  ]
-}
+and propose merges for slugs that clearly cover the same concept. Return an \
+empty list of merges when none do.
 
 Rules:
 - Only merge near-duplicates (e.g. "rust-async" + "async-rust"). Be
@@ -52,6 +45,26 @@ Rules:
   should be merged into "keep" and then deleted.
 - Both "keep" and every "absorb" slug must exist in the input list.
 """
+
+_MERGES_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "merges": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "keep": {"type": "string"},
+                    "absorb": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["keep", "absorb"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["merges"],
+    "additionalProperties": False,
+}
 
 
 @job
@@ -118,18 +131,19 @@ async def _merge_duplicates(user_id: uuid.UUID) -> int:
     if len(slugs) < 4:
         return 0
 
-    resp = await claude(
-        purpose="compact",
-        model=get_settings().claude_analysis_model,
-        max_tokens=512,
-        system=[{"type": "text", "text": MERGE_SYSTEM}],
-        messages=[{"role": "user", "content": "Slugs:\n" + "\n".join(slugs)}],
-    )
-    raw = "".join(b.text for b in resp.content if b.type == "text")
     try:
-        plan = json.loads(_strip_json_fence(raw))
-    except json.JSONDecodeError:
-        log.warning("compact: bad JSON: %s", raw[:200])
+        # Medium effort: a wrong merge folds two topics into one page for good.
+        plan = await claude_json(
+            purpose="compact",
+            schema=_MERGES_SCHEMA,
+            effort="medium",
+            model=get_settings().claude_analysis_model,
+            max_tokens=8_000,
+            system=MERGE_SYSTEM,
+            messages=[{"role": "user", "content": "Slugs:\n" + "\n".join(slugs)}],
+        )
+    except (ValueError, Refused) as exc:
+        log.warning("compact: no merge plan: %s", exc)
         return 0
 
     merged = 0
@@ -160,7 +174,7 @@ async def _merge(user_id: uuid.UUID, keep: str, absorb: list[str]) -> int:
     for dup in dups:
         body = body.rstrip() + f"\n\n## Merged from {dup.slug}\n\n" + dup.body_md.strip()
         body = re.sub(rf"\[\[{re.escape(dup.slug)}\]\]", f"[[{keep}]]", body)
-    chunks = await embed_page_chunks(body)
+    chunks = await embed_page_chunks(body, pages[keep].title)
     versions = {p.slug: p.version for p in (pages[keep], *dups)}
 
     async with get_sessionmaker()() as session:

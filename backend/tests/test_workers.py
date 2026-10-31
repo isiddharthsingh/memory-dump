@@ -10,7 +10,6 @@ import io
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -233,7 +232,7 @@ def test_the_reconciler_puts_back_lost_jobs_and_fails_stuck_ones(
 
 @pytest.fixture
 def embed(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def embed_page_chunks(body: str) -> list[tuple[str, list[float]]]:
+    async def embed_page_chunks(body: str, title: str) -> list[tuple[str, list[float]]]:
         return [(body, [0.1] * EMBED_DIM)]
 
     monkeypatch.setattr(synthesize_worker, "embed_page_chunks", embed_page_chunks)
@@ -265,7 +264,8 @@ def test_synthesis_drafts_a_page_again_when_another_job_changed_it(
 ) -> None:
     auth, user_id = account
     item_id = _item(db, user_id, status="ready", title="Rust notes", wiki_status="pending")
-    _page(db, user_id, "rust", "Old.", None)
+    earlier = uuid.uuid4()
+    _page(db, user_id, "rust", "Old.", [earlier])
     drafted_from: list[str] = []
 
     async def propose_slugs(**_: Any) -> ProposedSlugs:
@@ -292,7 +292,7 @@ def test_synthesis_drafts_a_page_again_when_another_job_changed_it(
     page = client.get("/v1/wiki/rust", headers=auth).json()
     assert page["body_md"] == f"Changed. New [item:{item_id}]."
     assert page["version"] == 3
-    assert page["source_item_ids"] == [str(item_id)]
+    assert page["source_item_ids"] == [str(earlier), str(item_id)]
     assert _row(db, item_id).wiki_status == "done"
 
 
@@ -313,11 +313,10 @@ def test_compaction_merges_duplicates_and_queues_forgotten_items(
     _page(db, user_id, "cooking", f"C [item:{x}].", [x])
     _page(db, user_id, "cites-a-deleted-item", f"D [item:{gone}].", [gone])
 
-    async def claude(**_: Any) -> SimpleNamespace:
-        plan = '{"merges": [{"keep": "rust-async", "absorb": ["async-rust"]}]}'
-        return SimpleNamespace(content=[SimpleNamespace(type="text", text=plan)])
+    async def claude_json(**_: Any) -> dict[str, Any]:
+        return {"merges": [{"keep": "rust-async", "absorb": ["async-rust"]}]}
 
-    monkeypatch.setattr(compact_worker, "claude", claude)
+    monkeypatch.setattr(compact_worker, "claude_json", claude_json)
     result = client.portal.call(compact_user, {}, str(user_id))  # type: ignore[union-attr]
     assert result == "forgets:1,merged:1"
     assert jobs == [("forget_item", str(user_id), str(gone), {"_job_id": f"forget:{gone}"})]

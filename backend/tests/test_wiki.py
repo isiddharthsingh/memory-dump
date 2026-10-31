@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -8,16 +9,20 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, delete, insert, select
 from voyageai.error import RateLimitError
 
+from app.ai import synthesize as synthesize_ai
 from app.ai.synthesize import (
     WIKILINK_RE,
     PatchedPage,
     ProposedSlugs,
     _normalize_slug,
-    _strip_json_fence,
     forget_in_body,
+    patch_page,
+    propose_slugs,
+    remove_from_page,
 )
 from app.config import get_settings
 from app.db.models import EMBED_DIM, Chat, Item, TopicPage, TopicPageChunk
+from app.errors import Refused
 from app.main import app
 from app.workers import synthesize as synthesize_worker
 from app.workers.synthesize import forget_item, synthesize_topics
@@ -30,11 +35,6 @@ Y = uuid.UUID("22222222-2222-2222-2222-222222222222")
 def test_normalize_slug() -> None:
     assert _normalize_slug("Rust Async Runtimes!") == "rust-async-runtimes"
     assert _normalize_slug("  LLM Wiki  ") == "llm-wiki"
-
-
-def test_strip_json_fence() -> None:
-    assert _strip_json_fence('```json\n{"a":1}\n```') == '{"a":1}'
-    assert _strip_json_fence('{"a":1}') == '{"a":1}'
 
 
 def test_wikilink_regex() -> None:
@@ -124,7 +124,7 @@ def db() -> Iterator[Any]:
 
 @pytest.fixture
 def embed(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def embed_page_chunks(body: str) -> list[tuple[str, list[float]]]:
+    async def embed_page_chunks(body: str, title: str) -> list[tuple[str, list[float]]]:
         return [(body, [0.1] * EMBED_DIM)]
 
     monkeypatch.setattr(synthesize_worker, "embed_page_chunks", embed_page_chunks)
@@ -296,6 +296,16 @@ def test_synthesis_keeps_nothing_of_an_item_deleted_while_claude_writes(
                 title="Soon deleted",
             )
         )
+        conn.execute(
+            insert(TopicPage.__table__).values(
+                user_id=user_id,
+                slug="soon-deleted",
+                title="Soon Deleted",
+                body_md="Before.",
+                source_item_ids=[uuid.uuid4()],
+                version=1,
+            )
+        )
 
     async def propose_slugs(**_: Any) -> ProposedSlugs:
         return ProposedSlugs(slugs=["soon-deleted"])
@@ -315,7 +325,8 @@ def test_synthesis_keeps_nothing_of_an_item_deleted_while_claude_writes(
 
     result = client.portal.call(synthesize_topics, {}, str(item_id))  # type: ignore[union-attr]
     assert result == "deleted"
-    assert client.get("/wiki", headers=auth).json() == []
+    page = client.get("/wiki/soon-deleted", headers=auth).json()
+    assert (page["body_md"], page["version"]) == ("Before.", 1)
 
 
 def test_forget_waits_until_the_item_is_deleted(
@@ -368,7 +379,7 @@ def test_forget_retries_after_a_rate_limit_and_keeps_what_it_finished(
     async def remove_from_page(**_: Any) -> None:
         return None
 
-    async def embed_page_chunks(body: str) -> list[tuple[str, list[float]]]:
+    async def embed_page_chunks(body: str, title: str) -> list[tuple[str, list[float]]]:
         raise RateLimitError("slow down")
 
     monkeypatch.setattr(synthesize_worker, "remove_from_page", remove_from_page)
@@ -381,3 +392,244 @@ def test_forget_retries_after_a_rate_limit_and_keeps_what_it_finished(
     page = client.get("/wiki/shared", headers=auth).json()
     assert page["body_md"] == shared
     assert page["source_item_ids"] == [str(y)]
+
+
+# Held topics: a new page waits until two items support it.
+
+
+def _ready_item(db: Any, user_id: uuid.UUID, **values: Any) -> uuid.UUID:
+    item_id = uuid.uuid4()
+    with db.begin() as conn:
+        conn.execute(
+            insert(Item.__table__).values(
+                id=item_id,
+                user_id=user_id,
+                url=f"https://example.com/{item_id}",
+                source="webpage",
+                status="ready",
+                wiki_status="pending",
+                **values,
+            )
+        )
+    return item_id
+
+
+def _held(db: Any, item_id: uuid.UUID) -> tuple[list[str] | None, str | None]:
+    with db.connect() as conn:
+        row = conn.execute(
+            select(Item.held_topics, Item.wiki_status).where(Item.id == item_id)
+        ).one()
+    return row.held_topics, row.wiki_status
+
+
+def _patch_appending(calls: list[tuple[str, uuid.UUID, str]]) -> Any:
+    async def patch_page(**kwargs: Any) -> PatchedPage:
+        calls.append((kwargs["existing_body"], kwargs["item_id"], kwargs["item_title"]))
+        body = f"{kwargs['existing_body']} Claim [item:{kwargs['item_id']}].".strip()
+        return PatchedPage(slug=kwargs["slug"], title="Sourdough", body_md=body, backlinks=[])
+
+    return patch_page
+
+
+def test_a_new_topic_one_item_proposes_is_held_and_gets_no_page(
+    client: TestClient,
+    account: tuple[dict[str, str], uuid.UUID],
+    db: Any,
+    embed: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth, user_id = account
+    item_id = _ready_item(db, user_id, title="Sourdough notes")
+
+    async def propose_slugs(**kwargs: Any) -> ProposedSlugs:
+        assert kwargs["held_slugs"] == []
+        return ProposedSlugs(slugs=["sourdough"])
+
+    calls: list[tuple[str, uuid.UUID, str]] = []
+    monkeypatch.setattr(synthesize_worker, "propose_slugs", propose_slugs)
+    monkeypatch.setattr(synthesize_worker, "patch_page", _patch_appending(calls))
+
+    result = client.portal.call(synthesize_topics, {}, str(item_id))  # type: ignore[union-attr]
+    assert result == "held:sourdough"
+    assert calls == []
+    assert client.get("/wiki", headers=auth).json() == []
+    assert _held(db, item_id) == (["sourdough"], "done")
+
+
+def test_a_link_stub_doesnt_become_a_page_for_one_item(
+    client: TestClient,
+    account: tuple[dict[str, str], uuid.UUID],
+    db: Any,
+    embed: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth, user_id = account
+    item_id = _ready_item(db, user_id, title="Vector search notes")
+    with db.begin() as conn:
+        conn.execute(
+            insert(TopicPage.__table__).values(
+                user_id=user_id,
+                slug="vector-databases",
+                title="Vector Databases",
+                body_md="_pending_",
+                version=1,
+            )
+        )
+
+    async def propose_slugs(**kwargs: Any) -> ProposedSlugs:
+        # A stub is listed with the pages, which the proposer prefers.
+        assert "vector-databases" in kwargs["existing_slugs"]
+        return ProposedSlugs(slugs=["vector-databases"])
+
+    calls: list[tuple[str, uuid.UUID, str]] = []
+    monkeypatch.setattr(synthesize_worker, "propose_slugs", propose_slugs)
+    monkeypatch.setattr(synthesize_worker, "patch_page", _patch_appending(calls))
+
+    result = client.portal.call(synthesize_topics, {}, str(item_id))  # type: ignore[union-attr]
+    assert result == "held:vector-databases"
+    assert calls == []
+    page = client.get("/wiki/vector-databases", headers=auth).json()
+    assert (page["body_md"], page["source_item_ids"]) == ("_pending_", None)
+    assert _held(db, item_id) == (["vector-databases"], "done")
+
+
+def test_a_second_item_on_a_held_topic_writes_the_page_from_both(
+    client: TestClient,
+    account: tuple[dict[str, str], uuid.UUID],
+    db: Any,
+    embed: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth, user_id = account
+    first = _ready_item(db, user_id, title="First", held_topics=["sourdough", "rye"])
+    second = _ready_item(db, user_id, title="Second")
+    asked: dict[str, Any] = {}
+
+    async def propose_slugs(**kwargs: Any) -> ProposedSlugs:
+        asked.update(kwargs)
+        return ProposedSlugs(slugs=["sourdough"])
+
+    calls: list[tuple[str, uuid.UUID, str]] = []
+    monkeypatch.setattr(synthesize_worker, "propose_slugs", propose_slugs)
+    monkeypatch.setattr(synthesize_worker, "patch_page", _patch_appending(calls))
+
+    result = client.portal.call(synthesize_topics, {}, str(second))  # type: ignore[union-attr]
+    assert result == "ok:sourdough"
+    # The proposer is offered what earlier items wait on, so it can match it.
+    assert asked["held_slugs"] == ["rye", "sourdough"]
+    # The earlier item goes in first, then this one on top of it.
+    assert calls == [("", first, "First"), (f"Claim [item:{first}].", second, "Second")]
+    page = client.get("/wiki/sourdough", headers=auth).json()
+    assert page["body_md"] == f"Claim [item:{first}]. Claim [item:{second}]."
+    assert page["source_item_ids"] == [str(first), str(second)]
+    assert page["version"] == 1
+    assert _held(db, first) == (["rye"], "pending")
+    assert _held(db, second) == (None, "done")
+
+
+def test_a_hold_that_goes_while_claude_drafts_leaves_the_topic_held(
+    client: TestClient,
+    account: tuple[dict[str, str], uuid.UUID],
+    db: Any,
+    embed: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth, user_id = account
+    first = _ready_item(db, user_id, title="First", held_topics=["sourdough"])
+    second = _ready_item(db, user_id, title="Second")
+
+    async def propose_slugs(**_: Any) -> ProposedSlugs:
+        return ProposedSlugs(slugs=["sourdough"])
+
+    calls: list[tuple[str, uuid.UUID, str]] = []
+    patch = _patch_appending(calls)
+
+    async def patch_page(**kwargs: Any) -> PatchedPage:
+        # The earlier item is deleted while Claude writes the page from it.
+        with db.begin() as conn:
+            conn.execute(delete(Item.__table__).where(Item.id == first))
+        return await patch(**kwargs)
+
+    monkeypatch.setattr(synthesize_worker, "propose_slugs", propose_slugs)
+    monkeypatch.setattr(synthesize_worker, "patch_page", patch_page)
+
+    result = client.portal.call(synthesize_topics, {}, str(second))  # type: ignore[union-attr]
+    assert result == "held:sourdough"
+    assert client.get("/wiki", headers=auth).json() == []
+    assert _held(db, second) == (["sourdough"], "done")
+
+
+async def test_the_proposer_sees_held_topics_and_brings_at_most_two_new_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asked: dict[str, Any] = {}
+
+    async def claude_json(**kwargs: Any) -> dict[str, Any]:
+        asked.update(kwargs)
+        return {"slugs": ["brand-new-one", "Brand New Two", "brand-new-three", "Baking"]}
+
+    monkeypatch.setattr(synthesize_ai, "claude_json", claude_json)
+    proposed = await propose_slugs(
+        item_title="Bread",
+        item_summary=None,
+        item_topics=[],
+        item_tags=[],
+        existing_slugs=["baking"],
+        held_slugs=["sourdough"],
+    )
+    assert proposed.slugs == ["brand-new-one", "brand-new-two", "baking"]
+    facts = asked["messages"][0]["content"]
+    assert "Existing pages: baking\n" in facts
+    assert "Waiting topics: sourdough" in facts
+    assert asked["effort"] == "low"
+    assert asked["schema"]["additionalProperties"] is False
+
+
+async def test_patch_page_puts_the_item_first_under_a_cache_breakpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def claude(**kwargs: Any) -> SimpleNamespace:
+        calls.append(kwargs)
+        return SimpleNamespace(
+            stop_reason="end_turn",
+            content=[
+                SimpleNamespace(type="thinking", thinking=""),
+                SimpleNamespace(type="text", text=f"New [item:{X}], see [[other]]."),
+            ],
+        )
+
+    monkeypatch.setattr(synthesize_ai, "claude", claude)
+    for slug, body in (("one", "First page."), ("two", "Second page.")):
+        page = await patch_page(
+            slug=slug,
+            existing_body=body,
+            existing_title=None,
+            item_id=X,
+            item_title="Item",
+            item_summary="Summary",
+            item_text="Text",
+            related_slugs=["one", "two", "other"],
+        )
+    assert page == PatchedPage("two", "Two", f"New [item:{X}], see [[other]].", ["other"])
+
+    item_blocks = [c["messages"][0]["content"][0] for c in calls]
+    page_blocks = [c["messages"][0]["content"][1] for c in calls]
+    # Byte for byte the same across the item's pages, so the second reads the cache.
+    assert item_blocks[0] == item_blocks[1]
+    assert item_blocks[0]["cache_control"] == {"type": "ephemeral"}
+    assert str(X) in item_blocks[0]["text"] and "other" in item_blocks[0]["text"]
+    assert "Page slug: one" in page_blocks[0]["text"] and "First page." in page_blocks[0]["text"]
+    assert "Page slug: two" in page_blocks[1]["text"] and "cache_control" not in page_blocks[1]
+    assert all(c["effort"] == "medium" and isinstance(c["system"], str) for c in calls)
+
+
+async def test_a_refused_rewrite_leaves_forgetting_to_forget_in_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def claude(**_: Any) -> SimpleNamespace:
+        raise Refused("cyber")
+
+    monkeypatch.setattr(synthesize_ai, "claude", claude)
+    assert await remove_from_page(body=f"A [item:{X}].", item_id=X, gone_slugs=[]) is None

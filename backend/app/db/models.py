@@ -91,6 +91,10 @@ class Item(Base):
     # wiki, then "done", or "failed" when synthesis gave up. Null for items
     # from before it was tracked.
     wiki_status: Mapped[str | None] = mapped_column(String(16))
+    # Topic slugs synthesis proposed for this item that have no page yet. A
+    # page is only made once a second item proposes the same slug, so the
+    # wiki doesn't grow one page per item; the slug waits here until then.
+    held_topics: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
 
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
