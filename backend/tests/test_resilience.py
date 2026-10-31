@@ -31,7 +31,7 @@ from app.ai.clients import _Breaker
 from app.api import search as search_api
 from app.auth.rate_limit import is_auth_path, take
 from app.config import get_settings
-from app.errors import ProviderUnavailable, is_transient
+from app.errors import ProviderUnavailable, Refused, is_transient, user_message
 from app.extractors import reel
 from app.extractors.webpage import NotPublic, TooLarge, _CappedClient
 from app.main import app
@@ -141,6 +141,83 @@ async def test_embeddings_go_to_voyage_in_batches(monkeypatch: pytest.MonkeyPatc
     out = await clients.voyage_embed(["text"] * 300, input_type="document")
     assert sizes == [128, 128, 44]
     assert len(out) == 300
+
+
+def _message(stop_reason: str, text: str = "", model: str = "m") -> SimpleNamespace:
+    return SimpleNamespace(
+        model=model,
+        stop_reason=stop_reason,
+        stop_details=SimpleNamespace(category="cyber") if stop_reason == "refusal" else None,
+        content=[SimpleNamespace(type="thinking"), SimpleNamespace(type="text", text=text)],
+        usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+    )
+
+
+class _Claude:
+    """Stands in for the Anthropic client: answers every call with `answer`."""
+
+    def __init__(self, answer: SimpleNamespace) -> None:
+        self.answer = answer
+        self.sent: list[dict[str, Any]] = []
+        self.beta = SimpleNamespace(messages=self)
+
+    def with_options(self, **_: Any) -> "_Claude":
+        return self
+
+    async def create(self, **params: Any) -> SimpleNamespace:
+        self.sent.append(params)
+        return self.answer
+
+    @contextlib.asynccontextmanager
+    async def stream(self, **params: Any) -> AsyncIterator[Any]:
+        self.sent.append(params)
+
+        async def final() -> SimpleNamespace:
+            return self.answer
+
+        yield SimpleNamespace(get_final_message=final)
+
+
+async def test_claude_calls_ask_for_fallbacks_effort_and_a_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    structlog.contextvars.clear_contextvars()
+    fake = _Claude(_message("end_turn", '{"tags": ["a"]}'))
+    monkeypatch.setattr(clients, "anthropic_client", lambda: fake)
+    tags = {"type": "object", "properties": {"tags": {"type": "array"}}}
+    got = await clients.claude_json(
+        purpose="t", schema=tags, effort="low", model="claude-haiku-5-5", max_tokens=10
+    )
+    assert got == {"tags": ["a"]}
+    await clients.claude(purpose="t", effort="medium", model="claude-sonnet-5-5", max_tokens=10)
+    haiku, sonnet = fake.sent
+    # Haiku 5.5 has no server-side fallback; a request naming one is refused.
+    assert "fallbacks" not in haiku and "betas" not in haiku
+    assert haiku["output_config"] == {
+        "effort": "low",
+        "format": {"type": "json_schema", "schema": tags},
+    }
+    assert sonnet["fallbacks"] == "default"
+    assert sonnet["betas"] == ["server-side-fallback-2026-07-01"]
+    assert sonnet["output_config"] == {"effort": "medium"}
+
+
+async def test_a_refusal_or_a_cut_off_answer_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    structlog.contextvars.clear_contextvars()
+    monkeypatch.setattr(clients, "anthropic_client", lambda: _Claude(_message("refusal")))
+    with pytest.raises(Refused) as refused:
+        await clients.claude(purpose="t", model="claude-opus-5-5", max_tokens=10)
+    assert refused.value.category == "cyber"
+    assert not is_transient(refused.value)
+    assert user_message(refused.value) == "Claude declined to answer that."
+    with pytest.raises(Refused):
+        async with clients.claude_stream(purpose="t", model="claude-opus-5-5", max_tokens=10):
+            pass
+
+    cut = _Claude(_message("max_tokens", '{"tags": ['))
+    monkeypatch.setattr(clients, "anthropic_client", lambda: cut)
+    with pytest.raises(ValueError, match="cut off"):
+        await clients.claude_json(purpose="t", schema={}, model="claude-haiku-5-5", max_tokens=1)
 
 
 async def test_query_embeddings_are_cached(monkeypatch: pytest.MonkeyPatch) -> None:

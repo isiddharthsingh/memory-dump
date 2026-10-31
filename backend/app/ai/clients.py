@@ -10,29 +10,36 @@ Each call
   account's rate limits; jobs get at most JOB_SHARE of the slots, so a long
   queue never leaves a question waiting;
 - records the tokens it spent (app/usage.py).
+
+Claude calls go through the beta Messages endpoint so models that have one get
+Anthropic's server-side fallback on a refusal (`fallbacks: "default"`); a
+refusal that stands raises `Refused`. `effort` sets how much the model thinks
+(the 5.5 models think by default, and thinking counts toward `max_tokens`), and
+`claude_json` asks for output that matches a JSON schema.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import anthropic
 import structlog
 import voyageai
-from anthropic.lib.streaming import AsyncMessageStream
-from anthropic.types import Message
+from anthropic.lib.streaming import BetaAsyncMessageStream
+from anthropic.types.beta import BetaMessage
 from redis.exceptions import RedisError
 
 from app import kv, usage
 from app.config import get_settings
-from app.errors import ProviderUnavailable, is_transient
+from app.errors import ProviderUnavailable, Refused, is_transient
 from app.metrics import PROVIDER_CALLS
 
 log = logging.getLogger(__name__)
@@ -192,31 +199,100 @@ async def _calling(provider: str) -> AsyncIterator[None]:
         PROVIDER_CALLS.labels(provider, "ok").inc()
 
 
-async def claude(*, purpose: str, timeout_s: float | None = None, **params: Any) -> Message:
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
+
+# Models whose refusals the API retries on the model Anthropic picks for the
+# refusal's category. Haiku 5.5 has no server-side fallback (a list of models
+# 400s), and older models don't take the "default" form.
+_FALLBACK_MODELS = frozenset(
+    {"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5", "claude-fable-5-1"}
+)
+_FALLBACK_BETA = "server-side-fallback-2026-07-01"
+
+
+def _request(params: dict[str, Any], effort: Effort | None) -> dict[str, Any]:
+    config = dict(params.pop("output_config", None) or {})
+    if effort is not None:
+        config["effort"] = effort
+    if config:
+        params["output_config"] = config
+    if params["model"] in _FALLBACK_MODELS:
+        params["betas"] = [*params.get("betas", ()), _FALLBACK_BETA]
+        params["fallbacks"] = "default"
+    return params
+
+
+async def _settle(purpose: str, message: BetaMessage) -> None:
+    """Records the tokens, then raises `Refused` when the answer is a refusal."""
+    await usage.record_claude(purpose, message.model, message.usage)
+    if message.stop_reason == "refusal":
+        details = getattr(message, "stop_details", None)
+        raise Refused(getattr(details, "category", None))
+
+
+async def claude(
+    *,
+    purpose: str,
+    timeout_s: float | None = None,
+    effort: Effort | None = None,
+    **params: Any,
+) -> BetaMessage:
     """One Messages API call. `purpose` labels its tokens (analyze, ask, ...);
     `timeout_s` replaces ANTHROPIC_TIMEOUT_S for it."""
+    params = _request(params, effort)
     async with _calling("anthropic"):
         client = anthropic_client()
         if timeout_s is not None:
             client = client.with_options(timeout=timeout_s)
-        message = cast(Message, await client.messages.create(**params))
-    await usage.record_claude(purpose, params["model"], message.usage)
+        message = cast(BetaMessage, await client.beta.messages.create(**params))
+    await _settle(purpose, message)
     return message
+
+
+async def claude_json(
+    *,
+    purpose: str,
+    schema: dict[str, Any],
+    timeout_s: float | None = None,
+    effort: Effort | None = None,
+    **params: Any,
+) -> dict[str, Any]:
+    """A call whose answer is JSON matching `schema` (structured outputs), parsed.
+    Raises ValueError when the answer was cut off at `max_tokens`. Streamed, so
+    a long answer (a PDF's whole text) isn't cut off by the HTTP timeout."""
+    params["output_config"] = {
+        **(params.get("output_config") or {}),
+        "format": {"type": "json_schema", "schema": schema},
+    }
+    async with claude_stream(
+        purpose=purpose, timeout_s=timeout_s, effort=effort, **params
+    ) as stream:
+        message = await stream.get_final_message()
+    if message.stop_reason == "max_tokens":
+        raise ValueError(f"{purpose}: the answer was cut off at max_tokens")
+    text = "".join(b.text for b in message.content if b.type == "text")
+    return cast(dict[str, Any], json.loads(text))
 
 
 @asynccontextmanager
 async def claude_stream(
-    *, purpose: str, timeout_s: float | None = None, **params: Any
-) -> AsyncIterator[AsyncMessageStream]:
-    """A streamed Messages API call, holding its slot until the stream ends."""
+    *,
+    purpose: str,
+    timeout_s: float | None = None,
+    effort: Effort | None = None,
+    **params: Any,
+) -> AsyncIterator[BetaAsyncMessageStream]:
+    """A streamed Messages API call, holding its slot until the stream ends.
+    A refusal raises `Refused` when the stream closes."""
+    params = _request(params, effort)
     async with _calling("anthropic"):
         client = anthropic_client()
         if timeout_s is not None:
             client = client.with_options(timeout=timeout_s)
-        async with client.messages.stream(**params) as stream:
+        async with client.beta.messages.stream(**params) as stream:
             yield stream
             message = await stream.get_final_message()
-    await usage.record_claude(purpose, params["model"], message.usage)
+    await _settle(purpose, message)
 
 
 async def voyage_embed(texts: list[str], *, input_type: str) -> list[list[float]]:

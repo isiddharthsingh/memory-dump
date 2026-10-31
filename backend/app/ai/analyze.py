@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass
+from typing import Any
 
-from app.ai.clients import claude
+from app.ai.clients import claude_json
 from app.config import get_settings
 from app.extractors.base import ExtractedContent, flatten
 
@@ -13,19 +12,17 @@ web content (a YouTube video, a tweet, an Instagram post, or a web article) \
 for a personal knowledge base. The user will later ask natural-language \
 questions to find it.
 
-Return STRICT JSON with these keys (no prose, no markdown fence):
-{
-  "title":           one-line title, ~60 chars max,
-  "summary":         2-3 sentence summary in plain English,
-  "tags":            5-10 short topical tags (lowercase, hyphenated),
-  "people":          named people mentioned (proper names, full name preferred),
-  "handles":         social-media handles or @usernames,
-  "brands_products": brands, products, companies, tools, or projects,
-  "topics":          2-5 broad topic categories
-}
+Fill in:
+- title: one-line title, ~60 chars max
+- summary: 2-3 sentence summary in plain English
+- tags: 5-10 short topical tags (lowercase, hyphenated)
+- people: named people mentioned (proper names, full name preferred)
+- handles: social-media handles or @usernames
+- brands_products: brands, products, companies, tools, or projects
+- topics: 2-5 broad topic categories
 
 Rules:
-- Every array is a JSON array of strings, possibly empty.
+- Any list may be empty.
 - Be specific. Prefer "rust-async-runtimes" over "programming".
 - Extract real entities only. Do not invent.
 - If content is sparse, still produce best-guess values from any signal.
@@ -35,11 +32,32 @@ MAX_TEXT_CHARS = 24_000  # ~6k tokens; leaves headroom for system + image
 
 # Asked only when there are frames, so other saves keep the system prompt's keys.
 FRAMES_NOTE = """The {count} images above are frames taken evenly through the \
-video. Add one more key, "on_screen": the text the frames show that the \
+video. Also fill in "on_screen": the text the frames show that the \
 transcript doesn't say (names, @handles, titles, numbers, code, labels of \
 charts and lists), as plain lines; "" when there is none.
-
 """
+
+_STRINGS = {"type": "array", "items": {"type": "string"}}
+_FIELDS: dict[str, Any] = {
+    "title": {"type": "string"},
+    "summary": {"type": "string"},
+    "tags": _STRINGS,
+    "people": _STRINGS,
+    "handles": _STRINGS,
+    "brands_products": _STRINGS,
+    "topics": _STRINGS,
+}
+
+
+def schema(**extra: dict[str, Any]) -> dict[str, Any]:
+    """The JSON schema an analysis comes back in, plus `extra` string fields."""
+    properties = _FIELDS | extra
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
 
 
 @dataclass
@@ -65,11 +83,21 @@ def _truncate(text: str | None, limit: int = MAX_TEXT_CHARS) -> str:
     return f"{head}\n\n[...truncated...]\n\n{tail}"
 
 
-def _strip_json_fence(s: str) -> str:
-    s = s.strip()
-    s = re.sub(r"^```(?:json)?\s*", "", s)
-    s = re.sub(r"\s*```$", "", s)
-    return s.strip()
+def parse(data: dict[str, Any], fallback_title: str | None) -> Analysis:
+    """An Analysis from the fields Claude filled in."""
+
+    def strs(key: str) -> list[str]:
+        return [x.strip() for x in data.get(key) or [] if x.strip()]
+
+    return Analysis(
+        title=data.get("title") or fallback_title or None,
+        summary=data.get("summary") or None,
+        tags=strs("tags"),
+        people=strs("people"),
+        handles=strs("handles"),
+        brands_products=strs("brands_products"),
+        topics=strs("topics"),
+    )
 
 
 async def analyze(
@@ -106,51 +134,24 @@ async def analyze(
         f"Source: {source}\n"
         f"Site: {content.site_name or ''}\n"
         f"Author: {content.author or ''}\n\n"
-        f"Content:\n{body_text or '(no body extracted)'}\n\n"
-        + (FRAMES_NOTE.format(count=len(content.frames)) if content.frames else "")
-        + "Return ONLY the JSON object as specified."
+        f"Content:\n{body_text or '(no body extracted)'}"
+        + ("\n\n" + FRAMES_NOTE.format(count=len(content.frames)) if content.frames else "")
     )
     user_blocks.append({"type": "text", "text": prompt})
 
-    resp = await claude(
+    extra = {"on_screen": {"type": "string"}} if content.frames else {}
+    # A schema guarantees the fields: an answer missing them used to save the
+    # item without its summary, tags and the anchors proper-noun search needs.
+    data = await claude_json(
         purpose="analyze",
+        schema=schema(**extra),
+        effort="medium",
         model=settings.claude_analysis_model,
-        max_tokens=1024,
-        system=[{"type": "text", "text": ANALYSIS_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+        max_tokens=8000,
+        system=ANALYSIS_SYSTEM,
         messages=[{"role": "user", "content": user_blocks}],
     )
-
-    raw = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
-    raw = _strip_json_fence(raw)
-
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return Analysis(
-            title=content.title,
-            summary=None,
-            tags=[],
-            people=[],
-            handles=[],
-            brands_products=[],
-            topics=[],
-        )
-
-    def _strs(key: str) -> list[str]:
-        val = data.get(key) or []
-        return [str(x).strip() for x in val if isinstance(x, str | int | float) and str(x).strip()]
-
-    on_screen = data.get("on_screen") if content.frames else None
-    if isinstance(on_screen, list):
-        # "Plain lines" sometimes come back as a list of them.
-        on_screen = "\n".join(_strs("on_screen"))
-    return Analysis(
-        title=(data.get("title") or content.title or None),
-        summary=data.get("summary") or None,
-        tags=_strs("tags"),
-        people=_strs("people"),
-        handles=_strs("handles"),
-        brands_products=_strs("brands_products"),
-        topics=_strs("topics"),
-        on_screen=(flatten(on_screen) or None) if isinstance(on_screen, str) else None,
-    )
+    analysis = parse(data, fallback_title=content.title)
+    if content.frames:
+        analysis.on_screen = flatten(data.get("on_screen")) or None
+    return analysis

@@ -15,7 +15,6 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -326,13 +325,12 @@ async def test_the_child_runs_as_the_sandbox_user_in_a_folder_of_its_own(
     assert mode == "700"
 
 
-def _answer(**data: Any) -> SimpleNamespace:
-    text = json.dumps(
+def _answer(**data: Any) -> dict[str, Any]:
+    return (
         {"title": "T", "summary": "S", "tags": [], "people": [], "handles": []}
         | {"brands_products": [], "topics": []}
         | data
     )
-    return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)])
 
 
 async def test_frames_go_to_claude_and_their_on_screen_text_comes_back(
@@ -340,30 +338,23 @@ async def test_frames_go_to_claude_and_their_on_screen_text_comes_back(
 ) -> None:
     sent: dict[str, Any] = {}
 
-    async def claude(**params: Any) -> SimpleNamespace:
+    async def claude_json(**params: Any) -> dict[str, Any]:
         sent.update(params)
         return _answer(on_screen="@hargup PR #153\n\nlean-derive-hargup 280,000")
 
-    monkeypatch.setattr(analyze_module, "claude", claude)
+    monkeypatch.setattr(analyze_module, "claude_json", claude_json)
     content = ExtractedContent(raw_text="Transcript:\nhi", frames=["AAAA", "BBBB"])
     got = await analyze(content, url=URL, source="instagram")
     blocks = sent["messages"][0]["content"]
     assert [b["type"] for b in blocks] == ["image", "image", "text"]
     assert [b["source"]["data"] for b in blocks[:2]] == ["AAAA", "BBBB"]
     assert '"on_screen"' in blocks[-1]["text"]
+    assert "on_screen" in sent["schema"]["required"]
     # Kept as one section: no blank lines.
     assert got.on_screen == "@hargup PR #153\nlean-derive-hargup 280,000"
 
-    # "Plain lines" sometimes come back as a list of them.
-    async def as_list(**params: Any) -> SimpleNamespace:
-        return _answer(on_screen=["@hargup PR #153", "", "lean-derive-hargup 280,000", 7])
-
-    monkeypatch.setattr(analyze_module, "claude", as_list)
-    got = await analyze(content, url=URL, source="instagram")
-    assert got.on_screen == "@hargup PR #153\nlean-derive-hargup 280,000\n7"
-
-    monkeypatch.setattr(analyze_module, "claude", claude)
     sent.clear()
     got = await analyze(ExtractedContent(raw_text="Body:\nhi"), url=URL, source="web")
     assert '"on_screen"' not in sent["messages"][0]["content"][-1]["text"]
+    assert "on_screen" not in sent["schema"]["properties"]
     assert got.on_screen is None

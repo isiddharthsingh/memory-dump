@@ -63,9 +63,11 @@ class Settings(BaseSettings):
     extract_timeout_s: float = 90
     extract_max_bytes: int = 5 * 1024 * 1024
 
-    claude_analysis_model: str = "claude-haiku-4-5-20251001"
-    claude_synthesis_model: str = "claude-sonnet-4-6"
-    claude_ask_model: str = "claude-opus-4-7"
+    # Every call sets an effort level (app/ai/clients.py), which models before
+    # Opus 4.5 and Sonnet 4.6 don't take; Haiku 4.5 doesn't either.
+    claude_analysis_model: str = "claude-haiku-5-5"
+    claude_synthesis_model: str = "claude-sonnet-5-5"
+    claude_ask_model: str = "claude-opus-5-5"
     voyage_embed_model: str = "voyage-3-large"
     voyage_rerank_model: str = "rerank-2.5"
 

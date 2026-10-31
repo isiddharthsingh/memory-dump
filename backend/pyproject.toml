@@ -19,7 +19,7 @@ dependencies = [
     "httpx[http2]>=0.27",
     # Its network backend checks linked pages' addresses (app/extractors/webpage.py).
     "httpcore>=1.0",
-    "anthropic>=0.40",
+    "anthropic>=2.3",
     "voyageai>=0.3",
     "yt-dlp>=2024.12.13",
     # Transcripts of Instagram reels (app/extractors/reel.py).

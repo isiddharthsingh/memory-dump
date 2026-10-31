@@ -40,6 +40,15 @@ class ProviderUnavailable(Exception):
         self.retry_after = retry_after
 
 
+class Refused(Exception):
+    """Claude declined the request (stop_reason "refusal"), and so did the
+    fallback model when there was one. Asking again gets the same answer."""
+
+    def __init__(self, category: str | None) -> None:
+        super().__init__(f"Claude declined this ({category or 'no category given'})")
+        self.category = category
+
+
 def is_transient(exc: BaseException) -> bool:
     if isinstance(exc, ProviderUnavailable | TimeoutError | anthropic.APIConnectionError):
         return True
@@ -81,4 +90,6 @@ def user_message(exc: BaseException) -> str:
     """What a client may see of a failure: nothing of its internals."""
     if is_transient(exc):
         return "That's taking longer than it should right now. Try again in a minute."
+    if isinstance(exc, Refused):
+        return "Claude declined to answer that."
     return "Something went wrong. Try again."
