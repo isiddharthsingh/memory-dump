@@ -75,7 +75,7 @@ class YouTubeExtractor:
     @staticmethod
     def _fetch_metadata(url: str) -> dict:
         try:
-            from yt_dlp import YoutubeDL
+            from yt_dlp import YoutubeDL  # type: ignore[import-untyped]
 
             opts = {
                 "quiet": True,

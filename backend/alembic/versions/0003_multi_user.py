@@ -9,16 +9,17 @@ topic_page_chunks, and devices before adding the NOT NULL user_id column.
 Bring your own backfill if you ever want to keep data through this point.
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
+
 revision: str = "0003_multi_user"
-down_revision: Union[str, None] = "0002_devices"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0002_devices"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

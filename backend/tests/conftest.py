@@ -19,7 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 # Every test signs up from the same address; the sign-in limit has its own test.
-os.environ.setdefault("RATE_LIMIT_AUTH_PER_HOUR", "0")
+os.environ["RATE_LIMIT_AUTH_PER_HOUR"] = "0"
 
 PASSWORD = "super-secret-pw-123"
 

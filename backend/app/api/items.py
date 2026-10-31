@@ -79,7 +79,7 @@ async def list_items(
     if source:
         stmt = stmt.where(Item.source == source)
     if tag:
-        stmt = stmt.where(Item.tags.any(tag))
+        stmt = stmt.where(Item.tags.any(tag))  # type: ignore[arg-type]
     if before is not None:
         anchor = await _anchor(session, current_user.id, before)
         stmt = stmt.where(tuple_(Item.created_at, Item.id) < tuple_(*anchor))
@@ -286,7 +286,7 @@ async def related_items(
     wiki_stmt = (
         select(TopicPage)
         .where(TopicPage.user_id == current_user.id)
-        .where(TopicPage.source_item_ids.any(item.id))
+        .where(TopicPage.source_item_ids.any(item.id))  # type: ignore[arg-type]
         .order_by(TopicPage.updated_at.desc())
     )
     wiki_rows = (await session.execute(wiki_stmt)).scalars().all()
