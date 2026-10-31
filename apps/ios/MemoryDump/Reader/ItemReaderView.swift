@@ -406,7 +406,7 @@ struct ItemReaderView: View {
   /// Share. Uploaded files can't be reopened, so Ask takes the wide slot.
   private func actionBar(_ it: ItemDetail, title: String) -> some View {
     let uploaded = Format.isUploadedFile(it.url)
-    let ask = { router.ask("What are the key ideas in “\(title)”?") }
+    let ask = { router.ask("What are the key ideas in “\(title)”?", scope: .item(id: it.id, title: title)) }
     return HStack(spacing: 4) {
       if uploaded {
         wide("Ask about this", symbol: "sparkle", fill: Palette.accent, action: ask)

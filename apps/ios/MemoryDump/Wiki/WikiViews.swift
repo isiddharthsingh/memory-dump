@@ -298,7 +298,7 @@ struct WikiPageView: View {
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
         Button("Ask about this topic", systemImage: "sparkles") {
-          router.ask("What do I know about \(model.title)?")
+          router.ask("What do I know about \(model.title)?", scope: .topic(slug: model.slug, title: model.title))
         }
         .tint(Palette.accent)
         .disabled(model.page == nil)

@@ -47,6 +47,15 @@ import Testing
     _ = router.open(URL(string: "https://example.com")!)
     #expect(router.libraryPath == [.wiki("llm-scaling"), .item(UUID(uuidString: a)!)])
   }
+
+  @Test func askCarriesItsScopeAndAPlainAskDropsIt() {
+    let router = Router()
+    router.ask("What do I know about LLM Scaling?", scope: .topic(slug: "llm-scaling", title: "LLM Scaling"))
+    #expect(router.tab == .ask)
+    #expect(router.askScope == .topic(slug: "llm-scaling", title: "LLM Scaling"))
+    router.ask("What did I save this week?")
+    #expect(router.askScope == nil)
+  }
 }
 
 @Suite struct FormatTests {
@@ -83,6 +92,10 @@ import Testing
     let busy = Format.friendlyAskError(APIError.http(503, "That's taking longer than it should right now."))
     #expect(busy.detail == "That's taking longer than it should right now.")
     #expect(Format.friendlyAskError(APIError.updateRequired("Update from TestFlight.")).detail == "Update from TestFlight.")
+    #expect(Format.friendlyAskError(APIError.http(404, "Item not found")).title == "It’s no longer in your library")
+    #expect(Format.friendlyAskError(APIError.http(404, "Topic page not found")).title == "It’s no longer in your library")
+    // Any other 404 isn't a deleted item.
+    #expect(Format.friendlyAskError(APIError.http(404, "Not Found")).title == "Couldn’t get an answer")
   }
 
   @Test func readerContentPicksTheRichestSection() {

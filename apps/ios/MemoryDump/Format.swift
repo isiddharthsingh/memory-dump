@@ -164,6 +164,11 @@ enum Format {
     if (error as? APIError) == .signedOut {
       return ("You’ve been signed out", "Sign in again to keep asking.")
     }
+    // A chat about one item or topic that has since been deleted: the server's
+    // two answers for it, not any 404.
+    if case APIError.http(404, let detail, _) = error, ["Item not found", "Topic page not found"].contains(detail) {
+      return ("It’s no longer in your library", "The item or topic this chat is about was deleted.")
+    }
     return ("Couldn’t get an answer", "Something went wrong on the server. Try again.")
   }
 }

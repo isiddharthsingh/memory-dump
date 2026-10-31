@@ -20,6 +20,8 @@ final class Router {
   var askPath: [Route] = []
   /// A question to put in the Ask box ("Ask about this").
   var askDraft: String?
+  /// What that question is about, for the new chat it starts.
+  var askScope: AskScope?
 
   /// Every item, topic and source opens through here, so this is where they tap.
   func push(_ route: Route) {
@@ -31,7 +33,8 @@ final class Router {
     }
   }
 
-  func ask(_ question: String) {
+  func ask(_ question: String, scope: AskScope? = nil) {
+    askScope = scope
     askDraft = question
     tab = .ask
   }

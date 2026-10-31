@@ -12,6 +12,9 @@ final class AskModel {
   private(set) var history: [ChatSummary]?
   private(set) var historyError: Error?
   var input = ""
+  /// What the open chat is about ("Ask about this"), for every question in
+  /// it; nil asks the whole library. Not saved with the chat.
+  var scope: AskScope?
   private(set) var tags: [TagCount] = []
   private(set) var wiki: [TopicPageSummary] = []
 
@@ -66,21 +69,22 @@ final class AskModel {
     Haptics.press()
     let turn = Turn(id: UUID(), question: question)
     var chat = self.chat ?? Chat(id: UUID(), turns: [], createdAt: .now, updatedAt: .now)
+    let earlier = chat.turns
     chat.turns.append(turn)
     self.chat = chat
     input = ""
     save()
-    run(chat: chat.id, turn: turn.id, question: question)
+    run(chat: chat.id, turn: turn.id, question: question, earlier: earlier)
   }
 
   func retry(_ turn: Turn) {
-    guard let chat, !isStreaming else { return }
+    guard let chat, !isStreaming, let index = chat.turns.firstIndex(where: { $0.id == turn.id }) else { return }
     update(chat.id, turn.id) {
       $0.answer = ""
       $0.citations = []
       $0.status = .streaming
     }
-    run(chat: chat.id, turn: turn.id, question: turn.question)
+    run(chat: chat.id, turn: turn.id, question: turn.question, earlier: Array(chat.turns[..<index]))
   }
 
   func stop() {
@@ -95,6 +99,7 @@ final class AskModel {
   func newChat() {
     stop()
     chat = nil
+    scope = nil
   }
 
   /// Opens a chat from History. If it can't be fetched, the open chat stays.
@@ -112,6 +117,7 @@ final class AskModel {
     opened.settle()
     stop()
     chat = opened
+    scope = nil
   }
 
   func delete(_ id: UUID) async {
@@ -134,11 +140,14 @@ final class AskModel {
     await loadHistory()
   }
 
-  private func run(chat: UUID, turn: UUID, question: String) {
+  /// `earlier` is the chat's turns before this one, which the server reads a
+  /// follow-up with.
+  private func run(chat: UUID, turn: UUID, question: String, earlier: [Turn]) {
     stream?.cancel()
+    let scope = scope
     stream = Task {
       do {
-        for try await event in APIClient.shared.askStream(question) {
+        for try await event in APIClient.shared.askStream(question, history: earlier, scope: scope) {
           // Stop already saved the answer; tokens still buffered must not change it.
           if Task.isCancelled { break }
           switch event {

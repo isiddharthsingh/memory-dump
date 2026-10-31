@@ -144,13 +144,17 @@ final class APIClient {
   }
 
   /// `/ask/stream` as events. Cancel the consuming task to stop the request.
-  func askStream(_ question: String) -> AsyncThrowingStream<AskEvent, Error> {
-    AsyncThrowingStream { continuation in
+  /// `history` is the chat's turns before this question (see AskBody); a
+  /// `scope` answers from that item or topic only, and is a 404 once it's gone.
+  func askStream(
+    _ question: String, history: [ChatTurn] = [], scope: AskScope? = nil
+  ) -> AsyncThrowingStream<AskEvent, Error> {
+    let body = AskBody(question: question, earlier: history, scope: scope)
+    return AsyncThrowingStream { continuation in
       let task = Task {
         do {
           let (bytes, _) = try await authorized { token in
-            var req = try self.request(
-              "/ask/stream", method: "POST", body: ["question": question], token: token)
+            var req = try self.request("/ask/stream", method: "POST", body: body, token: token)
             req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
             return req
           } perform: { req in

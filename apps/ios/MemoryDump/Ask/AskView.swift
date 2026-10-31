@@ -195,7 +195,12 @@ struct AskView: View {
       .onChange(of: model.turns.count) { withAnimation { proxy.scrollTo("end", anchor: .bottom) } }
     }
     .background(Palette.ground)
-    .safeAreaInset(edge: .bottom) { composer }
+    .safeAreaInset(edge: .bottom) {
+      VStack(alignment: .leading, spacing: 8) {
+        if let scope = model.scope { scopeChip(scope) }
+        composer
+      }
+    }
     .navigationTitle("Ask")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
@@ -225,12 +230,15 @@ struct AskView: View {
   }
 
   /// "Ask about this" on the reader or a topic opens this tab with a drafted
-  /// question, in a new chat so it doesn't land in an unrelated one.
+  /// question, in a new chat so it doesn't land in an unrelated one, about
+  /// that item or topic.
   private func takeDraft() {
     guard let draft = router.askDraft else { return }
     if !model.turns.isEmpty { model.newChat() }
+    model.scope = router.askScope
     model.input = draft
     router.askDraft = nil
+    router.askScope = nil
     focused = true
   }
 
@@ -239,14 +247,59 @@ struct AskView: View {
       Text("Ask your library").font(.display(32, .heavy, relativeTo: .title)).foregroundStyle(Palette.ink)
       Text("Answers come only from what you’ve saved, with numbered sources you can open.")
         .font(.body).foregroundStyle(Palette.ink2)
-      FlowLayout(spacing: 8) {
-        ForEach(model.suggestions, id: \.self) { s in
-          Chip(label: s, symbol: "sparkle") { model.submit(s) }
+      // Questions about the whole library; a chat about one thing has its own.
+      if model.scope == nil {
+        FlowLayout(spacing: 8) {
+          ForEach(model.suggestions, id: \.self) { s in
+            Chip(label: s, symbol: "sparkle") { model.submit(s) }
+          }
         }
+        .padding(.top, 8)
       }
-      .padding(.top, 8)
     }
     .padding(.top, 24)
+  }
+
+  /// What the chat is about, over the box; the x drops it, so the next
+  /// question searches the whole library.
+  private func scopeChip(_ scope: AskScope) -> some View {
+    let symbol: String
+    let tint: Color
+    switch scope {
+    case .item:
+      symbol = "doc.text"
+      tint = Palette.accent
+    case .topic(let slug, _):
+      symbol = "book.closed"
+      tint = Swatch.topic(slug).ink
+    }
+    return HStack(spacing: 6) {
+      HStack(spacing: 6) {
+        Image(systemName: symbol).foregroundStyle(tint).accessibilityHidden(true)
+        Text("About:").foregroundStyle(Palette.ink2)
+        Text(scope.title).foregroundStyle(Palette.ink).lineLimit(1)
+      }
+      .accessibilityElement(children: .combine)
+      Button {
+        Haptics.tap()
+        withAnimation(.snappy(duration: 0.2)) { model.scope = nil }
+      } label: {
+        Image(systemName: "xmark")
+          .font(.caption.weight(.bold))
+          .foregroundStyle(Palette.ink3)
+          .frame(width: 28, height: 28)
+          .contentShape(.rect)
+      }
+      .accessibilityLabel("Ask your whole library instead")
+    }
+    .font(.footnote.weight(.semibold))
+    .padding(.leading, 12)
+    .padding(.trailing, 2)
+    .padding(.vertical, 2)
+    .background(Palette.card, in: .capsule)
+    .overlay { Capsule().strokeBorder(Palette.hairline) }
+    .padding(.horizontal, 16)
+    .transition(.opacity)
   }
 
   private var composer: some View {

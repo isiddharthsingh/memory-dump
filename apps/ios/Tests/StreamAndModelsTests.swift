@@ -251,6 +251,51 @@ import Testing
   }
 }
 
+@Suite struct AskRequestTests {
+  /// The /ask/stream body as `request` writes it, with a plain JSONEncoder.
+  private func sent(_ question: String, _ earlier: [ChatTurn] = [], _ scope: AskScope? = nil) throws -> [String: Any] {
+    let body = AskBody(question: question, earlier: earlier, scope: scope)
+    let req = try APIClient.shared.request("/ask/stream", method: "POST", body: body, token: nil)
+    let data = try #require(req.httpBody)
+    return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+  }
+
+  @Test func firstQuestionGoesWithNoHistoryOrScope() throws {
+    let body = try sent("What did I save?")
+    #expect(Set(body.keys) == ["question", "history", "zone"])
+    #expect(body["question"] as? String == "What did I save?")
+    #expect(body["zone"] as? String == TimeZone.current.identifier)
+    #expect((body["history"] as? [Any])?.isEmpty == true)
+  }
+
+  @Test func sendsTheLastSixAnsweredTurnsOldestFirst() throws {
+    var earlier = (1...8).map { ChatTurn(id: UUID(), question: "q\($0)", answer: "a\($0) [item:x]", status: .done) }
+    earlier.insert(ChatTurn(id: UUID(), question: "failed", status: .failed(title: "No", detail: "")), at: 7)
+    earlier.append(ChatTurn(id: UUID(), question: "stopped before it started", status: .done))
+    earlier.append(ChatTurn(id: UUID(), question: "still streaming", answer: "half"))
+    let history = try #require(try sent("And the second one?", earlier)["history"] as? [[String: String]])
+    #expect(history.compactMap { $0["question"] } == ["q3", "q4", "q5", "q6", "q7", "q8"])
+    #expect(history.first == ["question": "q3", "answer": "a3 [item:x]"])
+  }
+
+  @Test func scopesToOneItemOrOneTopic() throws {
+    let id = UUID()
+    let item = try sent("Key ideas?", [], .item(id: id, title: "A post"))
+    #expect(Set(item.keys) == ["question", "history", "item", "zone"])
+    #expect(item["item"] as? String == id.lower)
+    let topic = try sent("What do I know?", [], .topic(slug: "llm-scaling", title: "LLM Scaling"))
+    #expect(Set(topic.keys) == ["question", "history", "topic", "zone"])
+    #expect(topic["topic"] as? String == "llm-scaling")
+  }
+
+  @Test func aNewChatDropsTheScope() {
+    let model = AskModel()
+    model.scope = .item(id: UUID(), title: "A post")
+    model.newChat()
+    #expect(model.scope == nil)
+  }
+}
+
 @Suite struct ShareTextTests {
   @Test func findsTheFirstWebURL() {
     #expect(ShareText.firstHTTPURL(in: "look https://x.com/a/status/1 and http://b.com")?.absoluteString == "https://x.com/a/status/1")

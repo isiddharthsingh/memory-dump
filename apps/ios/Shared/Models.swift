@@ -171,6 +171,66 @@ struct Chat: Codable, Identifiable {
   }
 }
 
+/// What an Ask chat is about when it's one thing ("Ask about this"): the
+/// server answers from that saved item, or from that wiki page and the items
+/// it cites, instead of searching the whole library. Held for the open chat
+/// only; a chat reopened from History has none.
+enum AskScope: Hashable {
+  case item(id: UUID, title: String)
+  case topic(slug: String, title: String)
+
+  var title: String {
+    switch self {
+    case .item(_, let title), .topic(_, let title): title
+    }
+  }
+}
+
+/// The body of /ask/stream. The keys are single words, since request bodies
+/// are encoded with a plain JSONEncoder. A nil `item` or `topic` is left out.
+struct AskBody: Encodable {
+  struct Exchange: Encodable, Equatable {
+    let question: String
+    let answer: String
+  }
+
+  /// The server reads at most this many earlier exchanges.
+  static let historyLimit = 6
+
+  let question: String
+  /// Earlier answered questions of the chat, oldest first, so a follow-up
+  /// ("what did the second one say?") is read with them.
+  let history: [Exchange]
+  let item: String?
+  let topic: String?
+  /// The phone's time zone (an IANA name), whose days "today" and "what did I
+  /// save yesterday" mean; the server works in UTC without it.
+  let zone: String
+
+  /// `earlier` is the chat's turns before this question. Only finished ones
+  /// with an answer go, the last `historyLimit` of them: a failed turn has
+  /// nothing to follow up on.
+  init(question: String, earlier: [ChatTurn], scope: AskScope?, zone: TimeZone = .current) {
+    self.question = question
+    self.zone = zone.identifier
+    history = earlier
+      .filter { if case .done = $0.status { !$0.answer.isEmpty } else { false } }
+      .suffix(Self.historyLimit)
+      .map { Exchange(question: $0.question, answer: $0.answer) }
+    switch scope {
+    case .item(let id, _):
+      item = id.lower
+      topic = nil
+    case .topic(let slug, _):
+      item = nil
+      topic = slug
+    case nil:
+      item = nil
+      topic = nil
+    }
+  }
+}
+
 /// A chat in History: just its questions, so the list doesn't download every answer.
 struct ChatSummary: Codable, Identifiable {
   let id: UUID
