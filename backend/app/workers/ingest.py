@@ -22,13 +22,13 @@ from sqlalchemy import delete, func, select, update
 
 from app import kv, storage, thumbnails
 from app.ai.analyze import Analysis, analyze
-from app.ai.embed import chunk_text, embed_texts
+from app.ai.embed import chunk_text, embed_chunks
 from app.ai.providers import get_vision_provider
 from app.config import get_settings
 from app.db.models import Item, ItemChunk
 from app.db.session import get_sessionmaker
 from app.errors import is_transient
-from app.extractors.base import get_extractor
+from app.extractors.base import flatten, get_extractor
 from app.notifications import send_to_user
 from app.queue import enqueue, synthesize_job_id
 from app.workers.jobs import job, last_try, later
@@ -105,11 +105,27 @@ def _text_for_embed(analysis: Analysis, raw_text: str | None) -> str:
     )
 
 
+def _embed_context(title: str | None, summary: str | None) -> str | None:
+    """What the item is, embedded in front of each chunk after the first
+    (`embed_chunks`). Built from the saved title and summary, so
+    app/workers/reembed.py builds the same from the row."""
+    lines = [f"Title: {title}" if title else None, f"Summary: {summary}" if summary else None]
+    return "\n".join(line for line in lines if line) or None
+
+
 def _with_on_screen(raw_text: str | None, on_screen: str | None) -> str | None:
     """A video's raw text with the text its frames show, as its own section."""
     if not on_screen:
         return raw_text
     return "\n\n".join(part for part in (raw_text, "On screen:\n" + on_screen) if part)
+
+
+def _with_pdf_text(pdf_text: str | None, raw_text: str | None) -> str | None:
+    """A linked PDF's text as the reader's Body section, before the
+    extractor's own sections (the user's note)."""
+    body = flatten(pdf_text)
+    parts = ("Body:\n" + body if body else None, raw_text)
+    return "\n\n".join(part for part in parts if part) or None
 
 
 async def _save(
@@ -212,7 +228,8 @@ async def ingest_item(ctx: dict[str, Any], item_id: str, generation: int | None 
 
     1. Claim it (processing).
     2. Extract content via per-source extractor, within EXTRACT_TIMEOUT_S.
-    3. Analyze with Claude → title, summary, tags, lexical anchors.
+    3. Analyze with Claude → title, summary, tags, lexical anchors. A link
+       to a PDF is read the way an upload is, and gets its thumbnail.
     4. Chunk + embed combined text with Voyage.
     5. Persist; mark ready. Transient failures retry, others mark failed.
     6. Enqueue wiki-synthesis follow-up.
@@ -226,19 +243,30 @@ async def ingest_item(ctx: dict[str, Any], item_id: str, generation: int | None 
         extractor = get_extractor(claim.source)
         async with asyncio.timeout(get_settings().extract_timeout_s):
             content = await extractor.extract(claim.url, share_text=claim.share_text)
-        analysis = await analyze(content, url=claim.url, source=claim.source)
-        raw_text = _with_on_screen(content.raw_text, analysis.on_screen)
+        if content.pdf is not None:
+            result = await get_vision_provider().analyze_pdf(
+                content.pdf, filename=content.title or "document.pdf"
+            )
+            analysis = result.analysis
+            raw_text = _with_pdf_text(result.raw_text, content.raw_text)
+        else:
+            analysis = await analyze(content, url=claim.url, source=claim.source)
+            raw_text = _with_on_screen(content.raw_text, analysis.on_screen)
+        title = analysis.title or content.title or claim.url
         chunks = chunk_text(_text_for_embed(analysis, raw_text))
-        embeddings = await embed_texts(chunks, input_type="document") if chunks else []
+        embeddings = await embed_chunks(chunks, _embed_context(title, analysis.summary))
+        thumbnail_url = content.thumbnail_url
+        if content.pdf is not None:
+            thumbnail_url = await _save_thumbnail(claim, content.pdf, "application/pdf")
     except Exception as exc:
         return await _failed(ctx, claim, exc)
 
     saved = await _save(
         claim,
-        title=analysis.title or content.title or claim.url,
+        title=title,
         analysis=analysis,
         raw_text=raw_text,
-        thumbnail_url=content.thumbnail_url,
+        thumbnail_url=thumbnail_url,
         chunks=chunks,
         embeddings=embeddings,
     )
@@ -289,8 +317,9 @@ async def ingest_file(
             result = await provider.analyze_image(data, mime_type=mime)
         analysis = result.analysis
         raw_text = result.raw_text or ""
+        title = analysis.title or original_name
         chunks = chunk_text(_text_for_embed(analysis, raw_text))
-        embeddings = await embed_texts(chunks, input_type="document") if chunks else []
+        embeddings = await embed_chunks(chunks, _embed_context(title, analysis.summary))
         thumbnail_url = await _save_thumbnail(claim, data, mime)
     except Exception as exc:
         outcome = await _failed(ctx, claim, exc)
@@ -301,7 +330,7 @@ async def ingest_file(
 
     saved = await _save(
         claim,
-        title=analysis.title or original_name,
+        title=title,
         analysis=analysis,
         raw_text=raw_text or None,
         thumbnail_url=thumbnail_url,

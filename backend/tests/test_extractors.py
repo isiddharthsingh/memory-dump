@@ -164,6 +164,19 @@ def test_chunk_text_packs_paragraphs() -> None:
     assert len(chunks) > 1
     assert all(len(c) <= 1000 for c in chunks)
 
+    # A flattened section (a linked PDF's text) is one paragraph: it is packed
+    # by whole lines, and a line longer than a chunk is cut between words.
+    lines = [f"Line {n} of the paper says something." for n in range(200)]
+    chunks = chunk_text("Body:\n" + "\n".join(lines), max_chars=1000)
+    assert len(chunks) > 1 and all(len(c) <= 1000 for c in chunks)
+    assert all(c.split("\n")[-1].endswith("something.") for c in chunks[:-1])
+    words = " ".join(f"word{n}" for n in range(1000))
+    chunks = chunk_text(words, max_chars=1000, overlap=100)
+    assert all(len(c) <= 1000 for c in chunks)
+    assert all(piece.startswith("word") and piece.split()[-1] in words.split() for piece in chunks)
+    # Each piece starts inside the end of the one before.
+    assert all(b.split()[0] in a for a, b in zip(chunks, chunks[1:], strict=False))
+
 
 def _post(**extra: object) -> dict[str, object]:
     return {

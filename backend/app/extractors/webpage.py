@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+from pathlib import PurePosixPath
 from typing import Any
 
 import httpcore
 import httpx
 
 from app.config import get_settings
-from app.extractors.base import ExtractedContent
+from app.extractors.base import ExtractedContent, flatten
 
 # Tried in order. The Safari UA is the default; if a site walls it off
 # (Medium, some Substack tier links, Cloudflare bot challenges), we retry
@@ -175,7 +176,9 @@ class WebpageExtractor:
         async with public_client(timeout=TIMEOUT, follow_redirects=True) as client:
             direct = await _fetch_direct(client, url)
             if direct is not None:
-                return await self._from_html(direct, url, share_text)
+                if is_pdf(direct):
+                    return _from_pdf(direct, share_text)
+                return await self._from_html(direct.text, url, share_text)
             # Direct fetch hit a wall on every UA. Try the reader fallback.
             return await self._from_reader(client, url, share_text)
 
@@ -277,8 +280,8 @@ class WebpageExtractor:
             return None
 
 
-async def _fetch_direct(client: httpx.AsyncClient, url: str) -> str | None:
-    """Try each UA in order. Returns HTML on first 2xx, None if every UA
+async def _fetch_direct(client: httpx.AsyncClient, url: str) -> httpx.Response | None:
+    """Try each UA in order. Returns the first 2xx response, None if every UA
     was rate-limited or blocked. Raises on non-block errors (404, 5xx)."""
     blocked = False
     for ua in USER_AGENTS:
@@ -287,10 +290,34 @@ async def _fetch_direct(client: httpx.AsyncClient, url: str) -> str | None:
             blocked = True
             continue
         resp.raise_for_status()
-        return resp.text
+        return resp
     if blocked:
         return None
     return None  # all UAs blocked
+
+
+PDF_TYPES = frozenset({"application/pdf", "application/x-pdf"})
+
+
+def is_pdf(resp: httpx.Response) -> bool:
+    """By its Content-Type, or by its first bytes when the server sends a
+    generic one (application/octet-stream, text/plain)."""
+    media_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
+    return media_type in PDF_TYPES or resp.content[:1024].lstrip().startswith(b"%PDF-")
+
+
+def _from_pdf(resp: httpx.Response, share_text: str | None) -> ExtractedContent:
+    """The PDF itself, for the analysis to read; trafilatura would read its
+    bytes as text. The title is the file's name in the URL it came from
+    (after redirects) until the analysis names it."""
+    # httpx has decoded the path already.
+    name = " ".join(PurePosixPath(resp.url.path).name.split())[:120]
+    note = flatten(share_text)
+    return ExtractedContent(
+        title=name or None,
+        raw_text="User note:\n" + note if note else None,
+        pdf=resp.content,
+    )
 
 
 CHALLENGE_TITLES = ("just a moment", "attention required", "checking your browser")

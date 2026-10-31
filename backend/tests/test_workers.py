@@ -111,12 +111,12 @@ def test_an_ingest_overtaken_by_a_newer_request_writes_nothing(
     async def analyze(*_: Any, **__: Any) -> Analysis:
         return Analysis("Title", "Summary", [], [], [], [], [])
 
-    async def embed_texts(texts: list[str], input_type: str) -> list[list[float]]:
-        return [[0.1] * EMBED_DIM for _ in texts]
+    async def embed_chunks(chunks: list[str], context: str | None) -> list[list[float]]:
+        return [[0.1] * EMBED_DIM for _ in chunks]
 
     monkeypatch.setattr(ingest_worker, "get_extractor", lambda _: _Extractor(extract))
     monkeypatch.setattr(ingest_worker, "analyze", analyze)
-    monkeypatch.setattr(ingest_worker, "embed_texts", embed_texts)
+    monkeypatch.setattr(ingest_worker, "embed_chunks", embed_chunks)
 
     run = client.portal.call  # type: ignore[union-attr]
     assert run(ingest_item, {"job_try": 1}, str(item_id), 0) == "superseded"
@@ -170,12 +170,12 @@ def test_text_on_a_videos_frames_is_saved_with_it_and_found_by_search(
     async def analyze(*_: Any, **__: Any) -> Analysis:
         return Analysis("Title", "Summary", [], [], [], [], [], on_screen="@hargup PR #153")
 
-    async def embed_texts(texts: list[str], input_type: str) -> list[list[float]]:
-        return [[0.1] * EMBED_DIM for _ in texts]
+    async def embed_chunks(chunks: list[str], context: str | None) -> list[list[float]]:
+        return [[0.1] * EMBED_DIM for _ in chunks]
 
     monkeypatch.setattr(ingest_worker, "get_extractor", lambda _: _Extractor(extract))
     monkeypatch.setattr(ingest_worker, "analyze", analyze)
-    monkeypatch.setattr(ingest_worker, "embed_texts", embed_texts)
+    monkeypatch.setattr(ingest_worker, "embed_chunks", embed_chunks)
 
     run = client.portal.call  # type: ignore[union-attr]
     assert run(ingest_item, {"job_try": 1}, str(item_id), 0) == "ready"
@@ -449,11 +449,11 @@ def test_an_upload_is_kept_with_a_thumbnail_only_its_owner_sees_until_deleted(
         async def analyze_image(self, data: bytes, mime_type: str) -> VisionResult:
             return VisionResult(Analysis("A navy square", "Navy.", [], [], [], [], []), "")
 
-    async def embed_texts(texts: list[str], input_type: str) -> list[list[float]]:
-        return [[0.1] * EMBED_DIM for _ in texts]
+    async def embed_chunks(chunks: list[str], context: str | None) -> list[list[float]]:
+        return [[0.1] * EMBED_DIM for _ in chunks]
 
     monkeypatch.setattr(ingest_worker, "get_vision_provider", Vision)
-    monkeypatch.setattr(ingest_worker, "embed_texts", embed_texts)
+    monkeypatch.setattr(ingest_worker, "embed_chunks", embed_chunks)
     run = client.portal.call  # type: ignore[union-attr]
     store = get_storage()
     run(store.save, key, chunks())
@@ -534,11 +534,11 @@ def test_an_upload_it_cant_draw_is_kept_and_a_failed_one_is_deleted(
                 raise ValueError("Claude can't read it")
             return VisionResult(Analysis("Noise", "Noise.", [], [], [], [], []), "")
 
-    async def embed_texts(texts: list[str], input_type: str) -> list[list[float]]:
-        return [[0.1] * EMBED_DIM for _ in texts]
+    async def embed_chunks(chunks: list[str], context: str | None) -> list[list[float]]:
+        return [[0.1] * EMBED_DIM for _ in chunks]
 
     monkeypatch.setattr(ingest_worker, "get_vision_provider", Vision)
-    monkeypatch.setattr(ingest_worker, "embed_texts", embed_texts)
+    monkeypatch.setattr(ingest_worker, "embed_chunks", embed_chunks)
     run = client.portal.call  # type: ignore[union-attr]
     store = get_storage()
     keys = [f"{undrawable}.png", f"{failing}.png", thumbnails.key(failing)]

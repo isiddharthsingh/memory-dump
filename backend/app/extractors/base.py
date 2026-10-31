@@ -17,6 +17,9 @@ class ExtractedContent:
     extra: dict[str, str] = field(default_factory=dict)
     # Base64 JPEGs taken through a video, for the analysis to look at.
     frames: list[str] = field(default_factory=list)
+    # The file, when the link is a PDF: Claude reads it as an upload is read,
+    # and `title` is its file name until then.
+    pdf: bytes | None = None
 
 
 def flatten(text: str | None) -> str:
