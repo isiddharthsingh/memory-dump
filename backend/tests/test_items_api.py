@@ -64,6 +64,19 @@ def test_sharing_a_saved_link_again_returns_it(
     assert len(jobs) == 1
 
 
+def test_sharing_a_post_again_with_new_share_parameters_returns_it(
+    client: TestClient, auth: dict[str, str], jobs: Jobs
+) -> None:
+    reel = f"https://www.instagram.com/reel/{uuid.uuid4().hex[:11]}/"
+    first = client.post("/ingest", json={"url": reel + "?exln=MXY4bnFw"}, headers=auth)
+    second = client.post("/ingest", json={"url": reel + "?dlrf=MXY4bnFw"}, headers=auth)
+    assert first.status_code == 202, first.text
+    assert second.status_code == 202, second.text
+    assert second.json()["item"]["id"] == first.json()["item"]["id"]
+    assert first.json()["item"]["url"] == reel
+    assert len(jobs) == 1
+
+
 def test_sharing_a_failed_link_again_retries_it(
     client: TestClient, auth: dict[str, str], jobs: Jobs
 ) -> None:

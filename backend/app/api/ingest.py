@@ -13,7 +13,7 @@ from app.auth.rate_limit import rate_limit
 from app.db.models import Item, User
 from app.db.session import get_session
 from app.deps import get_current_user
-from app.extractors.base import detect_source
+from app.extractors.base import canonical_url, detect_source
 from app.queue import enqueue_ingest
 from app.storage import get_storage
 
@@ -58,9 +58,9 @@ async def ingest(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> IngestResponse:
-    url = str(body.url)
-    # A URL is saved once per user: sharing it again returns the saved item,
-    # and retries it if it failed.
+    url = canonical_url(str(body.url))
+    # A URL is saved once per user: sharing it again, whatever the share
+    # parameters, returns the saved item, and retries it if it failed.
     item = await _saved(session, current_user.id, url)
     if item is None:
         item = Item(

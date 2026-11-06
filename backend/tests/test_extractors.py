@@ -3,7 +3,13 @@ import time
 import httpx
 import pytest
 
-from app.extractors.base import ExtractedContent, detect_source, flatten, get_extractor
+from app.extractors.base import (
+    ExtractedContent,
+    canonical_url,
+    detect_source,
+    flatten,
+    get_extractor,
+)
 from app.extractors.reddit import _parse, _to_json_url
 from app.extractors.twitter import (
     _oembed_text,
@@ -23,6 +29,69 @@ def test_detect_source_dispatch() -> None:
     assert detect_source("https://old.reddit.com/r/python/") == "reddit"
     assert detect_source("https://redd.it/abc123") == "reddit"
     assert detect_source("https://example.com/post") == "web"
+
+
+def test_canonical_url_reduces_a_post_to_its_id() -> None:
+    reel = "https://www.instagram.com/reel/DfR-cQthi5m/"
+    # Instagram names its share parameter differently every time.
+    assert canonical_url(reel + "?exln=MXY4bnFwMmUxODltbw==") == reel
+    assert canonical_url(reel + "?dlrf=MXY4bnFwMmUxODltbw==") == reel
+    assert canonical_url("http://instagram.com/reels/DfR-cQthi5m?igsh=abc") == reel
+    assert canonical_url("https://www.instagram.com/natgeo/reel/DfR-cQthi5m/") == reel
+    assert canonical_url("https://www.instagram.com/p/Cx_1-a/?img_index=2") == (
+        "https://www.instagram.com/p/Cx_1-a/"
+    )
+    assert canonical_url("https://www.instagram.com/natgeo/?igsh=abc") == (
+        "https://www.instagram.com/natgeo/"
+    )
+
+    post = "https://x.com/anthropicai/status/2117343929960112486"
+    assert canonical_url(post + "?a=PsRknXV8qTsIF2wd8FU&s=12") == post
+    assert canonical_url(post + "?s=20&t=abc") == post
+    assert canonical_url("https://twitter.com/AnthropicAI/status/2117343929960112486/photo/1") == (
+        post
+    )
+    assert canonical_url("https://x.com/i/web/status/2117343929960112486") == (
+        "https://x.com/i/status/2117343929960112486"
+    )
+
+    video = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert canonical_url("https://youtu.be/dQw4w9WgXcQ?si=abc&t=42") == video
+    assert canonical_url("https://m.youtube.com/watch?feature=share&v=dQw4w9WgXcQ") == video
+    assert canonical_url("https://youtube.com/shorts/dQw4w9WgXcQ?si=abc") == video
+
+
+def test_canonical_url_drops_trackers_and_the_fragment_from_a_page() -> None:
+    shared = "https://example.com/post?utm_source=share&id=7&fbclid=x&UTM_Medium=ios#comments"
+    assert canonical_url(shared) == "https://example.com/post?id=7"
+    assert canonical_url("https://example.com/a?b=%2F&c=d+e") == "https://example.com/a?b=%2F&c=d+e"
+    assert canonical_url("https://example.com/?utm_campaign=x") == "https://example.com/"
+    assert canonical_url("https://www.instagram.com/reels/audio/123/") == (
+        "https://www.instagram.com/reels/audio/123/"
+    )
+    # A share link's code isn't the post's: it stays as shared, to be redirected.
+    assert canonical_url("https://www.instagram.com/share/reel/BAxyz123/?igsh=abc") == (
+        "https://www.instagram.com/share/reel/BAxyz123/"
+    )
+
+
+def test_canonical_url_drops_the_share_parameters_apps_add() -> None:
+    thread = "https://www.reddit.com/r/python/comments/abc123/title/"
+    assert canonical_url(thread + "?share_id=K1&utm_source=share&utm_medium=ios_app") == thread
+    assert canonical_url("https://www.youtube.com/live/abc?si=x1") == (
+        "https://www.youtube.com/live/abc"
+    )
+    assert canonical_url("https://open.spotify.com/episode/4rOo?si=a1b2") == (
+        "https://open.spotify.com/episode/4rOo"
+    )
+    assert canonical_url("https://www.threads.net/@zuck/post/C1x?xmt=AQGz") == (
+        "https://www.threads.net/@zuck/post/C1x"
+    )
+    # X adds `a`, `s` and `t` to any link it shares, but its search keeps its query.
+    assert canonical_url("https://x.com/i/article/123?s=46&t=abc&a=xyz") == (
+        "https://x.com/i/article/123"
+    )
+    assert canonical_url("https://x.com/search?q=memory&s=1") == "https://x.com/search?q=memory"
 
 
 def test_get_extractor_returns_correct_source() -> None:
