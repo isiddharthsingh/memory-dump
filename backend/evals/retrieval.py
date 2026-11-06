@@ -26,6 +26,7 @@ from app.ai import retrieval
 from app.ai.retrieval import Candidate, hybrid_search
 from app.db.session import get_sessionmaker
 from app.errors import is_transient
+from app.extractors.base import canonical_url
 
 K = 6
 QUESTIONS = Path(__file__).with_name("questions.json")
@@ -92,8 +93,9 @@ async def main() -> None:
         _failed.clear()
         _plans.clear()
         hits = await _search(case["q"], args.user_id, today, args.raw)
-        expected = set(case["expect"])
-        found = [h.url for h in hits if h.kind == "item"]
+        # Links in the form items are saved under, however questions.json has them.
+        expected = {canonical_url(url) for url in case["expect"]}
+        found = [canonical_url(h.url) for h in hits if h.kind == "item" and h.url]
         recall = len(expected & set(found)) / len(expected)
         by_kind[case["kind"]].append(recall)
         flag = "!" if _failed else " "
@@ -104,7 +106,7 @@ async def main() -> None:
                 f"         query {plan.query!r} source={f.source} since={f.since} until={f.until}"
             )
         for h in hits:
-            mark = "+" if h.url in expected else " "
+            mark = "+" if h.url and canonical_url(h.url) in expected else " "
             label = h.title if h.kind == "item" else f"wiki:{h.slug}"
             print(f"         {mark} {h.score:5.3f} {label}")
         missed = expected - set(found)
