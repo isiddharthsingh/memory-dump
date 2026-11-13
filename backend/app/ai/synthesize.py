@@ -61,6 +61,26 @@ Style:
   duplicate facts the page already states; integrate the new perspective.
 - Do NOT print citations the user did not ask about; only cite the new
   item and previously-cited items already present in the page.
+- The user's corrections to the page, when there are any, outrank every
+  source: keep the page saying what they say, and never bring back what
+  they corrected, even when the new item states it.
+- Output ONLY the full new markdown body. No fences, no commentary.
+"""
+
+CORRECT_SYSTEM = """You maintain a personal wiki of interlinked topic \
+pages. The user read one and said what it gets wrong. You receive the page's \
+markdown and their corrections, oldest first; a later one outranks an earlier \
+one it disagrees with.
+
+Rewrite the page so that it agrees with every correction:
+- Change or remove each statement a correction contradicts, wherever the
+  page makes it, and add what a correction says is missing.
+- A statement that now says what the user said, rather than what its
+  source said, loses its `[item:UUID]` citation. Never cite an item for
+  something it doesn't say.
+- Change nothing else: keep the remaining wording, citations, `[[slug]]`
+  links and structure as they are.
+- Remove headings left with nothing under them.
 - Output ONLY the full new markdown body. No fences, no commentary.
 """
 
@@ -214,11 +234,13 @@ async def patch_page(
     item_summary: str | None,
     item_text: str | None,
     related_slugs: list[str],
+    corrections: list[str] | None = None,
 ) -> PatchedPage:
-    """The page with the item worked in. `related_slugs` should be the same
-    list for every page one item patches: the item's block and that list come
-    first, under a cache breakpoint, so patching its second, third and fourth
-    page reads them from the prompt cache."""
+    """The page with the item worked in, still agreeing with the user's
+    `corrections` to it. `related_slugs` should be the same list for every
+    page one item patches: the item's block and that list come first, under a
+    cache breakpoint, so patching its second, third and fourth page reads
+    them from the prompt cache."""
     settings = get_settings()
 
     title = existing_title or title_from_slug(slug)
@@ -237,7 +259,8 @@ async def patch_page(
         f"Page slug: {slug}\n"
         f"Page title: {title}\n\n"
         f"=== Current body (markdown) ===\n{_truncate(body, MAX_PAGE_CHARS)}\n\n"
-        "Produce the full updated markdown for this page. Output ONLY the markdown."
+        + (f"{_corrections_block(corrections)}\n\n" if corrections else "")
+        + "Produce the full updated markdown for this page. Output ONLY the markdown."
     )
 
     resp = await claude(
@@ -259,10 +282,7 @@ async def patch_page(
     if resp.stop_reason == "max_tokens":
         # A page cut off mid-sentence would replace the whole page.
         raise ValueError(f"patch_page {slug}: the answer was cut off at max_tokens")
-    new_body = "".join(b.text for b in resp.content if b.type == "text").strip()
-    # Strip any code fences the model added by mistake.
-    new_body = re.sub(r"^```(?:markdown)?\s*", "", new_body)
-    new_body = re.sub(r"\s*```$", "", new_body).strip()
+    new_body = _markdown(resp)
     if not new_body:
         new_body = body  # don't lose the page if the model returns empty
 
@@ -276,34 +296,61 @@ async def patch_page(
     )
 
 
-async def remove_from_page(*, body: str, item_id: uuid.UUID, gone_slugs: list[str]) -> str | None:
-    """The page rewritten without a deleted item and without links to deleted
-    pages, or None when Claude's answer is empty, cut off or refused; the
-    caller's forget_in_body does the work then."""
-    settings = get_settings()
+def _markdown(resp: Any) -> str:
+    """The answer's text, without the code fences the model sometimes wraps
+    a page in."""
+    text = "".join(b.text for b in resp.content if b.type == "text").strip()
+    text = re.sub(r"^```(?:markdown)?\s*", "", text)
+    return re.sub(r"\s*```$", "", text).strip()
 
-    user = (
-        f"Deleted item: [item:{item_id}]\n"
-        f"Pages that no longer exist: {', '.join(gone_slugs) or '(none)'}\n\n"
-        f"=== Page (markdown) ===\n{body}"
-    )
+
+async def _rewrite(purpose: str, system: str, user: str) -> str | None:
+    """A whole page rewritten by Claude, or None when the answer is empty,
+    cut off or refused, so a caller never replaces a page with half of one."""
     try:
         resp = await claude(
-            purpose="forget",
+            purpose=purpose,
             effort="medium",
-            model=settings.claude_synthesis_model,
+            model=get_settings().claude_synthesis_model,
             max_tokens=16_000,
-            system=FORGET_SYSTEM,
+            system=system,
             messages=[{"role": "user", "content": user}],
         )
     except Refused:
         return None
     if resp.stop_reason != "end_turn":
         return None
-    new_body = "".join(b.text for b in resp.content if b.type == "text").strip()
-    new_body = re.sub(r"^```(?:markdown)?\s*", "", new_body)
-    new_body = re.sub(r"\s*```$", "", new_body).strip()
-    return new_body or None
+    return _markdown(resp) or None
+
+
+def _corrections_block(corrections: list[str]) -> str:
+    listed = "\n".join(f"- {' '.join(c.split())}" for c in corrections)
+    return f"=== The user's corrections to this page, oldest first ===\n{listed}"
+
+
+async def correct_page(*, slug: str, title: str, body: str, corrections: list[str]) -> str | None:
+    """The page rewritten to agree with the user's corrections, or None when
+    Claude's answer is empty, cut off or refused: the page stays as it is,
+    and the corrections still bind every later patch."""
+    user = (
+        f"Page slug: {slug}\n"
+        f"Page title: {title}\n\n"
+        f"{_corrections_block(corrections)}\n\n"
+        f"=== Page (markdown) ===\n{body}"
+    )
+    return await _rewrite("correct_page", CORRECT_SYSTEM, user)
+
+
+async def remove_from_page(*, body: str, item_id: uuid.UUID, gone_slugs: list[str]) -> str | None:
+    """The page rewritten without a deleted item and without links to deleted
+    pages, or None when Claude's answer is empty, cut off or refused; the
+    caller's forget_in_body does the work then."""
+    user = (
+        f"Deleted item: [item:{item_id}]\n"
+        f"Pages that no longer exist: {', '.join(gone_slugs) or '(none)'}\n\n"
+        f"=== Page (markdown) ===\n{body}"
+    )
+    return await _rewrite("forget", FORGET_SYSTEM, user)
 
 
 def forget_in_body(body: str, item_id: uuid.UUID, gone_slugs: set[str]) -> str:

@@ -57,6 +57,10 @@ def forget_job_id(item_id: uuid.UUID | str) -> str:
     return f"forget:{item_id}"
 
 
+def correct_job_id(correction_id: uuid.UUID | str) -> str:
+    return f"correct:{correction_id}"
+
+
 async def enqueue_ingest(
     item_id: uuid.UUID, generation: int, *, upload: bool = False, pool: ArqRedis | None = None
 ) -> Job | None:

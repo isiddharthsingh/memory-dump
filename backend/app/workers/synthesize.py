@@ -75,6 +75,11 @@ async def read_pages(user_id: uuid.UUID, slugs: list[str]) -> dict[str, TopicPag
         return {p.slug: p for p in pages}
 
 
+def correction_texts(page: TopicPage) -> list[str]:
+    """What the user said the page gets wrong, oldest first."""
+    return [c["text"] for c in page.corrections or []]
+
+
 async def replace_chunks(
     session: AsyncSession, page: TopicPage, chunks_with_emb: list[tuple[str, list[float]]]
 ) -> None:
@@ -209,6 +214,7 @@ async def _draft(
     if (page is None or not page.source_item_ids) and holder is None:
         return _Draft(basis, None, [])
     body, title = (page.body_md, page.title) if page else ("", None)
+    corrections = correction_texts(page) if page else []
     # The item that held the slug goes in first, so the page takes the items
     # in the order they were saved; this item's patch always runs.
     for source in (holder, snap):
@@ -223,6 +229,7 @@ async def _draft(
             item_summary=source.summary,
             item_text=source.raw_text,
             related_slugs=related,
+            corrections=corrections,
         )
         body, title = patched.body_md, patched.title
     return _Draft(basis, patched, await embed_page_chunks(patched.body_md, patched.title))

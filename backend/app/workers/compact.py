@@ -197,12 +197,16 @@ async def _merge(user_id: uuid.UUID, keep: str, absorb: list[str]) -> int:
         kept.backlinks = sorted(set(WIKILINK_RE.findall(body)) - {keep}) or None
         kept.version = (kept.version or 1) + 1
         source_ids = list(kept.source_item_ids or [])
+        corrections = list(kept.corrections or [])
         for dup in dups:
             for sid in current[dup.slug].source_item_ids or []:
                 if sid not in source_ids:
                     source_ids.append(sid)
+            # What the user corrected on a merged page still holds on this one.
+            corrections += current[dup.slug].corrections or []
             await session.delete(current[dup.slug])
         kept.source_item_ids = source_ids
+        kept.corrections = sorted(corrections, key=lambda c: c["at"]) or None
         await replace_chunks(session, kept, chunks)
         await session.commit()
     return len(dups)

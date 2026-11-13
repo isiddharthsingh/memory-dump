@@ -19,6 +19,7 @@ from app.config import get_settings
 from app.logging_setup import adopt
 from app.observability import init_sentry
 from app.workers.compact import compact_topics, compact_user
+from app.workers.correct import correct_page
 from app.workers.digest import DIGEST_KEEP_RESULT_S, digest_user, weekly_digest
 from app.workers.ingest import ingest_file, ingest_item
 from app.workers.jobs import JOB_TIMEOUT_S, MAX_TRIES
@@ -43,6 +44,7 @@ class WorkerSettings:
         ingest_file,
         synthesize_topics,
         forget_item,
+        correct_page,
         compact_topics,
         compact_user,
         weekly_digest,

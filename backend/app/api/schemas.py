@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    StringConstraints,
+    model_validator,
+)
 
 
 class IngestRequest(BaseModel):
@@ -180,8 +187,22 @@ class TopicPageSummary(BaseModel):
     updated_at: datetime
 
 
+class Correction(BaseModel):
+    """Something the user said a wiki page gets wrong."""
+
+    id: uuid.UUID
+    text: str
+    at: datetime
+
+
+class CorrectionIn(BaseModel):
+    text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2_000)]
+
+
 class TopicPageDetail(TopicPageSummary):
     body_md: str
+    # Oldest first; every rewrite of the page agrees with them.
+    corrections: list[Correction] | None = None
 
 
 class ItemChanges(BaseModel):
