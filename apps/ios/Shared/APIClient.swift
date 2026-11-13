@@ -49,13 +49,24 @@ final class APIClient {
   /// Newest first. `before` is the last item of the previous page.
   func listItems(
     limit: Int? = nil, before: UUID? = nil, status: String? = nil, tag: String? = nil,
-    source: String? = nil
+    source: String? = nil, kind: String? = nil
   ) async throws -> [ItemSummary] {
     let query: [String: String?] = [
       "limit": limit.map(String.init), "before": before?.lower, "status": status,
-      "tag": tag, "source": source,
+      "tag": tag, "source": source, "kind": kind,
     ]
     return try await send("/items", query: query)
+  }
+
+  /// Every place the saved items name, newest item first, for the map.
+  func places() async throws -> [SavedPlace] {
+    try await send("/items/places")
+  }
+
+  /// Marks the item done (been there, made it, bought it) or not done.
+  func setDone(_ id: UUID, _ done: Bool) async throws -> ItemDetail {
+    try await send(
+      "/items/\(id.lower)/done", method: "PUT", body: ["done": done], saveAs: "/items/\(id.lower)")
   }
 
   /// What changed since the `until` of the last call; nil `since` the first time.
@@ -214,6 +225,45 @@ final class APIClient {
 
   func wikiPage(_ slug: String) async throws -> TopicPageDetail {
     try await send("/wiki/\(slug)")
+  }
+
+  /// Tells the server what the page gets wrong. It keeps the correction with
+  /// the page and rewrites the page in the background.
+  func addCorrection(_ slug: String, text: String) async throws -> TopicPageDetail {
+    try await send(
+      "/wiki/\(slug)/corrections", method: "POST", body: ["text": text], saveAs: "/wiki/\(slug)")
+  }
+
+  func removeCorrection(_ slug: String, id: UUID) async throws -> TopicPageDetail {
+    try await send(
+      "/wiki/\(slug)/corrections/\(id.lower)", method: "DELETE", saveAs: "/wiki/\(slug)")
+  }
+
+  // MARK: Export
+
+  /// Where an export waits for the share sheet.
+  private static let exports = FileManager.default.temporaryDirectory.appending(path: "export")
+
+  /// Removes the export left on the phone. It holds the whole library, so it
+  /// goes with the account's other copies at sign-out.
+  static func forgetExports() {
+    try? FileManager.default.removeItem(at: exports)
+  }
+
+  /// Downloads the library as a zip of Markdown notes for an Obsidian vault,
+  /// and returns where it was put. It replaces the export before it.
+  func exportObsidian() async throws -> URL {
+    let (downloaded, resp) = try await authorized { token in
+      try self.request(
+        "/export/obsidian", query: ["tz": TimeZone.current.identifier], token: token, timeout: 120)
+    } perform: { req in
+      try await self.http.download(for: req)
+    }
+    Self.forgetExports()
+    try FileManager.default.createDirectory(at: Self.exports, withIntermediateDirectories: true)
+    let file = Self.exports.appending(path: resp.suggestedFilename ?? "memory-dump.zip")
+    try FileManager.default.moveItem(at: downloaded, to: file)
+    return file
   }
 
   // MARK: Account
@@ -438,34 +488,5 @@ final class APIClient {
       req.httpBody = try JSONEncoder().encode(body)
     }
     return req
-  }
-}
-
-enum Multipart {
-  /// Writes a multipart/form-data body to a temporary file: the file part,
-  /// copied in 1 MB chunks, then an optional `share_text` field.
-  static func write(file: URL, name: String, mimeType: String, note: String?, boundary: String)
-    throws -> URL
-  {
-    let out = FileManager.default.temporaryDirectory.appending(path: "upload-\(UUID().uuidString)")
-    FileManager.default.createFile(atPath: out.path(percentEncoded: false), contents: nil)
-    let writer = try FileHandle(forWritingTo: out)
-    defer { try? writer.close() }
-    let safeName = name.replacing("\"", with: "")
-    try writer.write(contentsOf: Data(
-      "--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(safeName)\"\r\nContent-Type: \(mimeType)\r\n\r\n"
-        .utf8))
-    let reader = try FileHandle(forReadingFrom: file)
-    defer { try? reader.close() }
-    while let chunk = try reader.read(upToCount: 1 << 20), !chunk.isEmpty {
-      try writer.write(contentsOf: chunk)
-    }
-    if let note, !note.isEmpty {
-      try writer.write(contentsOf: Data(
-        "\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"share_text\"\r\n\r\n\(note)"
-          .utf8))
-    }
-    try writer.write(contentsOf: Data("\r\n--\(boundary)--\r\n".utf8))
-    return out
   }
 }

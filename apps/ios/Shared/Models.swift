@@ -16,9 +16,15 @@ struct ItemSummary: Codable, Identifiable, Hashable {
   // Optional so the app still parses servers older than this field.
   let error: String?
   let createdAt: Date
+  /// What the save is for: place, recipe, product, media, howto or other.
+  /// Nil for items analysed before kinds, and from servers older than them.
+  var kind: String? = nil
+  /// When it was marked done; nil while it isn't.
+  var doneAt: Date? = nil
 
   var isBusy: Bool { status == "pending" || status == "processing" }
   var isFailed: Bool { status == "failed" }
+  var isDone: Bool { doneAt != nil }
 }
 
 struct ItemDetail: Codable, Identifiable, Hashable {
@@ -38,8 +44,41 @@ struct ItemDetail: Codable, Identifiable, Hashable {
   let brandsProducts: [String]?
   let topics: [String]?
   let shareText: String?
+  var kind: String? = nil
+  var doneAt: Date? = nil
+  var details: ItemDetails? = nil
 
   var isBusy: Bool { status == "pending" || status == "processing" }
+  var isDone: Bool { doneAt != nil }
+}
+
+/// What an item's kind keeps: a place's addresses, a recipe's ingredients and
+/// steps, a how-to's steps, a product's price.
+struct ItemDetails: Codable, Hashable {
+  struct Place: Codable, Hashable {
+    let name: String
+    let address: String
+
+    /// What a map is asked for: the name, and the address when there is one.
+    var query: String { address.isEmpty ? name : "\(name), \(address)" }
+  }
+
+  var places: [Place]? = nil
+  var ingredients: [String]? = nil
+  var steps: [String]? = nil
+  var price: String? = nil
+}
+
+/// One place a saved item names, for the map (`/items/places`).
+struct SavedPlace: Codable, Hashable, Identifiable {
+  let item: UUID
+  let title: String?
+  let name: String
+  let address: String
+  let done: Bool
+
+  var id: String { "\(item.lower)|\(name)|\(address)" }
+  var query: String { ItemDetails.Place(name: name, address: address).query }
 }
 
 struct TopicPageSummary: Codable, Identifiable, Hashable {
@@ -61,6 +100,14 @@ struct TopicPageDetail: Codable, Identifiable, Hashable {
   let version: Int
   let updatedAt: Date
   let bodyMd: String
+  /// What the user said the page gets wrong, oldest first.
+  var corrections: [Correction]? = nil
+}
+
+struct Correction: Codable, Hashable, Identifiable {
+  let id: UUID
+  let text: String
+  let at: Date
 }
 
 struct SearchHit: Codable, Hashable {
