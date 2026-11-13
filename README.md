@@ -130,23 +130,28 @@ versioned.
 | DELETE | `/v1/auth/me`         | delete the account and everything in it |
 | POST   | `/v1/ingest`          | submit a URL                            |
 | POST   | `/v1/ingest/file`     | upload a PDF or image, up to 5 MB (`Idempotency-Key`) |
-| GET    | `/v1/items`           | list (filter by `status`, `tag`, `source`; page with `before=<id>`) |
+| GET    | `/v1/items`           | list (filter by `status`, `tag`, `source`, `kind`, `done`; page with `before=<id>`) |
+| GET    | `/v1/items/places`    | every place the saved items name, for the map |
 | GET    | `/v1/items/changes`   | ids changed and deleted since `since`   |
 | GET    | `/v1/items/tags`      | tag counts for the chip filter         |
 | GET    | `/v1/items/{id}`      | item detail (ETag)                      |
 | PATCH  | `/v1/items/{id}`      | edit the note, re-run the pipeline      |
+| PUT    | `/v1/items/{id}/done` | mark done or not done (`{"done": true}`) |
 | POST   | `/v1/items/{id}/retry` | re-queue a failed item                 |
 | GET    | `/v1/items/{id}/thumbnail` | an upload's thumbnail (JPEG)       |
 | DELETE | `/v1/items/{id}`      | delete                                  |
 | POST   | `/v1/search`          | hybrid retrieval (returns SearchHits)   |
-| POST   | `/v1/ask`             | RAG answer with citations; `history` for follow-ups, `item` or `topic` to ask about one item or wiki page |
-| POST   | `/v1/ask/stream`      | the same answer as server-sent events (`token`, `done`, `error`) |
+| POST   | `/v1/ask`             | RAG answer with citations, looking further with tools when it needs to; `history` for follow-ups, `item` or `topic` to ask about one item or wiki page |
+| POST   | `/v1/ask/stream`      | the same answer as server-sent events (`token`, `step`, `done`, `error`) |
 | GET    | `/v1/chats`           | Ask history: each chat's questions (page with `before=<id>`) |
 | GET    | `/v1/chats/{id}`      | one chat with its answers (ETag)        |
 | PUT    | `/v1/chats/{id}`      | save a chat (the app picks the id; `version` → 409 on conflict) |
 | DELETE | `/v1/chats/{id}`      | delete a chat                           |
 | GET    | `/v1/wiki`            | list topic pages                        |
-| GET    | `/v1/wiki/{slug}`     | topic page markdown (ETag)              |
+| GET    | `/v1/wiki/{slug}`     | topic page markdown and its corrections (ETag) |
+| POST   | `/v1/wiki/{slug}/corrections` | say what the page gets wrong; it is rewritten to agree |
+| DELETE | `/v1/wiki/{slug}/corrections/{id}` | stop holding the page to a correction |
+| GET    | `/v1/export/obsidian` | the library as a zip of Markdown notes for an Obsidian vault |
 
 Everything except the health checks, metrics, sign-up, sign-in and refresh takes
 `Authorization: Bearer <access token>`. Send `st-auth-mode: header` with sign-up
