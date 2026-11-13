@@ -182,7 +182,7 @@ struct AskView: View {
             intro
           } else {
             ForEach(model.turns) { turn in
-              AskTurnView(turn: turn) { model.retry(turn) }.id(turn.id)
+              AskTurnView(turn: turn, step: turn.isStreaming ? model.step : nil) { model.retry(turn) }.id(turn.id)
             }
           }
           Color.clear.frame(height: 1).id("end")
@@ -357,6 +357,8 @@ struct AskView: View {
 
 private struct AskTurnView: View {
   let turn: AskModel.Turn
+  /// What the answer is looking up before its text starts, when the server says.
+  var step: String?
   let retry: () -> Void
   @Environment(Router.self) private var router
 
@@ -399,7 +401,8 @@ private struct AskTurnView: View {
           if turn.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && turn.isStreaming {
             HStack(spacing: 8) {
               ProgressView()
-              Text("Searching your library…").font(.subheadline).foregroundStyle(Palette.ink3)
+              Text(step.map { "\($0)…" } ?? "Searching your library…")
+                .font(.subheadline).foregroundStyle(Palette.ink3)
             }
           } else {
             MarkdownView(LinkRewriter.answer(turn.answer, order: numbered.order), bodyFont: .body, lineSpacing: 5)

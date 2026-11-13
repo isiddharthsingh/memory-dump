@@ -17,6 +17,9 @@ final class AskModel {
   var scope: AskScope?
   private(set) var tags: [TagCount] = []
   private(set) var wiki: [TopicPageSummary] = []
+  /// What the answer under way is looking up ("Listing your places"),
+  /// until its text starts.
+  private(set) var step: String?
 
   private var stream: Task<Void, Never>?
   /// Server writes run one after another, so an older copy of a chat never
@@ -145,6 +148,7 @@ final class AskModel {
   private func run(chat: UUID, turn: UUID, question: String, earlier: [Turn]) {
     stream?.cancel()
     let scope = scope
+    step = nil
     stream = Task {
       do {
         for try await event in APIClient.shared.askStream(question, history: earlier, scope: scope) {
@@ -152,6 +156,7 @@ final class AskModel {
           if Task.isCancelled { break }
           switch event {
           case .token(let text): update(chat, turn) { $0.answer += text }
+          case .step(let text): step = text
           case .done(let citations):
             update(chat, turn) {
               $0.citations = citations

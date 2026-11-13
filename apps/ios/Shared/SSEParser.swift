@@ -2,6 +2,8 @@ import Foundation
 
 enum AskEvent: Equatable {
   case token(String)
+  /// A lookup the answer is making on the way ("Listing your places").
+  case step(String)
   case done([Citation])
   case error(String)
 }
@@ -24,6 +26,9 @@ struct SSEParser {
     switch event {
     case "token":
       return .token(try JSONDecoder.api.decode(TokenData.self, from: json).text)
+    case "step":
+      // Only a status line: one that can't be read is skipped.
+      return (try? JSONDecoder.api.decode(TokenData.self, from: json).text).map(AskEvent.step)
     case "done":
       // A bad citation list should not lose the answer.
       let citations = (try? JSONDecoder.api.decode(DoneData.self, from: json).citations) ?? []
