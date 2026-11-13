@@ -94,6 +94,7 @@ final class AppModel {
   private static func forgetSavedCopies() {
     SavedResponses.shared.clear()
     ImageCache.clear()
+    APIClient.forgetExports()
   }
 
   // MARK: Becoming active

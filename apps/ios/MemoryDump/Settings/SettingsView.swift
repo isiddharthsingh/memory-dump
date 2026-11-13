@@ -11,6 +11,9 @@ struct SettingsView: View {
   @State private var confirmSignOut = false
   @State private var confirmDelete = false
   @State private var deleteError: String?
+  @State private var exporting = false
+  @State private var exported: ExportedFile?
+  @State private var exportError: String?
 
   var body: some View {
     NavigationStack {
@@ -63,6 +66,16 @@ struct SettingsView: View {
         .listRowBackground(Palette.card)
 
         Section {
+          Button(exporting ? "Preparing your export…" : "Export for Obsidian") { Task { await export() } }
+            .disabled(exporting)
+        } header: {
+          Text("Your data")
+        } footer: {
+          Text("A zip of Markdown notes, one per saved item and wiki page. Unzip it into an Obsidian vault.")
+        }
+        .listRowBackground(Palette.card)
+
+        Section {
           Button("Sign out", role: .destructive) { confirmSignOut = true }
           Button("Delete account…", role: .destructive) { confirmDelete = true }
         } footer: {
@@ -106,6 +119,14 @@ struct SettingsView: View {
       } message: {
         Text(deleteError ?? "")
       }
+      .alert("Couldn’t export your library", isPresented: .constant(exportError != nil)) {
+        Button("OK") { exportError = nil }
+      } message: {
+        Text(exportError ?? "")
+      }
+      .sheet(item: $exported) { file in
+        ShareSheet(file: file.url).presentationDetents([.medium, .large])
+      }
     }
     .task { await check() }
   }
@@ -126,6 +147,18 @@ struct SettingsView: View {
     health == true ? Haptics.success() : Haptics.error()
   }
 
+  /// Downloads the export, then offers it to Files and other apps.
+  private func export() async {
+    exporting = true
+    defer { exporting = false }
+    do {
+      exported = ExportedFile(url: try await APIClient.shared.exportObsidian())
+    } catch {
+      Haptics.error()
+      exportError = error.localizedDescription
+    }
+  }
+
   private func deleteAccount() async {
     do {
       try await app.deleteAccount()
@@ -133,6 +166,22 @@ struct SettingsView: View {
       deleteError = error.localizedDescription
     }
   }
+}
+
+private struct ExportedFile: Identifiable {
+  let url: URL
+  var id: URL { url }
+}
+
+/// The system share sheet for a file, so the export can go to Files.
+private struct ShareSheet: UIViewControllerRepresentable {
+  let file: URL
+
+  func makeUIViewController(context: Context) -> UIActivityViewController {
+    UIActivityViewController(activityItems: [file], applicationActivities: nil)
+  }
+
+  func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
 /// System, Light and Dark, each shown as a tiny Library wall. System shows
