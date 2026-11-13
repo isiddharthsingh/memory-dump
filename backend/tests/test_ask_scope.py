@@ -16,6 +16,7 @@ from sqlalchemy import create_engine, insert
 from app.ai import ask as ask_module
 from app.ai import retrieval
 from app.ai.ask import Turn
+from app.ai.ask_tools import format_chunks
 from app.ai.retrieval import Candidate, Filters, Scope, hybrid_search
 from app.config import get_settings
 from app.db.models import EMBED_DIM, Item, ItemChunk, TopicPage, TopicPageChunk
@@ -86,7 +87,9 @@ class Claude:
             yield "An answer."
 
         async def final() -> Any:
-            return SimpleNamespace(content=[SimpleNamespace(type="text", text="An answer.")])
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="An answer.")], stop_reason="end_turn"
+            )
 
         yield SimpleNamespace(text_stream=text(), get_final_message=final)
 
@@ -514,6 +517,6 @@ def test_each_context_chunk_says_its_source_and_day() -> None:
         slug="spices",
         at=datetime(2026, 10, 30, 8, tzinfo=UTC),
     )
-    context = ask_module._format_context([item, page], UTC)
+    context = format_chunks([item, page], UTC)
     assert f"[item:{item.parent_id}] A title\nA post on X (Twitter), saved 2026-10-29\n" in context
     assert "[wiki:spices] Spices\nA wiki page, updated 2026-10-30\nA page." in context

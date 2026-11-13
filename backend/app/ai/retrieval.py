@@ -49,20 +49,28 @@ class Scope:
     item_ids: tuple[uuid.UUID, ...] = ()
     page_ids: tuple[uuid.UUID, ...] = ()
 
+    @property
+    def one_item(self) -> bool:
+        """An Ask about one item: it wants that item's best passages, however
+        many, so its searches don't cap the passages per item."""
+        return not self.page_ids and len(self.item_ids) == 1
+
 
 @dataclass(frozen=True)
 class Filters:
-    """Which saved items a question is about: their source and the days they
-    were saved (days in `tz`, the user's time zone, both ends included). Wiki
-    pages aren't saved items, so a search with any filter leaves them out."""
+    """Which saved items a question is about: their source, their kind
+    (app/ai/analyze.py KINDS) and the days they were saved (days in `tz`, the
+    user's time zone, both ends included). Wiki pages aren't saved items, so
+    a search with any filter leaves them out."""
 
     source: str | None = None
     since: date | None = None
     until: date | None = None
     tz: tzinfo = UTC
+    kind: str | None = None
 
     def __bool__(self) -> bool:
-        return bool(self.source or self.since or self.until)
+        return bool(self.source or self.kind or self.since or self.until)
 
 
 def _restrictions(scope: Scope | None, filters: Filters | None) -> tuple[str, str, dict[str, Any]]:
@@ -82,6 +90,9 @@ def _restrictions(scope: Scope | None, filters: Filters | None) -> tuple[str, st
         if filters.source:
             items.append("i.source = :source")
             params["source"] = filters.source
+        if filters.kind:
+            items.append("i.kind = :kind")
+            params["kind"] = filters.kind
         if filters.since:
             items.append("i.created_at >= :since")
             params["since"] = datetime.combine(filters.since, time(), filters.tz)

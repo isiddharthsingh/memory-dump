@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.ask_tools import TOOLS, StreamStep, Toolbox, echo, format_chunks, lookups
 from app.ai.clients import claude_json, claude_stream
 from app.ai.retrieval import SOURCES, Candidate, Filters, Scope, hybrid_search
 from app.config import get_settings
@@ -20,21 +21,35 @@ from app.db.models import Item, TopicPage
 
 log = logging.getLogger(__name__)
 
-ASK_SYSTEM = """You answer questions about the user's personal saved \
-content (videos, tweets, articles, Instagram posts, PDFs, images) using \
-ONLY the provided context chunks.
+ASK_SYSTEM = """You answer questions about the user's personal library of \
+saved things (videos, posts, articles, PDFs, images) and the wiki pages \
+written from them, using ONLY what the passages below and your lookups return.
+
+The question comes with the passages a search of the library found for it. \
+When they answer it, answer from them. When they don't, or the question is \
+about many items at once (a list, a count, everything of one kind or from one \
+period, a comparison), look further before you answer:
+- search: another search, in other words or narrowed by source, kind or save \
+  date.
+- list_items: saved items with their titles, kinds, dates and summaries, and \
+  how many match. This is how to answer "list every…", "how many…" and "what \
+  did I save…".
+- read: one item or wiki page in full, when a passage is cut short.
+Make as few lookups as the question needs, and write nothing until you are \
+ready to answer.
 
 Rules:
 - Be concise. 1-4 sentences for simple questions; bullets for lists.
 - ALWAYS cite the source item for every claim using the format \
   `[item:UUID]` for raw items or `[wiki:slug]` for synthesized pages.
-  Put citations inline right after the claim they support.
-- Each chunk says what kind of item it comes from and the day the user \
+  Put citations inline right after the claim they support. In a list of \
+  items, cite each item on its own line.
+- Each passage says what kind of item it comes from and the day the user \
   saved it (for a wiki page, the day it was last updated): use them for \
   questions about when something was saved or what kind of thing it was.
 - Earlier questions and answers, when there are any, tell you what a \
   follow-up refers to.
-- If the context doesn't answer the question, say "I don't have \
+- If nothing you found answers the question, say "I don't have \
   anything saved about that" — do not invent.
 - Prefer the user's own framing/words where helpful.
 """
@@ -47,8 +62,12 @@ TURN_CHARS = 4_000
 # page, so the context holds at least three sources.
 CONTEXT_CHUNKS = 6
 PER_SOURCE = 2
-# The answer thinks first, and thinking counts toward max_tokens.
-ANSWER_MAX_TOKENS = 8000
+# The answer thinks first, and thinking counts toward max_tokens. Room for a
+# list of every item the lookups found, each with its citation.
+ANSWER_MAX_TOKENS = 16_000
+# Times one answer may go back to the library (app/ai/ask_tools.py) before it
+# has to answer from what it has.
+MAX_LOOKUP_ROUNDS = 5
 # A planner slower than this is skipped: the question is searched as asked.
 PLAN_TIMEOUT_S = 10.0
 
@@ -85,17 +104,6 @@ PLAN_SCHEMA: dict[str, Any] = {
     },
     "required": ["query", "source", "since", "until"],
     "additionalProperties": False,
-}
-
-# How each source reads in the context.
-_SOURCE_NAMES = {
-    "twitter": "a post on X (Twitter)",
-    "instagram": "an Instagram post",
-    "youtube": "a YouTube video",
-    "reddit": "a Reddit post",
-    "web": "a web page",
-    "pdf": "a PDF",
-    "image": "an image",
 }
 
 
@@ -141,26 +149,6 @@ def zone(name: str | None) -> tzinfo:
         except (ZoneInfoNotFoundError, ValueError):
             log.info("unknown time zone %r, using UTC", name)
     return UTC
-
-
-def _day(at: datetime | None, tz: tzinfo) -> str:
-    return at.astimezone(tz).date().isoformat() if at else "an unknown day"
-
-
-def _format_context(chunks: list[Candidate], tz: tzinfo) -> str:
-    blocks = []
-    for c in chunks:
-        if c.kind == "item":
-            head = f"[item:{c.parent_id}] {c.title or '(untitled)'}"
-            if c.url:
-                head += f" — {c.url}"
-            kind = _SOURCE_NAMES.get(c.source or "", "an item")
-            head += f"\n{kind[0].upper()}{kind[1:]}, saved {_day(c.at, tz)}"
-        else:
-            head = f"[wiki:{c.slug}] {c.title or '(untitled)'}"
-            head += f"\nA wiki page, updated {_day(c.at, tz)}"
-        blocks.append(f"{head}\n{c.text}")
-    return "\n\n---\n\n".join(blocks)
 
 
 def _recent(history: Sequence[Turn]) -> list[Turn]:
@@ -276,8 +264,7 @@ async def retrieve(
     with the plan's filters, and without them when they leave nothing.
     `history` is what `_recent` kept of the chat."""
     plan = await plan_query(question, history, today or datetime.now(tz).date(), tz)
-    # An Ask about one item wants that item's best passages, however many.
-    one_item = scope is not None and not scope.page_ids and len(scope.item_ids) == 1
+    one_item = scope is not None and scope.one_item
 
     async def search(filters: Filters | None) -> list[Candidate]:
         return await hybrid_search(
@@ -298,12 +285,12 @@ async def retrieve(
 
 def _messages(
     question: str, history: Sequence[Turn], chunks: list[Candidate], today: date, tz: tzinfo
-) -> list[dict[str, str]]:
-    messages: list[dict[str, str]] = []
+) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
     for t in history:
         messages.append({"role": "user", "content": t.question})
         messages.append({"role": "assistant", "content": t.answer})
-    context = _format_context(chunks, tz)
+    context = format_chunks(chunks, tz)
     messages.append(
         {
             "role": "user",
@@ -409,8 +396,14 @@ async def ask_stream(
     history: Sequence[Turn] = (),
     scope: Scope | None = None,
     tz: tzinfo = UTC,
-) -> AsyncIterator[StreamToken | StreamDone]:
-    """Stream Claude tokens as they arrive, then emit citations at the end."""
+) -> AsyncIterator[StreamToken | StreamStep | StreamDone]:
+    """Streams the answer's text as it arrives, a step for each lookup it
+    makes on the way, then its citations.
+
+    Claude gets the planned search's passages and may look further (TOOLS) up
+    to MAX_LOOKUP_ROUNDS times; the lookups of the last round come back with
+    a note to answer now, and a turn that asks for more after that ends the
+    answer where it is."""
     today = datetime.now(tz).date()
     history = _recent(history)
     chunks = await retrieve(
@@ -422,21 +415,59 @@ async def ask_stream(
         return
 
     settings = get_settings()
+    toolbox = Toolbox(session=session, user_id=user_id, scope=scope, tz=tz)
+    messages = _messages(question, history, chunks, today, tz)
     pieces: list[str] = []
-    async with claude_stream(
-        purpose="ask",
-        timeout_s=settings.ask_timeout_s,
-        effort="medium",
-        model=settings.claude_ask_model,
-        max_tokens=ANSWER_MAX_TOKENS,
-        system=ASK_SYSTEM,
-        messages=_messages(question, history, chunks, today, tz),
-    ) as stream:
-        async for text in stream.text_stream:
-            pieces.append(text)
-            yield StreamToken(text=text)
+    for round_ in range(MAX_LOOKUP_ROUNDS + 1):
+        async with claude_stream(
+            purpose="ask",
+            timeout_s=settings.ask_timeout_s,
+            effort="medium",
+            model=settings.claude_ask_model,
+            max_tokens=ANSWER_MAX_TOKENS,
+            system=ASK_SYSTEM,
+            tools=TOOLS,
+            messages=messages,
+        ) as stream:
+            wrote = False
+            async for text in stream.text_stream:
+                wrote = True
+                pieces.append(text)
+                yield StreamToken(text=text)
+            message = await stream.get_final_message()
+
+        # Only a turn that stopped to look something up goes on; one cut off
+        # at max_tokens may hold half a call. The calls are the ones the turn
+        # keeps when it is sent back: each must get its answer, and no other.
+        turn = echo(message.content)
+        calls = [b for b in turn if b.type == "tool_use"]
+        if message.stop_reason != "tool_use" or not calls or round_ == MAX_LOOKUP_ROUNDS:
+            break
+        if wrote:
+            # Whatever it said before looking further stays apart from the answer.
+            pieces.append("\n\n")
+            yield StreamToken(text="\n\n")
+        results: list[dict[str, Any]] = []
+        async for step in lookups(toolbox, calls):
+            if isinstance(step, StreamStep):
+                yield step
+            else:
+                results.append(step)
+        if round_ == MAX_LOOKUP_ROUNDS - 1:
+            results.append(
+                {"type": "text", "text": "That was the last lookup. Answer now from what you have."}
+            )
+        messages.append({"role": "assistant", "content": turn})
+        messages.append({"role": "user", "content": results})
 
     answer = "".join(pieces).strip()
+    if not answer:
+        # Nothing was answered, so nothing found is its source.
+        yield StreamToken(
+            text="I couldn't finish looking that up. Try asking about a smaller part of it."
+        )
+        yield StreamDone(citations=[])
+        return
     citations = await _collect_citations(session, answer, chunks, user_id)
     yield StreamDone(citations=citations)
 
@@ -450,30 +481,12 @@ async def ask(
     scope: Scope | None = None,
     tz: tzinfo = UTC,
 ) -> AskResult:
-    today = datetime.now(tz).date()
-    history = _recent(history)
-    chunks = await retrieve(
-        session, question, user_id, history=history, scope=scope, today=today, tz=tz
-    )
-    if not chunks:
-        return AskResult(
-            answer="I don't have anything saved about that.",
-            citations=[],
-        )
-
-    settings = get_settings()
-    # Streamed, then read whole: the answer thinks first, and ASK_TIMEOUT_S
-    # bounds each read of a stream but the whole of a plain call.
-    async with claude_stream(
-        purpose="ask",
-        timeout_s=settings.ask_timeout_s,
-        effort="medium",
-        model=settings.claude_ask_model,
-        max_tokens=ANSWER_MAX_TOKENS,
-        system=ASK_SYSTEM,
-        messages=_messages(question, history, chunks, today, tz),
-    ) as stream:
-        resp = await stream.get_final_message()
-    answer = "".join(b.text for b in resp.content if b.type == "text").strip()
-    citations = await _collect_citations(session, answer, chunks, user_id)
-    return AskResult(answer=answer, citations=citations)
+    """The whole answer at once: `ask_stream`, read to its end."""
+    pieces: list[str] = []
+    citations: list[Citation] = []
+    async for event in ask_stream(session, question, user_id, history=history, scope=scope, tz=tz):
+        if isinstance(event, StreamToken):
+            pieces.append(event.text)
+        elif isinstance(event, StreamDone):
+            citations = event.citations
+    return AskResult(answer="".join(pieces).strip(), citations=citations)

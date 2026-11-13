@@ -88,6 +88,9 @@ async def ask_stream_endpoint(
             ):
                 if isinstance(evt, ask_module.StreamToken):
                     yield _sse("token", {"text": evt.text})
+                elif isinstance(evt, ask_module.StreamStep):
+                    # Builds that don't know the event skip it.
+                    yield _sse("step", {"text": evt.text})
                 else:
                     yield _sse(
                         "done",
