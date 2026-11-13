@@ -228,6 +228,8 @@ final class WikiPageModel {
   private(set) var order: [String] = []
   private(set) var sources: [String: ItemDetail] = [:]
   private(set) var titles: [String: String] = [:]
+  /// A correction was just sent and the server is rewriting the page.
+  private(set) var rewriting = false
 
   init(slug: String) { self.slug = slug }
 
@@ -250,12 +252,47 @@ final class WikiPageModel {
     await loadSources()
   }
 
+  /// An empty `list` keeps the titles already known.
   private func show(_ page: TopicPageDetail, list: [TopicPageSummary]) {
-    titles = Dictionary(list.map { ($0.slug, $0.title) }, uniquingKeysWith: { a, _ in a })
+    if !list.isEmpty {
+      titles = Dictionary(list.map { ($0.slug, $0.title) }, uniquingKeysWith: { a, _ in a })
+    }
     self.page = page
     order = LinkRewriter.citationOrder(page.bodyMd, sourceIds: page.sourceItemIds ?? [])
     blocks = MarkdownBlocks.parse(
       LinkRewriter.wiki(page.bodyMd, title: title, order: order, titles: titles))
+  }
+
+  /// Sends what the page gets wrong; throws when the server won't take it.
+  /// The correction shows at once. The rewrite takes the server a moment, so
+  /// the page is then fetched again until its version moves, or for about a
+  /// minute: a rewrite that changes nothing never does.
+  func correct(_ text: String) async throws {
+    let sent = try await APIClient.shared.addCorrection(slug, text: text)
+    show(sent, list: [])
+    rewriting = true
+    Task {
+      defer { rewriting = false }
+      for _ in 0..<20 {
+        try? await Task.sleep(for: .seconds(3))
+        guard let now = try? await APIClient.shared.wikiPage(slug) else { continue }
+        if now.version != sent.version {
+          show(now, list: [])
+          await loadSources()
+          return
+        }
+      }
+    }
+  }
+
+  /// Stops holding the page to a correction.
+  func remove(_ correction: Correction) async {
+    if let page = try? await APIClient.shared.removeCorrection(slug, id: correction.id) {
+      show(page, list: [])
+      Haptics.success()
+    } else {
+      Haptics.error()
+    }
   }
 
   /// Saved copies first, so the cards fill in at once, then the server's.
@@ -273,6 +310,7 @@ final class WikiPageModel {
 struct WikiPageView: View {
   @Environment(Router.self) private var router
   @State private var model: WikiPageModel
+  @State private var correcting = false
 
   init(slug: String) {
     _model = State(initialValue: WikiPageModel(slug: slug))
@@ -303,6 +341,13 @@ struct WikiPageView: View {
         .tint(Palette.accent)
         .disabled(model.page == nil)
       }
+      ToolbarItem(placement: .topBarTrailing) {
+        Button("Correct this page", systemImage: "pencil.line") { correcting = true }
+          .disabled(model.page == nil)
+      }
+    }
+    .sheet(isPresented: $correcting) {
+      CorrectionEditor(title: model.title) { text in try await model.correct(text) }
     }
     .task { await model.load() }
   }
@@ -324,6 +369,13 @@ struct WikiPageView: View {
         Text("Written from \(Format.plural(page.sourceItemIds?.count ?? 0, "source")) · updated \(Format.relativeTime(page.updatedAt))")
           .font(.subheadline).foregroundStyle(Palette.ink2).padding(.top, 8)
         Divider().padding(.vertical, 20)
+        if model.rewriting {
+          HStack(spacing: 8) {
+            ProgressView()
+            Text("Rewriting this page with your correction…").font(.subheadline).foregroundStyle(Palette.ink2)
+          }
+          .padding(.bottom, 16)
+        }
         MarkdownView(blocks: model.blocks)
 
         if !model.order.isEmpty {
@@ -345,6 +397,27 @@ struct WikiPageView: View {
               }
               .buttonStyle(.plain)
             }
+          }
+        }
+
+        if let corrections = page.corrections, !corrections.isEmpty {
+          section("Your corrections") {
+            ForEach(corrections) { correction in
+              HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                  Text(correction.text).font(.callout).foregroundStyle(Palette.ink)
+                  Text(Format.relativeTime(correction.at)).font(.caption).foregroundStyle(Palette.ink3)
+                }
+                Spacer()
+                Button("Remove this correction", systemImage: "xmark.circle.fill") {
+                  Task { await model.remove(correction) }
+                }
+                .labelStyle(.iconOnly)
+                .foregroundStyle(Palette.ink3)
+              }
+            }
+            Text("This page is kept to these whenever something new is saved to it.")
+              .font(.footnote).foregroundStyle(Palette.ink3)
           }
         }
 
