@@ -9,6 +9,7 @@ struct LibraryView: View {
   @State private var noteTarget: ItemSummary?
   @State private var showSettings = false
   @State private var showSaveLink = false
+  @State private var showMap = false
 
   private static let maxTagChips = 12
 
@@ -48,6 +49,9 @@ struct LibraryView: View {
       .sheet(isPresented: $showSettings) { SettingsView() }
       .sheet(isPresented: $showSaveLink) {
         SaveLinkSheet { await model.reload() }
+      }
+      .sheet(isPresented: $showMap) {
+        PlacesMapView { id in router.push(.item(id)) }
       }
   }
 
@@ -97,6 +101,18 @@ struct LibraryView: View {
     chips.padding(.horizontal, -16)
     if model.filter == .all {
       Rediscover(pool: model.pool)
+    }
+    if model.filter == .kind("place"), !model.items.isEmpty {
+      Button {
+        showMap = true
+      } label: {
+        Label("See them on a map", systemImage: "map")
+          .font(.subheadline.weight(.bold))
+          .foregroundStyle(Palette.onInk)
+          .frame(maxWidth: .infinity, minHeight: 46)
+          .background(Palette.ink, in: .capsule)
+      }
+      .buttonStyle(PressableCardStyle())
     }
     if model.items.isEmpty {
       Text("Nothing saved matches this filter.")
