@@ -13,7 +13,7 @@ from supertokens_python.framework.fastapi import get_middleware
 from voyageai import error as voyage_error
 
 from app import kv, logging_setup  # noqa: F401  — configures stdlib + structlog
-from app.api import ask, auth, chats, devices, ingest, items, search, wiki
+from app.api import ask, auth, chats, devices, export, ingest, items, search, wiki
 from app.auth.rate_limit import AuthRateLimit
 from app.auth.supertokens import init_supertokens
 from app.config import get_settings
@@ -124,6 +124,7 @@ for router in (
     chats.router,
     wiki.router,
     devices.router,
+    export.router,
 ):
     app.include_router(router, prefix="/v1")
     # The same routes unversioned, for app builds from before /v1.
