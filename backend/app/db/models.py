@@ -95,6 +95,13 @@ class Item(Base):
     # page is only made once a second item proposes the same slug, so the
     # wiki doesn't grow one page per item; the slug waits here until then.
     held_topics: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    # What the save is for (app/ai/analyze.py KINDS), and what the analysis
+    # pulled out for that kind: `places`, `ingredients`, `steps`, `price`.
+    # Null for items analysed before kinds; app/workers/classify.py fills them.
+    kind: Mapped[str | None] = mapped_column(String(16))
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # When the user marked it done (been there, cooked it, bought it).
+    done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -146,6 +153,10 @@ class TopicPage(Base):
     backlinks: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     source_item_ids: Mapped[list[uuid.UUID] | None] = mapped_column(ARRAY(UUID(as_uuid=True)))
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # What the user said the page gets wrong, oldest first, each
+    # {"id", "text", "at"}. Every later patch of the page is written to agree
+    # with them (app/ai/synthesize.py).
+    corrections: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=func.now(), nullable=False
     )
