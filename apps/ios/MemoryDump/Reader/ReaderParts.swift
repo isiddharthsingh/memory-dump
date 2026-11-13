@@ -260,3 +260,81 @@ struct Pill: View {
     .background(fill, in: .capsule)
   }
 }
+
+/// What the save is for and what was pulled out for it: a place's addresses,
+/// a recipe's ingredients and steps, a product's price, and the button that
+/// marks it done. Saves of no particular kind have no card.
+struct KindCard: View {
+  let item: ItemDetail
+  let setDone: (Bool) -> Void
+  @Environment(\.openURL) private var openURL
+
+  var body: some View {
+    if let kind = Format.kind(item.kind) {
+      let details = item.details ?? ItemDetails()
+      VStack(alignment: .leading, spacing: 16) {
+        HStack {
+          Label((details.places?.count ?? 0) > 1 ? kind.plural : kind.singular, systemImage: kind.symbol)
+            .font(.footnote.weight(.bold)).foregroundStyle(Palette.accent)
+          Spacer()
+          if let price = details.price { Pill(label: price, fill: Palette.ground) }
+        }
+        ForEach(details.places ?? [], id: \.self) { place in
+          Button {
+            if let url = Format.mapsURL(place.query) { openURL(url) }
+          } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(place.name).font(.body.weight(.semibold)).foregroundStyle(Palette.ink)
+                if !place.address.isEmpty {
+                  Text(place.address).font(.subheadline).foregroundStyle(Palette.ink2)
+                }
+              }
+              .multilineTextAlignment(.leading)
+              Spacer()
+              Image(systemName: "map").font(.subheadline.weight(.semibold)).foregroundStyle(Palette.accent)
+            }
+          }
+          .buttonStyle(.plain)
+          .accessibilityHint("Opens in Maps")
+        }
+        if let ingredients = details.ingredients {
+          listed("Ingredients", ingredients.map { ("•", $0) })
+        }
+        if let steps = details.steps {
+          listed("Steps", steps.enumerated().map { ("\($0.offset + 1).", $0.element) })
+        }
+        Button {
+          setDone(!item.isDone)
+        } label: {
+          Label(kind.done, systemImage: item.isDone ? "checkmark.circle.fill" : "circle")
+            .font(.subheadline.weight(.bold))
+            // `ready` is dark in light mode and light in dark, as ink is.
+            .foregroundStyle(item.isDone ? Palette.onInk : Palette.ink)
+            .frame(maxWidth: .infinity, minHeight: 46)
+            .background(item.isDone ? Palette.ready : Palette.fill, in: .capsule)
+        }
+        .buttonStyle(PressableCardStyle())
+        .accessibilityAddTraits(item.isDone ? .isSelected : [])
+      }
+      .padding(EdgeInsets(top: 18, leading: 20, bottom: 20, trailing: 20))
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(Palette.card, in: .rect(cornerRadius: 24))
+      .padding(.horizontal, 16)
+      .padding(.top, 16)
+    }
+  }
+
+  private func listed(_ title: String, _ rows: [(String, String)]) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Eyebrow(title)
+      ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          Text(row.0).foregroundStyle(Palette.ink3).frame(minWidth: 18, alignment: .leading)
+          Text(row.1).foregroundStyle(Palette.inkReading)
+        }
+        .font(.body)
+      }
+    }
+  }
+}

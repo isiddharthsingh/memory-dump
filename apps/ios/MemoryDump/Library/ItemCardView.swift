@@ -2,12 +2,14 @@ import SwiftUI
 
 /// One saved item on the Library wall. Its shape follows the source: videos
 /// get a play frame, posts a dark quote card, reels a lilac card, articles an
-/// image or a pull quote. A long press opens the system menu: Add note, Share,
-/// Delete. There is no swipe to delete (commit 3988179 removed it).
+/// image or a pull quote. A long press opens the system menu: Add note, mark
+/// done, Share, Delete. There is no swipe to delete (commit 3988179 removed
+/// it). A done item carries a check in its corner.
 struct ItemCardView: View {
   let item: ItemSummary
   let onOpen: () -> Void
   let onNote: () -> Void
+  let onDone: (Bool) -> Void
   let onRetry: () -> Void
   let onDelete: () -> Void
 
@@ -56,16 +58,36 @@ struct ItemCardView: View {
     Button(action: onOpen) {
       card
         .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .topTrailing) {
+          if item.isDone {
+            Image(systemName: "checkmark")
+              .font(.caption.weight(.heavy))
+              .foregroundStyle(Palette.onInk)
+              .frame(width: 24, height: 24)
+              .background(Palette.ready, in: .circle)
+              .overlay { Circle().strokeBorder(Palette.onInk.opacity(0.9), lineWidth: 1.5) }
+              .padding(8)
+              .accessibilityHidden(true)
+          }
+        }
         .contentShape(.rect(cornerRadius: 22))
     }
     .buttonStyle(PressableCardStyle())
     .contentShape(.contextMenuPreview, .rect(cornerRadius: 22))
     .contextMenu {
       Button("Add note", systemImage: "square.and.pencil", action: onNote)
+      if !item.isBusy && !item.isFailed {
+        if item.isDone {
+          Button("Not done", systemImage: "arrow.uturn.backward") { onDone(false) }
+        } else {
+          Button(Format.doneLabel(item.kind), systemImage: "checkmark.circle") { onDone(true) }
+        }
+      }
       ShareLink(item: item.url, subject: Text(title)) { Label("Share", systemImage: "square.and.arrow.up") }
       Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
     }
-    .accessibilityLabel("\(title), \(meta)\(item.isFailed ? ", failed" : "")")
+    .accessibilityLabel(
+      "\(title), \(meta)\(item.isFailed ? ", failed" : "")\(item.isDone ? ", \(Format.doneLabel(item.kind))" : "")")
     .accessibilityHint("Opens the item. Long-press for more actions.")
   }
 

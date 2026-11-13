@@ -7,6 +7,7 @@ final class LibraryModel {
     case all
     case source(String)
     case tag(String)
+    case kind(String)
   }
 
   struct DateSection: Identifiable {
@@ -46,6 +47,12 @@ final class LibraryModel {
   var sources: [String] {
     let present = Set(pool.map(\.source))
     return Self.sourceOrder.filter(present.contains)
+  }
+
+  /// The kinds some saved item has, in chip order.
+  var kinds: [String] {
+    let present = Set(pool.compactMap(\.kind))
+    return Format.kinds.filter(present.contains)
   }
 
   var subtitle: String? {
@@ -143,6 +150,7 @@ final class LibraryModel {
     case .all: try await api.listItems(limit: limit, before: before)
     case .source(let s): try await api.listItems(limit: limit, before: before, source: s)
     case .tag(let t): try await api.listItems(limit: limit, before: before, tag: t)
+    case .kind(let k): try await api.listItems(limit: limit, before: before, kind: k)
     }
   }
 
@@ -159,6 +167,17 @@ final class LibraryModel {
   func retry(_ item: ItemSummary) async {
     _ = try? await api.retryItem(item.id)
     await reload()
+  }
+
+  /// Marks the item done or not done; the card shows it once the server has it.
+  func setDone(_ item: ItemSummary, _ done: Bool) async {
+    do {
+      _ = try await api.setDone(item.id, done)
+      Haptics.success()
+      await reload()
+    } catch {
+      Haptics.error()
+    }
   }
 
   func delete(_ item: ItemSummary) async {

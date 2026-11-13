@@ -216,7 +216,10 @@ struct Chip: View {
           Circle().fill(dot).frame(width: 10, height: 10)
             .overlay { Circle().strokeBorder(Palette.ink.opacity(0.18)) }
         }
-        if let symbol { Image(systemName: symbol).font(.footnote.weight(.semibold)).foregroundStyle(Palette.accent) }
+        if let symbol {
+          Image(systemName: symbol).font(.footnote.weight(.semibold))
+            .foregroundStyle(selected ? Palette.onInk : Palette.accent)
+        }
         Text(label)
         if let count { Text("\(count)").foregroundStyle(selected ? Palette.onInk.opacity(0.7) : Palette.ink3) }
       }

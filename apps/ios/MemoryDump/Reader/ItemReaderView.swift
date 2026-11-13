@@ -44,6 +44,16 @@ final class ItemReaderModel {
     if let item = try? await APIClient.shared.retryItem(id) { apply(item) }
   }
 
+  /// Marks the item done or not done.
+  func setDone(_ done: Bool) async {
+    if let item = try? await APIClient.shared.setDone(id, done) {
+      apply(item)
+      Haptics.success()
+    } else {
+      Haptics.error()
+    }
+  }
+
   func delete() async -> Bool {
     guard (try? await APIClient.shared.deleteItem(id)) != nil else { return false }
     ImageCache.forget(item?.thumbnailUrl)
@@ -153,6 +163,9 @@ struct ItemReaderView: View {
         status(it).padding(.horizontal, 16).padding(.top, 20)
         if let note { noteCard(note) }
         if let summary = it.summary { gist(summary) }
+        if it.status == "ready" {
+          KindCard(item: it) { done in Task { await model.setDone(done) } }
+        }
         if it.status == "ready", hasArticle { article }
         connections
         details(it)
@@ -172,6 +185,15 @@ struct ItemReaderView: View {
       ToolbarItem(placement: .topBarTrailing) {
         Menu("More actions", systemImage: "ellipsis") {
           Button("Add note", systemImage: "square.and.pencil") { noteOpen = true }
+          if it.status == "ready" {
+            if it.isDone {
+              Button("Not done", systemImage: "arrow.uturn.backward") { Task { await model.setDone(false) } }
+            } else {
+              Button(Format.doneLabel(it.kind), systemImage: "checkmark.circle") {
+                Task { await model.setDone(true) }
+              }
+            }
+          }
           ShareLink(item: it.url, subject: Text(title)) { Label("Share", systemImage: "square.and.arrow.up") }
           Button("Delete", systemImage: "trash", role: .destructive) { confirmDelete = true }
         }

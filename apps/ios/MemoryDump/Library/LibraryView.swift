@@ -119,6 +119,7 @@ struct LibraryView: View {
           item: item,
           onOpen: { router.push(.item(item.id)) },
           onNote: { noteTarget = item },
+          onDone: { done in Task { await model.setDone(item, done) } },
           onRetry: { Task { await model.retry(item) } },
           onDelete: { Task { await model.delete(item) } }
         )
@@ -140,6 +141,13 @@ struct LibraryView: View {
           ForEach(model.sources, id: \.self) { s in
             Chip(label: "\(Format.sourceKind(s).label)s", dot: Palette.sourceDot(s), selected: model.filter == .source(s)) {
               Task { await model.setFilter(.source(s)) }
+            }
+          }
+        }
+        ForEach(model.kinds, id: \.self) { k in
+          if let kind = Format.kind(k) {
+            Chip(label: kind.plural, symbol: kind.symbol, selected: model.filter == .kind(k)) {
+              Task { await model.setFilter(.kind(k)) }
             }
           }
         }

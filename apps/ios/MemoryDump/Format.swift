@@ -19,6 +19,42 @@ enum Format {
     return path == "/" ? "" : path
   }
 
+  /// How a kind of save (a place, a recipe…) reads in the app.
+  struct Kind {
+    /// One save of the kind, on its card in the reader.
+    let singular: String
+    /// The Library chip: every save of the kind.
+    let plural: String
+    let symbol: String
+    /// What marking it done says.
+    let done: String
+  }
+
+  /// The kinds the Library lists by, in chip order. "other" and saves with no
+  /// kind yet have no list of their own.
+  static let kinds = ["place", "recipe", "product", "media", "howto"]
+
+  static func kind(_ kind: String?) -> Kind? {
+    switch kind {
+    case "place": Kind(singular: "Place", plural: "Places", symbol: "mappin.and.ellipse", done: "Been there")
+    case "recipe": Kind(singular: "Recipe", plural: "Recipes", symbol: "fork.knife", done: "Made it")
+    case "product": Kind(singular: "To buy", plural: "To buy", symbol: "bag", done: "Bought it")
+    case "media": Kind(singular: "To watch or read", plural: "To watch & read", symbol: "play.rectangle", done: "Finished it")
+    case "howto": Kind(singular: "How-to", plural: "How-tos", symbol: "checklist", done: "Tried it")
+    default: nil
+    }
+  }
+
+  /// "Been there" for a place, "Done" for a save with no kind of its own.
+  static func doneLabel(_ kind: String?) -> String { Self.kind(kind)?.done ?? "Done" }
+
+  /// Apple Maps, searching for a place by its name and address.
+  static func mapsURL(_ query: String) -> URL? {
+    var parts = URLComponents(string: "https://maps.apple.com/")
+    parts?.queryItems = [URLQueryItem(name: "q", value: query)]
+    return parts?.url
+  }
+
   struct SourceKind {
     let label: String
     let symbol: String
