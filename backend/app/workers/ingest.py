@@ -155,6 +155,8 @@ async def _save(
         item.handles = analysis.handles or None
         item.brands_products = analysis.brands_products or None
         item.topics = analysis.topics or None
+        item.kind = analysis.kind
+        item.details = analysis.details
         item.status = "ready"
         item.error = None
         item.upload_key = None

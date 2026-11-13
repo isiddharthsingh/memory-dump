@@ -14,11 +14,11 @@ from __future__ import annotations
 import base64
 from typing import Any, Protocol
 
-from app.ai.analyze import Analysis, parse, schema
+from app.ai.analyze import KIND_RULES, Analysis, parse, schema
 from app.ai.clients import claude_json
 from app.config import get_settings
 
-VISION_SYSTEM = """You are an analyst extracting structured information from \
+_VISION_SYSTEM = """You are an analyst extracting structured information from \
 a single document or image that the user saved to a personal knowledge base.
 
 For PDFs: read the document, transcribe its text in `raw_text`, and summarize it.
@@ -37,12 +37,13 @@ document, stop after about 60,000 characters.
 - handles: social-media handles or @usernames
 - brands_products: brands, products, companies, tools, projects
 - topics: 2-5 broad topic categories
-
+{kind_rules}
 Rules:
 - Any list may be empty.
 - Be specific. Prefer "rust-async-runtimes" over "programming".
 - Extract real entities only. Do not invent.
 """
+VISION_SYSTEM = _VISION_SYSTEM.format(kind_rules=KIND_RULES)
 
 
 class VisionResult:
