@@ -16,8 +16,10 @@ from app.api.cached import cached_json
 from app.api.schemas import (
     ItemChanges,
     ItemDetail,
+    ItemDone,
     ItemPatch,
     ItemSummary,
+    PlaceOut,
     RelatedResponse,
     TopicPageSummary,
 )
@@ -72,12 +74,20 @@ async def list_items(
     source: str | None = Query(
         None, description="Filter by source: youtube, twitter, instagram, reddit, web"
     ),
+    kind: str | None = Query(
+        None, description="Filter by kind: place, recipe, product, media, howto, other"
+    ),
+    done: bool | None = Query(None, description="Only items marked done, or only those not"),
 ) -> list[Item]:
     stmt = select(Item).where(Item.user_id == current_user.id)
     if status_filter:
         stmt = stmt.where(Item.status == status_filter)
     if source:
         stmt = stmt.where(Item.source == source)
+    if kind:
+        stmt = stmt.where(Item.kind == kind)
+    if done is not None:
+        stmt = stmt.where(Item.done_at.is_not(None) if done else Item.done_at.is_(None))
     if tag:
         stmt = stmt.where(Item.tags.any(tag))  # type: ignore[arg-type]
     if before is not None:
@@ -135,6 +145,36 @@ async def list_tags(
     with contextlib.suppress(RedisError):
         await kv.redis().set(key, json.dumps(tags), ex=TAGS_TTL_S)
     return {"tags": tags}
+
+
+# The newest place items the map reads; each names at most MAX_PLACES places.
+PLACES_ITEMS = 500
+
+
+@router.get("/places", response_model=list[PlaceOut])
+async def list_places(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> list[PlaceOut]:
+    """Every place the caller's saved items name, newest item first, for the
+    map. The app finds each one's coordinates from its name and address."""
+    rows = await session.execute(
+        select(Item.id, Item.title, Item.details, Item.done_at)
+        .where(Item.user_id == current_user.id, Item.status == "ready", Item.kind == "place")
+        .order_by(Item.created_at.desc(), Item.id.desc())
+        .limit(PLACES_ITEMS)
+    )
+    return [
+        PlaceOut(
+            item=row.id,
+            title=row.title,
+            name=place["name"],
+            address=place.get("address") or "",
+            done=row.done_at is not None,
+        )
+        for row in rows
+        for place in (row.details or {}).get("places") or []
+    ]
 
 
 @router.get("/changes", response_model=ItemChanges)
@@ -214,6 +254,23 @@ async def patch_item(
     await session.refresh(item)
     if rerun:
         await enqueue_ingest(item.id, item.ingest_generation, upload=item.upload_key is not None)
+    return item
+
+
+@router.put("/{item_id}/done", response_model=ItemDetail)
+async def set_done(
+    item_id: uuid.UUID,
+    body: ItemDone,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> Item:
+    """Marks the item done (been there, cooked it, bought it) or not done.
+    Nothing is analysed again. Marking a done item done keeps its first time."""
+    item = await _get_owned_item(session, item_id, current_user)
+    if body.done != (item.done_at is not None):
+        item.done_at = datetime.now(UTC) if body.done else None
+        await session.commit()
+        await session.refresh(item)
     return item
 
 

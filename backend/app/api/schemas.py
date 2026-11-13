@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
@@ -25,9 +25,17 @@ class ItemSummary(BaseModel):
     tags: list[str] | None
     error: str | None = None
     created_at: datetime
+    # What the save is for: place, recipe, product, media, howto or other.
+    # Null until an item analysed before kinds is classified.
+    kind: str | None = None
+    # When the user marked it done; null while it isn't.
+    done_at: datetime | None = None
 
 
 class ItemDetail(ItemSummary):
+    # What its kind keeps: `places` ([{name, address}]), `ingredients`,
+    # `steps`, `price`.
+    details: dict[str, Any] | None = None
     raw_text: str | None
     people: list[str] | None
     handles: list[str] | None
@@ -38,6 +46,20 @@ class ItemDetail(ItemSummary):
 
 class ItemPatch(BaseModel):
     share_text: str | None = Field(default=None, max_length=20_000)
+
+
+class ItemDone(BaseModel):
+    done: bool
+
+
+class PlaceOut(BaseModel):
+    """One place a saved item names, for the map."""
+
+    item: uuid.UUID
+    title: str | None
+    name: str
+    address: str
+    done: bool
 
 
 class IngestResponse(BaseModel):
