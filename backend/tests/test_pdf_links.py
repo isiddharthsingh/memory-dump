@@ -21,15 +21,12 @@ from app.ai.analyze import Analysis
 from app.ai.providers import VisionResult
 from app.config import get_settings
 from app.db.models import EMBED_DIM, Item, ItemChunk
-from app.extractors import webpage
-from app.extractors.webpage import TooLarge, WebpageExtractor, _CappedClient, is_pdf
+from app.extractors.webpage import TooLarge, WebpageExtractor, is_pdf
 from app.main import app
 from app.storage import get_storage
 from app.workers import ingest as ingest_worker
 from app.workers.ingest import ingest_file, ingest_item
-from tests.conftest import signup
-
-Handler = Callable[[httpx.Request], httpx.Response]
+from tests.conftest import Handler, signup
 
 
 def _pdf() -> bytes:
@@ -44,24 +41,6 @@ HTML = (
     '<meta property="og:image" content="https://example.com/cover.png">'
     "</head><body><article><p>" + "Words worth keeping. " * 20 + "</p></article></body></html>"
 )
-
-
-@pytest.fixture
-def serve(monkeypatch: pytest.MonkeyPatch) -> Callable[[Handler], None]:
-    """Answers the extractor's fetches with `handler`, through the same
-    capped client every extractor uses, at the configured cap."""
-
-    def use(handler: Handler) -> None:
-        def client(**kwargs: Any) -> httpx.AsyncClient:
-            return _CappedClient(
-                transport=httpx.MockTransport(handler),
-                max_bytes=get_settings().extract_max_bytes,
-                **kwargs,
-            )
-
-        monkeypatch.setattr(webpage, "public_client", client)
-
-    return use
 
 
 def test_a_pdf_is_known_by_its_content_type_or_its_first_bytes() -> None:

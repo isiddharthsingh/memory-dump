@@ -9,6 +9,7 @@ import httpcore
 import httpx
 
 from app.config import get_settings
+from app.extractors import maps
 from app.extractors.base import ExtractedContent, flatten
 
 # Tried in order. The Safari UA is the default; if a site walls it off
@@ -16,12 +17,17 @@ from app.extractors.base import ExtractedContent, flatten
 # as Googlebot — most publishers leave that lane open or they'd lose SEO —
 # and finally as facebookexternalhit, which is what social link-preview
 # bots send and which sites usually permit for OG/Twitter card scraping.
-USER_AGENTS: tuple[str, ...] = (
+SAFARI = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 "
-    "(KHTML, like Gecko) Version/17.4 Safari/605.1.15",
-    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-    "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+    "(KHTML, like Gecko) Version/17.4 Safari/605.1.15"
 )
+GOOGLEBOT = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+LINK_PREVIEW = "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)"
+USER_AGENTS: tuple[str, ...] = (SAFARI, GOOGLEBOT, LINK_PREVIEW)
+# Google Maps answers a browser with a script page that says nothing, and
+# these two with the place: never asked as a browser, whose empty page
+# would be saved as the item.
+MAPS_AGENTS: tuple[str, ...] = (LINK_PREVIEW, GOOGLEBOT)
 
 # Re-exported for the twitter / instagram extractors that still want a single
 # UA string. Points at the primary entry in the chain above.
@@ -174,10 +180,14 @@ class WebpageExtractor:
 
     async def extract(self, url: str, share_text: str | None = None) -> ExtractedContent:
         async with public_client(timeout=TIMEOUT, follow_redirects=True) as client:
-            direct = await _fetch_direct(client, url)
+            agents = MAPS_AGENTS if maps.is_maps_link(url) else USER_AGENTS
+            direct = await _fetch_direct(client, url, agents)
             if direct is not None:
                 if is_pdf(direct):
                     return _from_pdf(direct, share_text)
+                # By where the link led, so one that redirects to Maps counts.
+                if maps.is_maps_link(str(direct.url)):
+                    return maps.page(str(direct.url), self._parse_og(direct.text), share_text)
                 return await self._from_html(direct.text, url, share_text)
             # Direct fetch hit a wall on every UA. Try the reader fallback.
             return await self._from_reader(client, url, share_text)
@@ -280,11 +290,13 @@ class WebpageExtractor:
             return None
 
 
-async def _fetch_direct(client: httpx.AsyncClient, url: str) -> httpx.Response | None:
+async def _fetch_direct(
+    client: httpx.AsyncClient, url: str, agents: tuple[str, ...] = USER_AGENTS
+) -> httpx.Response | None:
     """Try each UA in order. Returns the first 2xx response, None if every UA
     was rate-limited or blocked. Raises on non-block errors (404, 5xx)."""
     blocked = False
-    for ua in USER_AGENTS:
+    for ua in agents:
         resp = await client.get(url, headers={"User-Agent": ua})
         if resp.status_code in RETRY_STATUSES:
             blocked = True

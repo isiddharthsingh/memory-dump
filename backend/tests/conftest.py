@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -22,6 +23,8 @@ from fastapi.testclient import TestClient
 os.environ["RATE_LIMIT_AUTH_PER_HOUR"] = "0"
 
 PASSWORD = "super-secret-pw-123"
+
+Handler = Callable[[httpx.Request], httpx.Response]
 
 
 class Jobs(list[tuple[Any, ...]]):
@@ -54,6 +57,26 @@ def jobs(monkeypatch: pytest.MonkeyPatch) -> Iterator[Jobs]:
         if function == "ingest_file":
             for ext in set(_MIME_TO_EXT.values()):
                 asyncio.run(get_storage().delete(f"{item_id}.{ext}"))
+
+
+@pytest.fixture
+def serve(monkeypatch: pytest.MonkeyPatch) -> Callable[[Handler], None]:
+    """Answers the extractors' fetches with `handler`, through the same
+    capped client every extractor uses, at the configured cap."""
+    from app.config import get_settings
+    from app.extractors import webpage
+
+    def use(handler: Handler) -> None:
+        def client(**kwargs: Any) -> httpx.AsyncClient:
+            return webpage._CappedClient(
+                transport=httpx.MockTransport(handler),
+                max_bytes=get_settings().extract_max_bytes,
+                **kwargs,
+            )
+
+        monkeypatch.setattr(webpage, "public_client", client)
+
+    return use
 
 
 def alive(pid: int) -> bool:
