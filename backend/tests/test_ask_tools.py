@@ -178,8 +178,11 @@ def test_a_question_about_many_items_is_answered_from_a_list(
     )
     assert resp.status_code == 200
     events = [line.split(": ", 1)[1] for line in resp.text.splitlines() if line.startswith("event")]
-    assert events == ["step", "token", "done"]
-    assert '"text": "Listing your places"' in resp.text
+    assert events == ["step", "step", "step", "token", "done"]
+    # What each wait is for: Claude reading, its lookup, Claude reading that.
+    steps = [ask_module.READING, "Listing your places", ask_module.THINKING]
+    at = [resp.text.index(f'"text": "{step}"') for step in steps]
+    assert at == sorted(at)
     # Both cited items come back as source cards.
     assert str(ramen) in resp.text.split("event: done")[1]
     assert str(done) in resp.text.split("event: done")[1]
@@ -243,8 +246,8 @@ def test_a_turn_gets_only_so_many_lookups_and_an_answer_for_every_call(
     fake = _use(monkeypatch, Claude([*calls, fly], "Done."))
 
     resp = client.post("/v1/ask/stream", json={"question": "ramen?"}, headers=auth)
-    # One step per lookup that ran, named for people.
-    assert resp.text.count("event: step") == MAX_CALLS
+    # One step per lookup that ran, named for people, and one per wait on Claude.
+    assert resp.text.count("event: step") == MAX_CALLS + 2
     assert resp.text.count('"text": "Listing your how-tos"') == MAX_CALLS
     results = fake.asked[1]["messages"][-1]["content"]
     # The ones over the limit weren't run, but each is told so.
@@ -267,7 +270,8 @@ def test_after_a_fallback_only_the_calls_the_turn_keeps_are_run(
     fake = _use(monkeypatch, Claude([declined, SimpleNamespace(type="fallback"), kept], "Ichiran."))
 
     resp = client.post("/v1/ask/stream", json={"question": "ramen?"}, headers=auth)
-    assert resp.text.count("event: step") == 1 and "Listing what you saved" in resp.text
+    # The kept lookup's step, between the two waits on Claude.
+    assert resp.text.count("event: step") == 3 and "Listing what you saved" in resp.text
     assistant, results = fake.asked[1]["messages"][-2:]
     # The declined model's thinking and call are gone, and nothing answers them.
     assert [b.type for b in assistant["content"]] == ["fallback", "tool_use"]

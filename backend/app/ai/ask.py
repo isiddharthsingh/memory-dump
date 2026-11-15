@@ -70,6 +70,9 @@ ANSWER_MAX_TOKENS = 16_000
 MAX_LOOKUP_ROUNDS = 5
 # A planner slower than this is skipped: the question is searched as asked.
 PLAN_TIMEOUT_S = 10.0
+# What the app shows while Claude reads the first passages, then each round's lookups.
+READING = "Reading what turned up"
+THINKING = "Thinking it over"
 
 PLAN_SYSTEM = """You prepare a search of the user's library of saved \
 things: web pages, posts on X (Twitter), Instagram posts and reels, YouTube \
@@ -418,6 +421,9 @@ async def ask_stream(
     toolbox = Toolbox(session=session, user_id=user_id, scope=scope, tz=tz)
     messages = _messages(question, history, chunks, today, tz)
     pieces: list[str] = []
+    # The app says it is searching until the first step. What follows can
+    # take several times as long, so each wait on Claude gets a step too.
+    yield StreamStep(text=READING)
     for round_ in range(MAX_LOOKUP_ROUNDS + 1):
         async with claude_stream(
             purpose="ask",
@@ -459,6 +465,7 @@ async def ask_stream(
             )
         messages.append({"role": "assistant", "content": turn})
         messages.append({"role": "user", "content": results})
+        yield StreamStep(text=THINKING)
 
     answer = "".join(pieces).strip()
     if not answer:
