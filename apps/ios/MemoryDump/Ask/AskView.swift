@@ -399,19 +399,25 @@ private struct AskTurnView: View {
         VStack(alignment: .leading, spacing: 10) {
           Label("Answer", systemImage: "sparkles").font(.footnote.weight(.bold)).foregroundStyle(Palette.accent)
           if turn.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && turn.isStreaming {
-            HStack(spacing: 8) {
-              ProgressView()
-              Text(step.map { "\($0)…" } ?? "Searching your library…")
-                .font(.subheadline).foregroundStyle(Palette.ink3)
-            }
+            waiting(step.map { "\($0)…" } ?? "Searching your library…")
           } else {
             MarkdownView(LinkRewriter.answer(turn.answer, order: numbered.order), bodyFont: .body, lineSpacing: 5)
+            // It wrote something and then went back to look further.
+            if let step { waiting("\(step)…") }
           }
         }
         .padding(EdgeInsets(top: 16, leading: 18, bottom: 18, trailing: 18))
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Palette.card, in: .rect(cornerRadius: 24))
       }
+    }
+  }
+
+  /// What the answer is waiting on, beside a spinner.
+  private func waiting(_ text: String) -> some View {
+    HStack(spacing: 8) {
+      ProgressView()
+      Text(text).font(.subheadline).foregroundStyle(Palette.ink3)
     }
   }
 

@@ -155,7 +155,10 @@ final class AskModel {
           // Stop already saved the answer; tokens still buffered must not change it.
           if Task.isCancelled { break }
           switch event {
-          case .token(let text): update(chat, turn) { $0.answer += text }
+          case .token(let text):
+            // The step is for a wait, and this one is over.
+            if step != nil { step = nil }
+            update(chat, turn) { $0.answer += text }
           case .step(let text): step = text
           case .done(let citations):
             update(chat, turn) {
