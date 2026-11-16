@@ -22,7 +22,10 @@ struct ItemSummary: Codable, Identifiable, Hashable {
   /// When it was marked done; nil while it isn't.
   var doneAt: Date? = nil
 
-  var isBusy: Bool { status == "pending" || status == "processing" }
+  /// The statuses of a save the server hasn't finished with: waiting, then running.
+  static let busyStatuses = ["pending", "processing"]
+
+  var isBusy: Bool { Self.busyStatuses.contains(status) }
   var isFailed: Bool { status == "failed" }
   var isDone: Bool { doneAt != nil }
 }
@@ -48,7 +51,7 @@ struct ItemDetail: Codable, Identifiable, Hashable {
   var doneAt: Date? = nil
   var details: ItemDetails? = nil
 
-  var isBusy: Bool { status == "pending" || status == "processing" }
+  var isBusy: Bool { ItemSummary.busyStatuses.contains(status) }
   var isDone: Bool { doneAt != nil }
 }
 

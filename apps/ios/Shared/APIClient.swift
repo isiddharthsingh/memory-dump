@@ -46,16 +46,17 @@ final class APIClient {
 
   // MARK: Items
 
-  /// Newest first. `before` is the last item of the previous page.
+  /// Newest first. `before` is the last item of the previous page. With
+  /// `saves: false` it is the server's answer or an error, never a saved copy.
   func listItems(
     limit: Int? = nil, before: UUID? = nil, status: String? = nil, tag: String? = nil,
-    source: String? = nil, kind: String? = nil
+    source: String? = nil, kind: String? = nil, saves: Bool = true
   ) async throws -> [ItemSummary] {
     let query: [String: String?] = [
       "limit": limit.map(String.init), "before": before?.lower, "status": status,
       "tag": tag, "source": source, "kind": kind,
     ]
-    return try await send("/items", query: query)
+    return try await send("/items", query: query, saves: saves)
   }
 
   /// Every place the saved items name, newest item first, for the map.

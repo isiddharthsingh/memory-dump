@@ -7,6 +7,8 @@ struct SettingsView: View {
   @AppStorage(Appearance.key) private var appearance = Appearance.system
   @State private var health: Bool?
   @State private var checking = false
+  /// Saves the server is still analyzing; nil when it can't be asked.
+  @State private var analyzing: Int?
   @State private var confirmDiscard = false
   @State private var confirmSignOut = false
   @State private var confirmDelete = false
@@ -52,16 +54,23 @@ struct SettingsView: View {
         }
         .listRowBackground(Palette.card)
 
-        Section("Saving") {
+        Section {
           let queued = app.queued.count
           LabeledContent("Offline queue", value: queued == 0 ? "Empty" : Format.plural(queued, "share"))
           if queued > 0 {
             Button(app.isSendingQueue ? "Sending…" : "Send now") { app.sendQueue() }.disabled(app.isSendingQueue)
             Button("Discard queued shares", role: .destructive) { confirmDiscard = true }
           }
+          if let analyzing {
+            LabeledContent("Being analyzed", value: analyzing == 0 ? "None" : Format.plural(analyzing, "save"))
+          }
           Button("Notifications") {
             if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
           }
+        } header: {
+          Text("Saving")
+        } footer: {
+          Text("Shares wait in the offline queue until your server takes them. It then analyzes each one.")
         }
         .listRowBackground(Palette.card)
 
@@ -129,6 +138,8 @@ struct SettingsView: View {
       }
     }
     .task { await check() }
+    // Again when the queue changes: what it just sent is now being analyzed.
+    .task(id: app.queued.count) { await countAnalyzing() }
   }
 
   private var statusLabel: (text: String, color: Color) {
@@ -145,6 +156,33 @@ struct SettingsView: View {
     health = await APIClient.shared.health()
     checking = false
     health == true ? Haptics.success() : Haptics.error()
+  }
+
+  /// Counts the saves the server has but hasn't finished with, for as long as
+  /// Settings is open. The offline queue empties as soon as the server takes
+  /// its shares, which is before they are ready.
+  private func countAnalyzing() async {
+    while !Task.isCancelled {
+      let count = try? await Self.busyCount()
+      // A newer count has taken over, and this one's failure mustn't hide it.
+      guard !Task.isCancelled else { return }
+      analyzing = count
+      // It keeps asking after a zero or a failure, only slower: the server
+      // may be back by then, and a count can miss a save (see `busyCount`).
+      try? await Task.sleep(for: .seconds((count ?? 0) > 0 ? 3 : 15))
+    }
+  }
+
+  /// Asked of the server only and kept off the disk: a saved copy says
+  /// nothing about now. The lists are read one after the other, waiting
+  /// first, so a save that starts in between is counted twice rather than
+  /// missed; one sent back to wait in between is missed until the next count.
+  private static func busyCount() async throws -> Int {
+    var count = 0
+    for status in ItemSummary.busyStatuses {
+      count += try await APIClient.shared.listItems(limit: 200, status: status, saves: false).count
+    }
+    return count
   }
 
   /// Downloads the export, then offers it to Files and other apps.
