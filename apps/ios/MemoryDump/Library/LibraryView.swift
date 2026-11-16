@@ -18,7 +18,6 @@ struct LibraryView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .background(Palette.ground)
       .navigationTitle("Library")
-      .navigationSubtitle(model.subtitle ?? "")
       .searchable(text: $query, prompt: "Search your library")
       .toolbar {
         ToolbarItem(placement: .topBarTrailing) {
@@ -69,6 +68,12 @@ struct LibraryView: View {
   private var wall: some View {
     ScrollView {
       LazyVStack(alignment: .leading, spacing: 12) {
+        // In the page, not as the navigation bar's subtitle: while the title
+        // is pulled down to refresh, the bar draws its subtitle over the
+        // search field.
+        if let subtitle = model.subtitle {
+          Text(subtitle).font(.footnote).foregroundStyle(Palette.ink2)
+        }
         if !app.queued.isEmpty {
           QueuedShares(shares: app.queued, sending: app.isSendingQueue) { app.sendQueue() }
         }
