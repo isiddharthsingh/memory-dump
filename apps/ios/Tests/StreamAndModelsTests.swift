@@ -56,14 +56,26 @@ import Testing
     #expect(abs(item.createdAt.timeIntervalSince1970 - 1_793_217_253.728) < 0.001)
   }
 
+  /// Pydantic's microseconds, a whole second, another zone, none (UTC), and
+  /// what `JSONEncoder.api` writes back.
   @Test(arguments: [
-    "2026-10-28T19:54:13Z",
-    "2026-10-28T19:54:13.7Z",
-    "2026-10-28T19:54:13.728123+00:00",
-    "2026-10-28T19:54:13.728123",
+    ("2026-10-28T19:54:13Z", 1_793_217_253.0),
+    ("2026-10-28T19:54:13.7Z", 1_793_217_253.7),
+    ("2026-10-28T19:54:13.728123Z", 1_793_217_253.728),
+    ("2026-10-28T19:54:13.728123+00:00", 1_793_217_253.728),
+    ("2026-10-28T19:54:13.728123", 1_793_217_253.728),
+    ("2026-10-28T19:54:13", 1_793_217_253.0),
+    ("2026-10-28T21:54:13+02:00", 1_793_217_253.0),
+    ("2026-10-28T14:54:13.728123-05:00", 1_793_217_253.728),
   ])
-  func parsesServerDates(_ raw: String) {
-    #expect(ISODate.parse(raw) != nil)
+  func readsServerDatesToTheMillisecond(_ raw: String, _ seconds: Double) throws {
+    let date = try #require(ISODate.parse(raw))
+    #expect(abs(date.timeIntervalSince1970 - seconds) < 0.001)
+  }
+
+  @Test(arguments: ["", "yesterday", "2026-10-28", "2026-10-28T19:54:13Zjunk", "2026-10-28T19:54:13.5Z19:54"])
+  func refusesWhatIsNotATimestamp(_ raw: String) {
+    #expect(ISODate.parse(raw) == nil)
   }
 
   @Test func readsSuperTokensSignInResults() throws {

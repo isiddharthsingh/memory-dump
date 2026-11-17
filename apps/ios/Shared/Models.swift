@@ -387,16 +387,27 @@ extension JSONEncoder {
   }
 }
 
-/// Pydantic writes datetimes with microseconds ("…T19:54:13.728123Z"), which
-/// ISO8601DateFormatter does not read. Cut the fraction to milliseconds first.
+/// Pydantic writes datetimes with microseconds ("…T19:54:13.728123Z"), with
+/// no fraction on a whole second, and with no zone when the value has none
+/// (UTC). The format styles are made once: a formatter made for each date was
+/// nearly all of the time it took to decode a list.
 /// Nonisolated: the decoder calls it from its own context.
 nonisolated enum ISODate {
+  private static let withFraction = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+  private static let whole = Date.ISO8601FormatStyle()
+
   static func parse(_ raw: String) -> Date? {
-    var s = raw.replacing(/(\.\d{3})\d+/) { $0.1 }
-    if s.wholeMatch(of: /.*(Z|[+-]\d{2}:?\d{2})/) == nil { s += "Z" }
-    let withFraction = ISO8601DateFormatter()
-    withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let d = withFraction.date(from: s) { return d }
-    return ISO8601DateFormatter().date(from: s)
+    let zoned = raw.hasSuffix("Z") || raw.drop { $0 != "T" }.contains { $0 == "+" || $0 == "-" }
+    let s = zoned ? raw : raw + "Z"
+    return read(s, withFraction) ?? read(s, whole)
+  }
+
+  /// Nil unless the timestamp is all of the string: `parse` on a style stops
+  /// reading where the timestamp ends and takes whatever follows it.
+  private static func read(_ s: String, _ style: Date.ISO8601FormatStyle) -> Date? {
+    guard let (end, date) = try? style.consuming(s, startingAt: s.startIndex, in: s.startIndex..<s.endIndex),
+      end == s.endIndex
+    else { return nil }
+    return date
   }
 }
