@@ -1,10 +1,43 @@
 import Foundation
 
+/// What the Ask tab's chats need from outside it: the account, the server and
+/// the copies on the phone. The app's is `.live`; tests put a server of their
+/// own behind it.
+struct AskBackend {
+  var user: () -> UUID?
+  var ask: (String, [ChatTurn], AskScope?) -> AsyncThrowingStream<AskEvent, Error>
+  var chats: () async throws -> [ChatSummary]
+  var chat: (UUID) async throws -> Chat
+  var saveChat: (Chat) async throws -> ChatSummary
+  var deleteChat: (UUID) async throws -> Void
+  /// The copies saved on the phone; nil when there is none.
+  var savedChats: () async -> [ChatSummary]?
+  var savedChat: (UUID) async -> Chat?
+  var saves: SavedResponses
+
+  static let live = AskBackend(
+    user: { SessionStore.shared.current()?.user.id },
+    ask: { APIClient.shared.askStream($0, history: $1, scope: $2) },
+    chats: { try await APIClient.shared.chats() },
+    chat: { try await APIClient.shared.chat($0) },
+    saveChat: { try await APIClient.shared.saveChat($0) },
+    deleteChat: { try await APIClient.shared.deleteChat($0) },
+    savedChats: { try? await APIClient.saved.chats() },
+    savedChat: { try? await APIClient.saved.chat($0) },
+    saves: .shared)
+}
+
 /// The Ask tab: the open chat, streamed answers, and History. Chats live on
 /// the server, so they follow the account to any device.
 @Observable
 final class AskModel {
   typealias Turn = ChatTurn
+
+  private let backend: AskBackend
+
+  init(backend: AskBackend = .live) {
+    self.backend = backend
+  }
 
   /// The open chat; nil is a new chat with no question yet.
   private(set) var chat: Chat?
@@ -32,8 +65,8 @@ final class AskModel {
   /// outlive the app.
   private var unsaved: [UUID: Chat] {
     if let held { return held }
-    heldFor = SessionStore.shared.current()?.user.id
-    let read = heldFor.map { SavedResponses.shared.unsavedChats(user: $0) } ?? [:]
+    heldFor = backend.user()
+    let read = heldFor.map { backend.saves.unsavedChats(user: $0) } ?? [:]
     held = read
     return read
   }
@@ -69,13 +102,13 @@ final class AskModel {
     // Until the server answers, a chat that's tapped is fetched, not read from its copy.
     historyIsLive = false
     if history == nil {
-      history = try? await APIClient.saved.chats()
+      history = await backend.savedChats()
       // The server never got these, so its list doesn't have them.
       for chat in unsaved.values { record(chat) }
     }
     sendUnsaved()
-    let result = await afterWrites { () async -> Result<[ChatSummary], Error> in
-      do { return .success(try await APIClient.shared.chats()) } catch { return .failure(error) }
+    let result = await afterWrites { [backend] () async -> Result<[ChatSummary], Error> in
+      do { return .success(try await backend.chats()) } catch { return .failure(error) }
     }.value
     switch result {
     case .success(let chats):
@@ -137,12 +170,12 @@ final class AskModel {
     if let local = unsaved[id] {
       opened = local
     } else if historyIsLive, let listed = history?.first(where: { $0.id == id }),
-      let copy = try? await APIClient.saved.chat(id), copy.isCurrent(for: listed)
+      let copy = await backend.savedChat(id), copy.isCurrent(for: listed)
     {
       // The phone's copy is the chat the server's list names: nothing to fetch.
       opened = copy
     } else {
-      opened = try await APIClient.shared.chat(id)
+      opened = try await backend.chat(id)
     }
     opened.settle()
     stop()
@@ -153,9 +186,9 @@ final class AskModel {
   func delete(_ id: UUID) async {
     if id == chat?.id { newChat() }
     history?.removeAll { $0.id == id }
-    let deleted = await afterWrites { [weak self] () async -> Bool in
+    let deleted = await afterWrites { [weak self, backend] () async -> Bool in
       do {
-        try await APIClient.shared.deleteChat(id)
+        try await backend.deleteChat(id)
       } catch APIError.http(404, _, _) {
         // Never reached the server.
       } catch {
@@ -179,7 +212,7 @@ final class AskModel {
     step = nil
     stream = Task {
       do {
-        for try await event in APIClient.shared.askStream(question, history: earlier, scope: scope) {
+        for try await event in backend.ask(question, earlier, scope) {
           // Stop already saved the answer; tokens still buffered must not change it.
           if Task.isCancelled { break }
           switch event {
@@ -240,7 +273,7 @@ final class AskModel {
   /// called while one waits its turn.
   func sendUnsaved() {
     guard !unsaved.isEmpty else { return }
-    let owner = SessionStore.shared.current()?.user.id
+    let owner = backend.user()
     for id in unsaved.keys where sending.insert(id).inserted {
       afterWrites { [weak self] in
         // What is held by its turn: a later save may have failed with more
@@ -252,16 +285,16 @@ final class AskModel {
   }
 
   private func upload(_ snapshot: Chat) {
-    let owner = SessionStore.shared.current()?.user.id
+    let owner = backend.user()
     afterWrites { [weak self] in await self?.send(snapshot, owner: owner) }
   }
 
   /// One save, in its turn of `writes`.
   private func send(_ snapshot: Chat, owner: UUID?) async {
     // Signed out or switched accounts while this waited: never save into another account.
-    guard SessionStore.shared.current()?.user.id == owner else { return }
+    guard backend.user() == owner else { return }
     do {
-      let saved = try await Self.put(snapshot)
+      let saved = try await put(snapshot)
       hold(nil, for: snapshot.id)
       took(saved)
       // The server is answering: the chats it missed can go now.
@@ -282,23 +315,23 @@ final class AskModel {
     chats[id] = chat
     held = chats
     // Only into the outbox of the account these were read for.
-    guard let heldFor, SessionStore.shared.current()?.user.id == heldFor else { return }
-    SavedResponses.shared.keepUnsaved(chats, user: heldFor)
+    guard let heldFor, backend.user() == heldFor else { return }
+    backend.saves.keepUnsaved(chats, user: heldFor)
   }
 
   /// Saves the copy, and returns it with the version the server gave it. A
   /// 409 means another device saved the chat after this copy's version: merge
   /// onto the server's turns and save again with the server's version.
-  private static func put(_ snapshot: Chat) async throws -> Chat {
+  private func put(_ snapshot: Chat) async throws -> Chat {
     var chat = snapshot
     var conflicts = 0
     while true {
       do {
-        chat.version = try await APIClient.shared.saveChat(chat).version
+        chat.version = try await backend.saveChat(chat).version
         return chat
       } catch APIError.http(409, _, _) where conflicts < 3 {
         conflicts += 1
-        let server = try await APIClient.shared.chat(chat.id)
+        let server = try await backend.chat(chat.id)
         chat.turns = Chat.merge(server: server.turns, local: chat.turns)
         chat.version = server.version
       }
