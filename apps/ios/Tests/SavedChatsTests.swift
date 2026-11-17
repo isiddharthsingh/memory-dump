@@ -3,7 +3,8 @@ import Testing
 
 @testable import MemoryDump
 
-/// The copy of a chat the phone writes itself when the server takes a save.
+/// The copies of chats the phone writes itself: a save the server took, and
+/// the saves it hasn't taken yet.
 @Suite struct SavedChatsTests {
   /// A fresh folder per test; Swift Testing makes a new suite value for each.
   private let saves = SavedResponses(
@@ -141,5 +142,33 @@ import Testing
     // Saved before chats had versions.
     #expect(!chat(copy.id).isCurrent(for: summary(copy, version: 1)))
     #expect(!copy.isCurrent(for: summary(chat(), version: 4)))
+  }
+
+  // MARK: Saves the server hasn't taken
+
+  /// What asking with no network leaves: a turn that failed, and why.
+  @Test func unsavedChatsOutliveTheApp() throws {
+    let a = chat(version: 2)
+    var b = chat(UUID(), ["Why?", "And then?"])
+    b.turns[1].status = .failed(title: "Offline", detail: "No network")
+    saves.keepUnsaved([a.id: a, b.id: b], user: user)
+
+    let read = saves.unsavedChats(user: user)
+    #expect(Set(read.keys) == [a.id, b.id])
+    #expect(read[a.id]?.version == 2)
+    let kept = try #require(read[b.id])
+    #expect(kept.version == nil)
+    #expect(kept.turns.map(\.question) == ["Why?", "And then?"])
+    guard case .failed(let title, let detail) = kept.turns[1].status else { Issue.record("lost the failure"); return }
+    #expect(title == "Offline")
+    #expect(detail == "No network")
+    #expect(saves.unsavedChats(user: UUID()).isEmpty)
+  }
+
+  @Test func sentChatsLeaveNothingBehind() {
+    let a = chat()
+    saves.keepUnsaved([a.id: a], user: user)
+    saves.keepUnsaved([:], user: user)
+    #expect(saves.unsavedChats(user: user).isEmpty)
   }
 }

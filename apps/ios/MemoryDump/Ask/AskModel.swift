@@ -27,8 +27,21 @@ final class AskModel {
   /// the version it was built on; one another device got ahead of is merged
   /// onto the server's turns there too (see `put`).
   private var writes: Task<Void, Never>?
-  /// Chats whose last save failed; sent again when History loads.
-  private var unsaved: [UUID: Chat] = [:]
+  /// Chats whose last save failed; sent again when Ask shows and when History
+  /// loads. Kept with the account's saved copies too (see `hold`), so they
+  /// outlive the app.
+  private var unsaved: [UUID: Chat] {
+    if let held { return held }
+    heldFor = SessionStore.shared.current()?.user.id
+    let read = heldFor.map { SavedResponses.shared.unsavedChats(user: $0) } ?? [:]
+    held = read
+    return read
+  }
+  /// `unsaved` once it has been read from the disk, and the account it was read for.
+  @ObservationIgnored private var held: [UUID: Chat]?
+  @ObservationIgnored private var heldFor: UUID?
+  /// The unsaved chats with a send waiting its turn, so they aren't queued twice.
+  @ObservationIgnored private var sending: Set<UUID> = []
   /// History's list is the server's latest answer, and isn't being asked for again.
   @ObservationIgnored private var historyIsLive = false
 
@@ -55,8 +68,12 @@ final class AskModel {
   func loadHistory() async {
     // Until the server answers, a chat that's tapped is fetched, not read from its copy.
     historyIsLive = false
-    if history == nil { history = try? await APIClient.saved.chats() }
-    for chat in unsaved.values { upload(chat) }
+    if history == nil {
+      history = try? await APIClient.saved.chats()
+      // The server never got these, so its list doesn't have them.
+      for chat in unsaved.values { record(chat) }
+    }
+    sendUnsaved()
     let result = await afterWrites { () async -> Result<[ChatSummary], Error> in
       do { return .success(try await APIClient.shared.chats()) } catch { return .failure(error) }
     }.value
@@ -142,9 +159,10 @@ final class AskModel {
       } catch APIError.http(404, _, _) {
         // Never reached the server.
       } catch {
-        return false
+        // A chat the server never took has nothing there to delete.
+        guard let local = self?.unsaved[id], local.version == nil else { return false }
       }
-      self?.unsaved[id] = nil
+      self?.hold(nil, for: id)
       return true
     }.value
     deleted ? Haptics.success() : Haptics.error()
@@ -218,22 +236,54 @@ final class AskModel {
     upload(chat)
   }
 
-  private func upload(_ snapshot: Chat) {
+  /// Sends the chats whose last save failed, each once however often this is
+  /// called while one waits its turn.
+  func sendUnsaved() {
+    guard !unsaved.isEmpty else { return }
     let owner = SessionStore.shared.current()?.user.id
-    afterWrites { [weak self] in
-      // Signed out or switched accounts while this waited: never save into another account.
-      guard SessionStore.shared.current()?.user.id == owner else { return }
-      do {
-        let saved = try await Self.put(snapshot)
-        self?.unsaved[snapshot.id] = nil
-        self?.took(saved)
-      } catch APIError.http(let status, _, _) where (400..<500).contains(status) {
-        // Rejected (too long, say); sending the same copy again won't help.
-        self?.unsaved[snapshot.id] = nil
-      } catch {
-        self?.unsaved[snapshot.id] = snapshot
+    for id in unsaved.keys where sending.insert(id).inserted {
+      afterWrites { [weak self] in
+        // What is held by its turn: a later save may have failed with more
+        // turns, or sent the chat, or it was deleted.
+        if let chat = self?.unsaved[id] { await self?.send(chat, owner: owner) }
+        self?.sending.remove(id)
       }
     }
+  }
+
+  private func upload(_ snapshot: Chat) {
+    let owner = SessionStore.shared.current()?.user.id
+    afterWrites { [weak self] in await self?.send(snapshot, owner: owner) }
+  }
+
+  /// One save, in its turn of `writes`.
+  private func send(_ snapshot: Chat, owner: UUID?) async {
+    // Signed out or switched accounts while this waited: never save into another account.
+    guard SessionStore.shared.current()?.user.id == owner else { return }
+    do {
+      let saved = try await Self.put(snapshot)
+      hold(nil, for: snapshot.id)
+      took(saved)
+      // The server is answering: the chats it missed can go now.
+      sendUnsaved()
+    } catch APIError.http(let status, _, _) where (400..<500).contains(status) {
+      // Rejected (too long, say); sending the same copy again won't help.
+      hold(nil, for: snapshot.id)
+    } catch {
+      hold(snapshot, for: snapshot.id)
+    }
+  }
+
+  /// Keeps the chat among the unsaved ones, or with nil takes it out, on the
+  /// disk too. Nearly every save succeeds with nothing held, and writes nothing.
+  private func hold(_ chat: Chat?, for id: UUID) {
+    var chats = unsaved
+    guard chat != nil || chats[id] != nil else { return }
+    chats[id] = chat
+    held = chats
+    // Only into the outbox of the account these were read for.
+    guard let heldFor, SessionStore.shared.current()?.user.id == heldFor else { return }
+    SavedResponses.shared.keepUnsaved(chats, user: heldFor)
   }
 
   /// Saves the copy, and returns it with the version the server gave it. A

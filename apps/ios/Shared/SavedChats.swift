@@ -10,6 +10,8 @@ extension APIClient {
 
 /// The chat copies the phone writes itself, beside the ones GETs save.
 extension SavedResponses {
+  private static let unsavedKey = "unsaved-chats"
+
   /// A save the server took. Its answer is only a summary, so the chat is
   /// written here as the copy of its GET and put at the top of History's, and
   /// both can be read offline before the next sync.
@@ -45,6 +47,21 @@ extension SavedResponses {
     struct Versioned: Decodable { let version: Int? }
     return read("/chats/\(id.lower)", user: user)
       .flatMap { try? JSONDecoder().decode(Versioned.self, from: $0) }?.version
+  }
+
+  /// Chats whose last save didn't reach the server.
+  func unsavedChats(user: UUID) -> [UUID: Chat] {
+    let chats =
+      read(Self.unsavedKey, user: user).flatMap { try? JSONDecoder.api.decode([Chat].self, from: $0) } ?? []
+    return Dictionary(chats.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+  }
+
+  func keepUnsaved(_ chats: [UUID: Chat], user: UUID) {
+    guard !chats.isEmpty, let data = try? JSONEncoder.api.encode(Array(chats.values)) else {
+      remove(Self.unsavedKey, user: user)
+      return
+    }
+    write(data, Self.unsavedKey, user: user)
   }
 }
 

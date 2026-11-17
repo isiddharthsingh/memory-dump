@@ -220,7 +220,10 @@ struct AskView: View {
     }
     .toolbar(historyShown ? .hidden : .automatic, for: .tabBar)
     .onChange(of: historyShown) { if historyShown { focused = false } }
-    .task { await model.loadSuggestions() }
+    .task {
+      model.sendUnsaved()
+      await model.loadSuggestions()
+    }
     .onAppear {
       voice.onText = { model.input = $0 }
       takeDraft()
