@@ -29,6 +29,8 @@ final class AskModel {
   private var writes: Task<Void, Never>?
   /// Chats whose last save failed; sent again when History loads.
   private var unsaved: [UUID: Chat] = [:]
+  /// History's list is the server's latest answer, and isn't being asked for again.
+  @ObservationIgnored private var historyIsLive = false
 
   var chatId: UUID? { chat?.id }
   var turns: [Turn] { chat?.turns ?? [] }
@@ -51,6 +53,8 @@ final class AskModel {
   }
 
   func loadHistory() async {
+    // Until the server answers, a chat that's tapped is fetched, not read from its copy.
+    historyIsLive = false
     if history == nil { history = try? await APIClient.saved.chats() }
     for chat in unsaved.values { upload(chat) }
     let result = await afterWrites { () async -> Result<[ChatSummary], Error> in
@@ -59,6 +63,7 @@ final class AskModel {
     switch result {
     case .success(let chats):
       history = chats
+      historyIsLive = true
       historyError = nil
       for chat in unsaved.values { record(chat) }
     case .failure(let error):
@@ -114,6 +119,11 @@ final class AskModel {
     var opened: Chat
     if let local = unsaved[id] {
       opened = local
+    } else if historyIsLive, let listed = history?.first(where: { $0.id == id }),
+      let copy = try? await APIClient.saved.chat(id), copy.isCurrent(for: listed)
+    {
+      // The phone's copy is the chat the server's list names: nothing to fetch.
+      opened = copy
     } else {
       opened = try await APIClient.shared.chat(id)
     }

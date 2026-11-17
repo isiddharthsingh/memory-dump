@@ -81,6 +81,11 @@ enum OfflineSync {
       }
       manifest.chats = manifest.chats.filter { chatIds.contains($0.key) }
       for chat in chats where manifest.chats[chat.id] != chat.updatedAt {
+        // Saved from this phone, or opened, at that version: nothing to fetch.
+        if saves.chatVersion(chat.id, user: user) == chat.version {
+          manifest.chats[chat.id] = chat.updatedAt
+          continue
+        }
         manifest.chats[chat.id] = try await fetch(api) { try await api.chat(chat.id).updatedAt }
       }
       if !missed { manifest.itemsUntil = changes.until }

@@ -196,7 +196,7 @@ final class APIClient {
   /// Every chat, most recently changed first, read a page at a time.
   func chats() async throws -> [ChatSummary] {
     try await Self.everyPage(limit: Self.chatPageSize) { before in
-      try await self.send("/chats", query: ["limit": String(Self.chatPageSize), "before": before?.lower])
+      try await self.send("/chats", query: Self.chatsQuery(before: before))
     }
   }
 
@@ -206,11 +206,16 @@ final class APIClient {
 
   /// Creates or replaces the chat; the app picks the id. `chat.version` is the
   /// server's version this copy was built on (0 for a new chat); a 409 means
-  /// another device saved it since. The answer carries the new version.
+  /// another device saved it since. The answer carries the new version, and
+  /// the chat is kept as its saved copy at that version.
   func saveChat(_ chat: Chat) async throws -> ChatSummary {
-    try await send(
+    let user = store.current()?.user.id
+    let saved: ChatSummary = try await send(
       "/chats/\(chat.id.lower)", method: "PUT",
       body: ChatBody(turns: chat.turns, version: chat.version ?? 0))
+    // Not if the account signed out while this was on its way.
+    if let user, store.current()?.user.id == user { saves.keep(chat, as: saved, user: user) }
+    return saved
   }
 
   func deleteChat(_ id: UUID) async throws {
