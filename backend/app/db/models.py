@@ -2,20 +2,24 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     ARRAY,
     BigInteger,
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -36,6 +40,36 @@ class User(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     display_name: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    # No monthly cap on what this account spends on the server's keys
+    # (`python -m app.admin`).
+    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    # Whose key the model calls use: the provider of one of the user's saved
+    # keys (`provider_keys`), or null for the server's.
+    ai_provider: Mapped[str | None] = mapped_column(String(16))
+    # The models the user picked instead of a provider's defaults:
+    # {provider: {"analysis" | "synthesis" | "ask": model id}}.
+    ai_models: Mapped[dict[str, dict[str, str]] | None] = mapped_column(JSONB)
+    # The most the user lets a month's calls on their own keys cost.
+    own_spend_limit_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+
+
+class ProviderKey(Base):
+    """A user's own key for a model provider, encrypted (app/secretbox.py).
+    `hint` is its last characters, all the app is ever shown of it."""
+
+    __tablename__ = "provider_keys"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    provider: Mapped[str] = mapped_column(String(16), primary_key=True)
+    secret: Mapped[str] = mapped_column(Text, nullable=False)
+    hint: Mapped[str] = mapped_column(String(8), nullable=False)
+    # The AWS region of a Bedrock key.
+    region: Mapped[str | None] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -261,7 +295,10 @@ class ItemTombstone(Base):
 
 
 class LlmUsage(Base):
-    """Tokens a user spent per day and model (app/usage.py)."""
+    """Tokens spent on a user's rows per day and model, what they cost, and
+    who paid: the server's key against the user's allowance ("platform"), the
+    user's own key ("own"), or the server for its own work ("exempt")
+    (app/usage.py)."""
 
     __tablename__ = "llm_usage"
 
@@ -270,6 +307,8 @@ class LlmUsage(Base):
     )
     day: Mapped[date] = mapped_column(Date, primary_key=True)
     model: Mapped[str] = mapped_column(Text, primary_key=True)
+    billed_to: Mapped[str] = mapped_column(String(8), primary_key=True, server_default="platform")
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(16, 8), nullable=False, server_default="0")
     calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
