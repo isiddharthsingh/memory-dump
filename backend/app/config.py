@@ -48,6 +48,18 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     voyage_api_key: str = ""
 
+    # What a user may spend on the keys above in a calendar month (UTC), in
+    # USD at list prices, before they need their own key; 0 = no cap. Admins
+    # (`python -m app.admin`) have none.
+    free_monthly_usd: float = 3.0
+    # Seals the provider keys users save (app/secretbox.py). At least 32
+    # characters; while it's empty the server takes no keys. Changing it
+    # makes every saved key unreadable.
+    keys_secret: str = ""
+    # How often a user may save a key, each save being a call to the provider
+    # to check it.
+    rate_limit_keys_per_hour: int = 20
+
     # How long a call to Claude may take: Ask has someone waiting on it, the
     # workers can wait longer. Voyage answers in seconds.
     anthropic_timeout_s: float = 300
