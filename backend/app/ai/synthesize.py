@@ -21,8 +21,7 @@ from slugify import slugify
 
 from app.ai.clients import claude, claude_json
 from app.ai.embed import chunk_text, embed_chunks
-from app.config import get_settings
-from app.errors import Refused
+from app.errors import Refused, SpendLimitReached
 
 PROPOSE_SYSTEM = """You file a new item into a personal wiki of topic \
 pages, each of which gathers what several saved items say about one topic. \
@@ -186,7 +185,6 @@ async def propose_slugs(
     existing_slugs: list[str],
     held_slugs: list[str],
 ) -> ProposedSlugs:
-    settings = get_settings()
 
     item_facts = (
         f"Item title: {item_title}\n"
@@ -200,7 +198,7 @@ async def propose_slugs(
         purpose="propose_slugs",
         schema=_SLUGS_SCHEMA,
         effort="low",
-        model=settings.claude_analysis_model,
+        job="analysis",
         max_tokens=4_000,
         system=PROPOSE_SYSTEM,
         messages=[{"role": "user", "content": item_facts}],
@@ -241,7 +239,6 @@ async def patch_page(
     page one item patches: the item's block and that list come first, under a
     cache breakpoint, so patching its second, third and fourth page reads
     them from the prompt cache."""
-    settings = get_settings()
 
     title = existing_title or title_from_slug(slug)
     body = existing_body or ""
@@ -266,7 +263,7 @@ async def patch_page(
     resp = await claude(
         purpose="patch_page",
         effort="medium",
-        model=settings.claude_synthesis_model,
+        job="synthesis",
         max_tokens=16_000,
         system=PATCH_SYSTEM,
         messages=[
@@ -306,17 +303,18 @@ def _markdown(resp: Any) -> str:
 
 async def _rewrite(purpose: str, system: str, user: str) -> str | None:
     """A whole page rewritten by Claude, or None when the answer is empty,
-    cut off or refused, so a caller never replaces a page with half of one."""
+    cut off or refused, or the month's spend limit is reached, so a caller
+    never replaces a page with half of one."""
     try:
         resp = await claude(
             purpose=purpose,
             effort="medium",
-            model=get_settings().claude_synthesis_model,
+            job="synthesis",
             max_tokens=16_000,
             system=system,
             messages=[{"role": "user", "content": user}],
         )
-    except Refused:
+    except (Refused, SpendLimitReached):
         return None
     if resp.stop_reason != "end_turn":
         return None

@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.ai.clients import claude_json
-from app.config import get_settings
 from app.extractors.base import ExtractedContent, flatten
 
 # What a save is for. The Library lists items by it, and each kind has its
@@ -209,7 +208,7 @@ async def classify(
         purpose="classify",
         schema=_object(_KIND_FIELDS),
         effort="medium",
-        model=get_settings().claude_analysis_model,
+        job="analysis",
         max_tokens=8000,
         system=CLASSIFY_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
@@ -222,7 +221,6 @@ async def analyze(
     url: str,
     source: str,
 ) -> Analysis:
-    settings = get_settings()
 
     user_blocks: list[dict] = []
 
@@ -263,7 +261,7 @@ async def analyze(
         purpose="analyze",
         schema=schema(**extra),
         effort="medium",
-        model=settings.claude_analysis_model,
+        job="analysis",
         max_tokens=8000,
         system=ANALYSIS_SYSTEM,
         messages=[{"role": "user", "content": user_blocks}],

@@ -24,10 +24,9 @@ from sqlalchemy import select, text
 
 from app.ai.clients import claude_json
 from app.ai.synthesize import WIKILINK_RE, embed_page_chunks
-from app.config import get_settings
 from app.db.models import TopicPage
 from app.db.session import get_sessionmaker
-from app.errors import Refused
+from app.errors import Refused, SpendLimitReached
 from app.queue import enqueue, forget_job_id
 from app.workers.jobs import job, user_ids
 from app.workers.synthesize import lock_wiki, read_pages, replace_chunks, retry_or_give_up
@@ -137,12 +136,14 @@ async def _merge_duplicates(user_id: uuid.UUID) -> int:
             purpose="compact",
             schema=_MERGES_SCHEMA,
             effort="medium",
-            model=get_settings().claude_analysis_model,
+            job="analysis",
             max_tokens=8_000,
             system=MERGE_SYSTEM,
             messages=[{"role": "user", "content": "Slugs:\n" + "\n".join(slugs)}],
         )
-    except (ValueError, Refused) as exc:
+    except (ValueError, Refused, SpendLimitReached) as exc:
+        # Past the month's spend limit there's no plan either; tomorrow's run
+        # asks again.
         log.warning("compact: no merge plan: %s", exc)
         return 0
 

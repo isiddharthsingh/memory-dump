@@ -82,14 +82,13 @@ class AnthropicVisionProvider:
     name = "anthropic"
 
     async def analyze_pdf(self, data: bytes, filename: str) -> VisionResult:
-        settings = get_settings()
         b64 = base64.b64encode(data).decode("ascii")
         prompt = f"Filename: {filename}\n\nRead the attached PDF."
         fields = await claude_json(
             purpose="analyze_pdf",
             schema=_SCHEMA,
             effort="medium",
-            model=settings.claude_analysis_model,
+            job="analysis",
             # 60,000 characters of raw_text plus thinking: room for scripts
             # that take more tokens per character than English (Devanagari).
             max_tokens=64_000,
@@ -114,14 +113,13 @@ class AnthropicVisionProvider:
         return _result(fields, fallback_title=filename)
 
     async def analyze_image(self, data: bytes, mime_type: str) -> VisionResult:
-        settings = get_settings()
         b64 = base64.b64encode(data).decode("ascii")
         prompt = "Describe the attached image."
         fields = await claude_json(
             purpose="analyze_image",
             schema=_SCHEMA,
             effort="medium",
-            model=settings.claude_analysis_model,
+            job="analysis",
             max_tokens=8000,
             system=VISION_SYSTEM,
             messages=[

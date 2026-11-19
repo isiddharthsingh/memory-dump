@@ -186,10 +186,17 @@ async def test_claude_calls_ask_for_fallbacks_effort_and_a_schema(
     monkeypatch.setattr(clients, "anthropic_client", lambda: fake)
     tags = {"type": "object", "properties": {"tags": {"type": "array"}}}
     got = await clients.claude_json(
-        purpose="t", schema=tags, effort="low", model="claude-haiku-5-5", max_tokens=10
+        purpose="t",
+        job="analysis",
+        schema=tags,
+        effort="low",
+        model="claude-haiku-5-5",
+        max_tokens=10,
     )
     assert got == {"tags": ["a"]}
-    await clients.claude(purpose="t", effort="medium", model="claude-sonnet-5-5", max_tokens=10)
+    await clients.claude(
+        purpose="t", job="synthesis", effort="medium", model="claude-sonnet-5-5", max_tokens=10
+    )
     haiku, sonnet = fake.sent
     # Haiku 5.5 has no server-side fallback; a request naming one is refused.
     assert "fallbacks" not in haiku and "betas" not in haiku
@@ -206,18 +213,22 @@ async def test_a_refusal_or_a_cut_off_answer_raises(monkeypatch: pytest.MonkeyPa
     structlog.contextvars.clear_contextvars()
     monkeypatch.setattr(clients, "anthropic_client", lambda: _Claude(_message("refusal")))
     with pytest.raises(Refused) as refused:
-        await clients.claude(purpose="t", model="claude-opus-5-5", max_tokens=10)
+        await clients.claude(purpose="t", job="ask", model="claude-opus-5-5", max_tokens=10)
     assert refused.value.category == "cyber"
     assert not is_transient(refused.value)
     assert user_message(refused.value) == "Claude declined to answer that."
     with pytest.raises(Refused):
-        async with clients.claude_stream(purpose="t", model="claude-opus-5-5", max_tokens=10):
+        async with clients.claude_stream(
+            purpose="t", job="ask", model="claude-opus-5-5", max_tokens=10
+        ):
             pass
 
     cut = _Claude(_message("max_tokens", '{"tags": ['))
     monkeypatch.setattr(clients, "anthropic_client", lambda: cut)
     with pytest.raises(ValueError, match="cut off"):
-        await clients.claude_json(purpose="t", schema={}, model="claude-haiku-5-5", max_tokens=1)
+        await clients.claude_json(
+            purpose="t", job="analysis", schema={}, model="claude-haiku-5-5", max_tokens=1
+        )
 
 
 async def test_query_embeddings_are_cached(monkeypatch: pytest.MonkeyPatch) -> None:

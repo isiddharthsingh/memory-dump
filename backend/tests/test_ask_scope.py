@@ -272,7 +272,7 @@ async def test_retrieval_searches_the_planned_query_and_drops_filters_that_find_
     )
     assert len(chunks) == 1
     planned = fake.planned[0]
-    assert planned["model"] == get_settings().claude_analysis_model
+    assert planned["job"] == "analysis"
     assert planned["effort"] == "low"
     assert "Today is 2026-10-30 (UTC)." in planned["messages"][0]["content"]
     # Citation markers mean nothing to a search.
