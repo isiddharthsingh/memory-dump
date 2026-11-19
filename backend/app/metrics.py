@@ -38,6 +38,11 @@ PROVIDER_CALLS = Counter(
 PROVIDER_TOKENS = Counter(
     "provider_tokens_total", "Tokens spent", ["provider", "model", "purpose", "kind"]
 )
+PROVIDER_COST = Counter(
+    "provider_cost_usd_total",
+    "What the calls cost at list prices, by whose key paid",
+    ["provider", "billed_to"],
+)
 
 
 def render() -> tuple[bytes, str]:
