@@ -24,10 +24,11 @@ from app import kv, storage, thumbnails
 from app.ai.analyze import Analysis, analyze
 from app.ai.embed import chunk_text, embed_chunks
 from app.ai.providers import get_vision_provider
+from app.ai.wire import ProviderError
 from app.config import get_settings
 from app.db.models import Item, ItemChunk
 from app.db.session import get_sessionmaker
-from app.errors import is_transient
+from app.errors import SpendLimitReached, is_transient, user_message
 from app.extractors.base import flatten, get_extractor
 from app.notifications import send_to_user
 from app.queue import enqueue, synthesize_job_id
@@ -187,6 +188,15 @@ async def _set_status(claim: _Claim, status: str, error: str) -> bool:
     return updated is not None
 
 
+def _reason(exc: Exception) -> str:
+    """What a failed item says of its failure, which the app reads: the
+    error's name and its text. For a failure on the user's own key the text
+    is the sentence written for them, never the provider's answer, which can
+    repeat part of the key."""
+    said = user_message(exc) if isinstance(exc, ProviderError) else str(exc)
+    return f"{type(exc).__name__}: {said}"
+
+
 async def _failed(ctx: dict[str, Any], claim: _Claim, exc: Exception) -> str:
     """Retries a transient failure later (raising Retry); marks the item
     failed on anything else, or on the last try. "superseded" when a newer
@@ -198,9 +208,12 @@ async def _failed(ctx: dict[str, Any], claim: _Claim, exc: Exception) -> str:
         raise later(ctx, 60, exc) from exc
     if is_transient(exc):
         log.error("ingest: gave up after %s tries: %r", ctx.get("job_try", 1), exc)
+    elif isinstance(exc, SpendLimitReached):
+        # The month's limit doing what it is for.
+        log.warning("ingest: not done, the spend limit is reached")
     else:
         log.exception("ingest failed")
-    if not await _set_status(claim, "failed", f"{type(exc).__name__}: {exc}"):
+    if not await _set_status(claim, "failed", _reason(exc)):
         return "superseded"
     async with get_sessionmaker()() as session:
         await send_to_user(
