@@ -15,6 +15,7 @@ import pytest
 import structlog
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, insert, select, update
+from voyageai import error as voyage_error
 
 from app import pricing, secretbox
 from app.ai import catalog, clients, routing
@@ -28,6 +29,7 @@ from app.workers.ingest import _reason
 from tests.conftest import signup
 
 KEY = "sk-test-0123456789abcdWXYZ"
+VOYAGE_KEY = "pa-test-0123456789abcdVOYG"
 
 
 @pytest.fixture
@@ -47,6 +49,7 @@ def db() -> Iterator[Any]:
 def secret(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(get_settings(), "keys_secret", "test-secret-" + "x" * 32)
     monkeypatch.setattr(get_settings(), "free_monthly_usd", 3.0)
+    monkeypatch.setattr(get_settings(), "voyage_free_monthly_usd", 1.0)
     monkeypatch.setattr(get_settings(), "rate_limit_keys_per_hour", 0)
 
 
@@ -69,13 +72,15 @@ def accepted(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, str | None
     return checked
 
 
-def _spend(db: Any, user_id: uuid.UUID, usd: str, billed_to: str = "platform") -> None:
+def _spend(
+    db: Any, user_id: uuid.UUID, usd: str, billed_to: str = "platform", model: str | None = None
+) -> None:
     with db.begin() as conn:
         conn.execute(
             insert(LlmUsage.__table__).values(
                 user_id=user_id,
                 day=func.current_date(),
-                model=f"spent-{uuid.uuid4().hex[:6]}",
+                model=model or f"spent-{uuid.uuid4().hex[:6]}",
                 billed_to=billed_to,
                 calls=1,
                 cost_usd=Decimal(usd),
@@ -175,6 +180,16 @@ def test_a_new_account_is_on_the_free_allowance(
     assert body["free"]["limit"] == 3.0 and body["free"]["spent"] == 0
     assert date.fromisoformat(body["free"]["resets"]) == routing.resets()
     assert body["own"] == {"limit": None, "spent": 0}
+    # Voyage counts toward the free allowance: no key, and no cap of its own.
+    assert body["voyage"] == {
+        "id": "voyage",
+        "name": "Voyage",
+        "placeholder": "pa-…",
+        "help": "Create a key at dashboard.voyageai.com under API keys.",
+        "key": None,
+        "limit": None,
+        "spent": 0,
+    }
     assert [p["id"] for p in body["providers"]] == [
         "anthropic",
         "openai",
@@ -353,13 +368,14 @@ def test_the_free_allowance_ends_at_its_limit_but_not_for_an_admin(
     headers, user_id = account
     _spend(db, user_id, "2.99")
     assert _as_user(client, user_id, routing.resolve) == routing.PLATFORM
-    _as_user(client, user_id, routing.check_voyage)
+    assert _as_user(client, user_id, routing.voyage) == routing.PLATFORM_VOYAGE
 
     _spend(db, user_id, "0.02")
     with pytest.raises(SpendLimitReached) as reached:
         _as_user(client, user_id, routing.resolve)
-    with pytest.raises(SpendLimitReached):
-        _as_user(client, user_id, routing.check_voyage)
+    with pytest.raises(SpendLimitReached) as embedding:
+        _as_user(client, user_id, routing.voyage)
+    assert str(embedding.value) == str(reached.value)
     assert not reached.value.own and not is_transient(reached.value)
     day = routing.resets()
     assert user_message(reached.value) == (
@@ -372,7 +388,7 @@ def test_the_free_allowance_ends_at_its_limit_but_not_for_an_admin(
     # The operator's own runs over every account aren't capped.
     async def reembed() -> routing.Route:
         structlog.contextvars.bind_contextvars(job="reembed")
-        await routing.check_voyage()
+        assert await routing.voyage() == routing.PLATFORM_VOYAGE
         return await routing.resolve()
 
     assert _as_user(client, user_id, reembed) == routing.PLATFORM
@@ -380,7 +396,7 @@ def test_the_free_allowance_ends_at_its_limit_but_not_for_an_admin(
     with db.begin() as conn:
         conn.execute(update(User.__table__).where(User.id == user_id).values(is_admin=True))
     assert _as_user(client, user_id, routing.resolve) == routing.PLATFORM
-    _as_user(client, user_id, routing.check_voyage)
+    assert _as_user(client, user_id, routing.voyage) == routing.PLATFORM_VOYAGE
     body = client.get("/v1/ai", headers=headers).json()
     assert body["admin"] is True and body["free"]["limit"] is None
 
@@ -424,8 +440,9 @@ def test_an_own_key_takes_the_calls_past_the_free_allowance_up_to_its_own_limit(
     assert route.own and route.provider == "openrouter" and route.key == KEY
     assert route.user_id == user_id
     assert route.models == catalog.PROVIDERS["openrouter"].defaults
-    # Embeddings stay on the server's key, and aren't refused to them.
-    _as_user(client, user_id, routing.check_voyage)
+    # Embeddings stay on the server's key: what was spent there before the
+    # key isn't Voyage's, so it doesn't count toward their month of it.
+    assert _as_user(client, user_id, routing.voyage) == routing.PLATFORM_VOYAGE
 
     client.put("/v1/ai/limit", json={"limit": 2}, headers=headers)
     _spend(db, user_id, "1.50", "own")
@@ -442,6 +459,191 @@ def test_an_own_key_takes_the_calls_past_the_free_allowance_up_to_its_own_limit(
     with pytest.raises(SpendLimitReached) as free:
         _as_user(client, user_id, routing.resolve)
     assert not free.value.own
+
+
+def test_on_an_own_key_the_servers_voyage_is_free_up_to_its_own_monthly_cap(
+    client: TestClient,
+    db: Any,
+    account: tuple[dict[str, str], uuid.UUID],
+    accepted: list[tuple[str, str, str | None]],
+) -> None:
+    headers, user_id = account
+    client.put("/v1/ai/keys/gemini", json={"key": KEY}, headers=headers)
+    # Only Voyage's models count toward it, whatever else the server's keys did.
+    _spend(db, user_id, "40")
+    _spend(db, user_id, "0.99", model="voyage-3-large")
+    assert _as_user(client, user_id, routing.voyage) == routing.PLATFORM_VOYAGE
+    voyage = client.get("/v1/ai", headers=headers).json()["voyage"]
+    assert voyage["key"] is None and voyage["limit"] == 1.0 and voyage["spent"] == 0.99
+
+    _spend(db, user_id, "0.01", model="rerank-2.5")
+    with pytest.raises(SpendLimitReached) as reached:
+        _as_user(client, user_id, routing.voyage)
+    assert reached.value.voyage and not reached.value.own and not is_transient(reached.value)
+    day = routing.resets()
+    assert user_message(reached.value) == (
+        "You've used this month's free $1.00 of Voyage, which indexes and searches your "
+        f"saves. Add your own Voyage key in Settings, or wait until {day:%B} {day.day}."
+    )
+    # Their models are on their own key and go on.
+    assert _as_user(client, user_id, routing.resolve).own
+
+    # Last month's doesn't count, a server without the cap has none, nor an admin.
+    with db.begin() as conn:
+        conn.execute(
+            update(LlmUsage.__table__)
+            .where(LlmUsage.user_id == user_id, LlmUsage.model == "voyage-3-large")
+            .values(day=func.date_trunc("month", func.current_date()) - func.make_interval(0, 1))
+        )
+    assert _as_user(client, user_id, routing.voyage) == routing.PLATFORM_VOYAGE
+    _spend(db, user_id, "5", model="voyage-3-large")
+    with pytest.raises(SpendLimitReached):
+        _as_user(client, user_id, routing.voyage)
+    with db.begin() as conn:
+        conn.execute(update(User.__table__).where(User.id == user_id).values(is_admin=True))
+    assert _as_user(client, user_id, routing.voyage) == routing.PLATFORM_VOYAGE
+    assert client.get("/v1/ai", headers=headers).json()["voyage"]["limit"] is None
+
+
+class _OwnVoyage:
+    """Stands in for a Voyage client made with a user's key."""
+
+    keys: list[str] = []
+    failure: Exception | None = None
+
+    def __init__(self, api_key: str, **_: Any) -> None:
+        self.keys.append(api_key)
+
+    async def embed(self, texts: list[str], **_: Any) -> SimpleNamespace:
+        if self.failure:
+            raise self.failure
+        return SimpleNamespace(embeddings=[[0.0] for _ in texts], total_tokens=1_000_000)
+
+    async def rerank(self, **_: Any) -> SimpleNamespace:
+        return SimpleNamespace(results=[], total_tokens=1_000_000)
+
+
+@pytest.fixture
+def own_voyage(monkeypatch: pytest.MonkeyPatch) -> type[_OwnVoyage]:
+    """Voyage clients made for a call are stand-ins, and the server's own
+    Voyage client must not be used."""
+
+    def server() -> None:
+        raise AssertionError("the server's Voyage key was used")
+
+    monkeypatch.setattr(_OwnVoyage, "keys", [])
+    monkeypatch.setattr(_OwnVoyage, "failure", None)
+    monkeypatch.setattr(clients.voyageai, "AsyncClient", _OwnVoyage)
+    monkeypatch.setattr(clients, "voyage_client", server)
+    return _OwnVoyage
+
+
+def test_a_voyage_key_of_their_own_makes_their_voyage_calls_beside_the_provider_in_use(
+    client: TestClient,
+    db: Any,
+    account: tuple[dict[str, str], uuid.UUID],
+    accepted: list[tuple[str, str, str | None]],
+    own_voyage: type[_OwnVoyage],
+) -> None:
+    headers, user_id = account
+    client.put("/v1/ai/keys/anthropic", json={"key": KEY}, headers=headers)
+    _spend(db, user_id, "2", model="voyage-3-large")
+    with pytest.raises(SpendLimitReached):
+        _as_user(client, user_id, routing.voyage)
+
+    saved = client.put("/v1/ai/keys/voyage", json={"key": VOYAGE_KEY}, headers=headers)
+    assert saved.status_code == 200, saved.text
+    assert accepted[-1] == ("voyage", VOYAGE_KEY, None)
+    body = saved.json()
+    # Saved beside the provider's key, never in its place, and never returned.
+    assert body["provider"] == "anthropic"
+    assert "voyage" not in [p["id"] for p in body["providers"]]
+    assert body["voyage"]["key"]["hint"] == "VOYG" and body["voyage"]["limit"] is None
+    assert VOYAGE_KEY not in saved.text
+    with db.connect() as conn:
+        stored = conn.execute(
+            select(ProviderKey.secret).where(
+                ProviderKey.user_id == user_id, ProviderKey.provider == "voyage"
+            )
+        ).scalar_one()
+    assert VOYAGE_KEY not in stored and secretbox.unseal(stored) == VOYAGE_KEY
+
+    route = _as_user(client, user_id, routing.voyage)
+    assert route == routing.Route(provider="voyage", own=True, key=VOYAGE_KEY, user_id=user_id)
+
+    async def calls() -> None:
+        await clients.voyage_embed(["a", "b"], input_type="document")
+        await clients.voyage_rerank("q", ["d"], 1)
+
+    _as_user(client, user_id, calls)
+    assert own_voyage.keys == [VOYAGE_KEY, VOYAGE_KEY]
+    # Billed to them: $0.18 of embedding and $0.05 of reranking.
+    assert [row for row in _usage(db, user_id) if row.billed_to == "own"] == [
+        ("rerank-2.5", "own", Decimal("0.05000000"), 1),
+        ("voyage-3-large", "own", Decimal("0.18000000"), 1),
+    ]
+    body = client.get("/v1/ai", headers=headers).json()
+    assert body["own"]["spent"] == 0.23 and body["voyage"]["spent"] == 2.0
+
+    # It counts toward the limit they set for their own keys.
+    client.put("/v1/ai/limit", json={"limit": 0.2}, headers=headers)
+    with pytest.raises(SpendLimitReached) as reached:
+        _as_user(client, user_id, routing.voyage)
+    assert reached.value.own
+    client.put("/v1/ai/limit", json={"limit": None}, headers=headers)
+
+    # It has no models and is never the provider in use.
+    assert (
+        client.put("/v1/ai/provider", json={"provider": "voyage"}, headers=headers).status_code
+        == 404
+    )
+    picks = {"analysis": "voyage-3-large", "synthesis": "voyage-3-large", "ask": "voyage-3-large"}
+    assert client.put("/v1/ai/models/voyage", json=picks, headers=headers).status_code == 404
+
+    # Without it they are back on the server's Voyage, already past their month of it.
+    body = client.delete("/v1/ai/keys/voyage", headers=headers).json()
+    assert body["provider"] == "anthropic"
+    assert body["voyage"]["key"] is None and body["voyage"]["limit"] == 1.0
+    with pytest.raises(SpendLimitReached) as capped:
+        _as_user(client, user_id, routing.voyage)
+    assert capped.value.voyage
+
+
+def test_a_voyage_key_works_on_the_free_allowance_too_and_its_failures_are_the_users(
+    client: TestClient,
+    db: Any,
+    account: tuple[dict[str, str], uuid.UUID],
+    own_voyage: type[_OwnVoyage],
+) -> None:
+    headers, user_id = account
+    # A key Voyage turns down isn't saved.
+    own_voyage.failure = voyage_error.AuthenticationError("Provided API key is invalid.", None, 401)
+    refused = client.put("/v1/ai/keys/voyage", json={"key": VOYAGE_KEY}, headers=headers)
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"] == "Voyage didn't accept that key."
+    assert client.get("/v1/ai", headers=headers).json()["voyage"]["key"] is None
+
+    own_voyage.failure = None
+    body = client.put("/v1/ai/keys/voyage", json={"key": VOYAGE_KEY}, headers=headers).json()
+    # Still on the server's models, with the allowance used up; Voyage is theirs.
+    assert body["provider"] is None and body["voyage"]["key"]["hint"] == "VOYG"
+    _spend(db, user_id, "3")
+    with pytest.raises(SpendLimitReached):
+        _as_user(client, user_id, routing.resolve)
+    assert _as_user(client, user_id, routing.voyage).own
+
+    # A failure on it names Voyage and leaves the server's circuit alone.
+    before = clients._breakers["voyage"].failures
+    own_voyage.failure = voyage_error.AuthenticationError("Provided API key is invalid.", None, 401)
+    with pytest.raises(ProviderError) as failed:
+        _as_user(client, user_id, lambda: clients.voyage_embed(["a"], input_type="query"))
+    assert user_message(failed.value) == "Voyage didn't accept your API key. Check it in Settings."
+    assert not is_transient(failed.value)
+    own_voyage.failure = voyage_error.APIConnectionError("no route to host")
+    with pytest.raises(ProviderError) as unreachable:
+        _as_user(client, user_id, lambda: clients.voyage_embed(["a"], input_type="query"))
+    assert is_transient(unreachable.value)
+    assert clients._breakers["voyage"].failures == before
 
 
 def test_a_key_sealed_with_another_secret_reads_as_a_rejected_key(

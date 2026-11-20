@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     # USD at list prices, before they need their own key; 0 = no cap. Admins
     # (`python -m app.admin`) have none.
     free_monthly_usd: float = 3.0
+    # What an account on its own model key may spend of the Voyage key above
+    # in a month, since its own key can't embed; 0 = no cap. A Voyage key of
+    # its own lifts it.
+    voyage_free_monthly_usd: float = 1.0
     # Seals the provider keys users save (app/secretbox.py). At least 32
     # characters; while it's empty the server takes no keys. Changing it
     # makes every saved key unreadable.

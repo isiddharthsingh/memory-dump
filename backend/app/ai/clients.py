@@ -20,7 +20,8 @@ Each call on the server's keys
 
 A call on a user's own key takes none of those slots and doesn't move the
 circuit, which guard the server's accounts; a user has OWN_CONCURRENCY of
-their own, and a failure there is a `ProviderError`.
+their own, and a failure there is a `ProviderError`. Voyage calls go the same
+two ways: on the server's key, or on the Voyage key the user saved.
 
 Claude calls go through the beta Messages endpoint so models that have one get
 Anthropic's server-side fallback on a refusal (`fallbacks: "default"`); a
@@ -47,6 +48,7 @@ import voyageai
 from anthropic.lib.streaming import BetaAsyncMessageStream
 from anthropic.types.beta import BetaMessage
 from redis.exceptions import RedisError
+from voyageai import error as voyage_error
 
 from app import kv, usage
 from app.ai import catalog, gemini, openai_chat, routing, wire
@@ -95,6 +97,18 @@ def voyage_client() -> voyageai.AsyncClient:
             api_key=s.voyage_api_key, max_retries=2, timeout=s.voyage_timeout_s
         ),
     )
+
+
+def _voyage(route: Route, timeout_s: float | None = None) -> voyageai.AsyncClient:
+    """The Voyage client a route's call is made with: the server's, or one
+    made for this call that knows only the user's key."""
+    if not route.own:
+        return voyage_client()
+    if not route.key:
+        # The SDK would fall back to a key from the environment: the server's.
+        raise ValueError("a call on a user's own key needs the key")
+    timeout = timeout_s or get_settings().voyage_timeout_s
+    return voyageai.AsyncClient(api_key=route.key, max_retries=2, timeout=timeout)
 
 
 _breakers = {"anthropic": _Breaker("anthropic"), "voyage": _Breaker("voyage")}
@@ -187,13 +201,17 @@ async def _calling(provider: str) -> AsyncIterator[None]:
 
 @contextmanager
 def _as_provider_errors(provider: str) -> Iterator[None]:
-    """The Anthropic SDK's failures on a user's key as the adapters raise them."""
+    """The Anthropic and Voyage SDKs' failures on a user's key as the
+    adapters raise them."""
     try:
         yield
     except anthropic.APIStatusError as exc:
         raise wire.ProviderError(provider, exc.status_code, exc.message, retry_after(exc)) from exc
     except anthropic.APIConnectionError as exc:
         raise wire.ProviderError(provider, None, repr(exc)) from exc
+    except voyage_error.VoyageError as exc:
+        # No status when it never answered: no connection, a timeout.
+        raise wire.ProviderError(provider, exc.http_status, str(exc)) from exc
 
 
 @asynccontextmanager
@@ -212,7 +230,7 @@ async def _calling_own(route: Route) -> AsyncIterator[None]:
 
 
 def _call(route: Route) -> AbstractAsyncContextManager[None]:
-    return _calling_own(route) if route.own else _calling("anthropic")
+    return _calling_own(route) if route.own else _calling(route.provider)
 
 
 def _sdk(route: Route, timeout_s: float | None) -> Any:
@@ -250,6 +268,12 @@ async def check_key(provider: str, key: str, region: str | None = None) -> None:
     `ProviderError` when it doesn't, or when the provider can't be asked."""
     if provider in _ADAPTERS:
         await _ADAPTERS[provider].check_key(provider, key)
+        return
+    if provider == catalog.VOYAGE.id:
+        # Voyage lists no models either; embedding a word costs next to nothing.
+        voyage = _voyage(Route(provider=provider, own=True, key=key), KEY_CHECK_TIMEOUT_S)
+        with _as_provider_errors(provider):
+            await voyage.embed(["key"], model=get_settings().voyage_embed_model, input_type="query")
         return
     client = _sdk(Route(provider=provider, own=True, key=key, region=region), KEY_CHECK_TIMEOUT_S)
     with _as_provider_errors(provider):
@@ -435,28 +459,29 @@ def _abandoned(purpose: str, route: Route, asked: str, stream: Any) -> None:
 
 
 async def voyage_embed(texts: list[str], *, input_type: str) -> list[list[float]]:
-    await routing.check_voyage()
+    route = await routing.voyage()
     model = get_settings().voyage_embed_model
+    voyage = _voyage(route)
     out: list[list[float]] = []
     for start in range(0, len(texts), EMBED_BATCH):
-        async with _calling("voyage"):
-            result = await voyage_client().embed(
+        async with _call(route):
+            result = await voyage.embed(
                 texts=texts[start : start + EMBED_BATCH],
                 model=model,
                 input_type=input_type,
                 truncation=True,
             )
         out.extend(cast(list[list[float]], result.embeddings))
-        await usage.record_voyage(f"embed_{input_type}", model, result.total_tokens)
+        await usage.record_voyage(f"embed_{input_type}", model, result.total_tokens, own=route.own)
     return out
 
 
 async def voyage_rerank(query: str, documents: list[str], top_k: int) -> list[tuple[int, float]]:
-    await routing.check_voyage()
+    route = await routing.voyage()
     model = get_settings().voyage_rerank_model
-    async with _calling("voyage"):
-        result = await voyage_client().rerank(
+    async with _call(route):
+        result = await _voyage(route).rerank(
             query=query, documents=documents, model=model, top_k=top_k
         )
-    await usage.record_voyage("rerank", model, result.total_tokens)
+    await usage.record_voyage("rerank", model, result.total_tokens, own=route.own)
     return [(r.index, r.relevance_score) for r in result.results]

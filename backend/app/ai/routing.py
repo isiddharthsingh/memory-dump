@@ -6,9 +6,12 @@ monthly limit they may have set. Everyone else is on the server's keys: free
 up to FREE_MONTHLY_USD a calendar month (UTC), then refused until the month
 ends or they add a key. Admins have no cap.
 
-Voyage (embeddings, reranking) is always the server's. Its cost counts toward
-the free allowance, and a user on the allowance is refused it once that is
-used up; a user on their own key is not, since their own key can't embed.
+Voyage (embeddings, reranking) is the server's key too, unless the user saved
+a Voyage key of their own, which then makes every Voyage call of theirs. On
+the server's key its cost counts toward the free allowance, and a user on the
+allowance is refused it once that is used up. A user on their own model key
+can't embed with it, so they get VOYAGE_FREE_MONTHLY_USD of the server's
+Voyage a month and are refused past that until they add a Voyage key.
 
 The user comes from the log context, as in app/usage.py. A call with no user
 (a script, a test) is the server's own and isn't capped; neither is one made
@@ -23,9 +26,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from typing import Any
 
 import structlog
-from sqlalchemy import ScalarSelect, and_, func, select
+from sqlalchemy import ScalarSelect, and_, func, or_, select
+from sqlalchemy.orm import aliased
 
 from app import secretbox
 from app.ai import catalog
@@ -57,6 +62,7 @@ class Route:
 
 
 PLATFORM = Route()
+PLATFORM_VOYAGE = Route(provider=catalog.VOYAGE.id)
 
 
 @dataclass(frozen=True)
@@ -72,10 +78,26 @@ class Account:
     own_limit: Decimal | None
     platform_spent: Decimal
     own_spent: Decimal
+    # The user's own Voyage key, and the month's Voyage on the server's.
+    voyage_secret: str | None
+    voyage_spent: Decimal
 
     @property
     def on_own_key(self) -> bool:
         return bool(self.provider and self.secret and secretbox.available())
+
+    @property
+    def on_own_voyage(self) -> bool:
+        return bool(self.voyage_secret and secretbox.available())
+
+    @property
+    def voyage_limit(self) -> Decimal | None:
+        """The month's cap on the server's Voyage, which only an account on
+        its own model key has, and not with a Voyage key or the admin flag."""
+        if self.is_admin or self.on_own_voyage or not self.on_own_key:
+            return None
+        limit = Decimal(str(get_settings().voyage_free_monthly_usd))
+        return limit if limit > 0 else None
 
 
 def free_limit() -> Decimal | None:
@@ -90,20 +112,20 @@ def resets(today: date | None = None) -> date:
     return date(today.year + today.month // 12, today.month % 12 + 1, 1)
 
 
-def _spent(billed_to: str) -> ScalarSelect[Decimal]:
-    return (
-        select(func.coalesce(func.sum(LlmUsage.cost_usd), 0))
-        .where(
-            LlmUsage.user_id == User.id,
-            LlmUsage.billed_to == billed_to,
-            LlmUsage.day >= func.date_trunc("month", func.current_date()),
-        )
-        .correlate(User)
-        .scalar_subquery()
+def _spent(billed_to: str, *, voyage: bool = False) -> ScalarSelect[Decimal]:
+    spent = select(func.coalesce(func.sum(LlmUsage.cost_usd), 0)).where(
+        LlmUsage.user_id == User.id,
+        LlmUsage.billed_to == billed_to,
+        LlmUsage.day >= func.date_trunc("month", func.current_date()),
     )
+    if voyage:
+        # `llm_usage` names the model, not whose it is; Voyage's are these.
+        spent = spent.where(or_(LlmUsage.model.like("voyage-%"), LlmUsage.model.like("rerank-%")))
+    return spent.correlate(User).scalar_subquery()
 
 
 async def account(user_id: uuid.UUID) -> Account | None:
+    voyage_key = aliased(ProviderKey)
     stmt = (
         select(
             User.is_admin,
@@ -114,15 +136,22 @@ async def account(user_id: uuid.UUID) -> Account | None:
             User.own_spend_limit_usd,
             _spent("platform"),
             _spent("own"),
+            voyage_key.secret,
+            _spent("platform", voyage=True),
         )
         .outerjoin(
             ProviderKey,
             and_(ProviderKey.user_id == User.id, ProviderKey.provider == User.ai_provider),
         )
+        .outerjoin(
+            voyage_key,
+            and_(voyage_key.user_id == User.id, voyage_key.provider == catalog.VOYAGE.id),
+        )
         .where(User.id == user_id)
     )
     async with get_sessionmaker()() as session:
-        row = (await session.execute(stmt)).one_or_none()
+        # More columns than SQLAlchemy types a row for.
+        row: Any = (await session.execute(stmt)).one_or_none()
     return Account(*row) if row else None
 
 
@@ -154,27 +183,45 @@ async def resolve() -> Route:
         _check_free(acct)
         return PLATFORM
     assert acct.provider and acct.secret
-    if acct.own_limit is not None and acct.own_spent >= acct.own_limit:
-        raise SpendLimitReached(own=True, limit=acct.own_limit, resets=resets())
-    try:
-        key = secretbox.unseal(acct.secret)
-    except secretbox.Unreadable as exc:
-        # As good as a key the provider turned down: the user saves it again.
-        raise ProviderError(acct.provider, 401, str(exc)) from exc
-    user_id = uuid.UUID(structlog.contextvars.get_contextvars()["user_id"])
     return Route(
         provider=acct.provider,
         own=True,
-        key=key,
+        key=_own_key(acct, acct.provider, acct.secret),
         region=acct.region,
         models=catalog.chosen(acct.provider, acct.models),
-        user_id=user_id,
+        user_id=_user_id(),
     )
 
 
-async def check_voyage() -> None:
-    """SpendLimitReached when the user is on the free allowance and has used
-    it up; Voyage is the server's key whoever calls."""
+def _user_id() -> uuid.UUID:
+    return uuid.UUID(structlog.contextvars.get_contextvars()["user_id"])
+
+
+def _own_key(acct: Account, provider: str, secret: str) -> str:
+    """The user's key for a call, or SpendLimitReached past the limit they
+    set for their own keys."""
+    if acct.own_limit is not None and acct.own_spent >= acct.own_limit:
+        raise SpendLimitReached(own=True, limit=acct.own_limit, resets=resets())
+    try:
+        return secretbox.unseal(secret)
+    except secretbox.Unreadable as exc:
+        # As good as a key the provider turned down: the user saves it again.
+        raise ProviderError(provider, 401, str(exc)) from exc
+
+
+async def voyage() -> Route:
+    """The route for a Voyage call, or SpendLimitReached: the user's own
+    Voyage key when they saved one, else the server's, while their free
+    allowance lasts or, on their own model key, their month's share of it."""
     acct = await _caller()
-    if acct is not None and not acct.on_own_key:
+    if acct is None:
+        return PLATFORM_VOYAGE
+    if acct.on_own_voyage:
+        assert acct.voyage_secret
+        key = _own_key(acct, catalog.VOYAGE.id, acct.voyage_secret)
+        return Route(provider=catalog.VOYAGE.id, own=True, key=key, user_id=_user_id())
+    if not acct.on_own_key:
         _check_free(acct)
+    elif (limit := acct.voyage_limit) is not None and acct.voyage_spent >= limit:
+        raise SpendLimitReached(own=False, voyage=True, limit=limit, resets=resets())
+    return PLATFORM_VOYAGE

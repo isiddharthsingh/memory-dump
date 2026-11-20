@@ -122,9 +122,21 @@ PROVIDERS: dict[str, Provider] = {
 
 DEFAULT_REGION = "us-east-1"
 
+# Voyage embeds and reranks for every account, whichever provider's models it
+# uses, so its key is saved beside a provider's and never takes its place:
+# it has no models to pick and is never the provider in use.
+VOYAGE = Provider(
+    id="voyage",
+    name="Voyage",
+    placeholder="pa-…",
+    help="Create a key at dashboard.voyageai.com under API keys.",
+    models=(),
+    defaults={},
+)
+
 
 def name(provider: str) -> str:
-    known = PROVIDERS.get(provider)
+    known = VOYAGE if provider == VOYAGE.id else PROVIDERS.get(provider)
     return known.name if known else provider
 
 

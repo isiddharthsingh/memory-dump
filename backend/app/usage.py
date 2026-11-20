@@ -43,8 +43,11 @@ async def record_claude(
     await _record(provider, purpose, model, tokens, own=own, billed=billed)
 
 
-async def record_voyage(purpose: str, model: str, total_tokens: int | None) -> None:
-    await _record("voyage", purpose, model, {"input_tokens": total_tokens or 0})
+async def record_voyage(
+    purpose: str, model: str, total_tokens: int | None, *, own: bool = False
+) -> None:
+    """A Voyage call's tokens; `own` when the user's Voyage key made it."""
+    await _record("voyage", purpose, model, {"input_tokens": total_tokens or 0}, own=own)
 
 
 async def _record(

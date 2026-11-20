@@ -60,19 +60,30 @@ class Refused(Exception):
 
 class SpendLimitReached(Exception):
     """The user's spend this month has reached its limit: the free allowance
-    on the server's keys, or (`own`) the limit they set for their own key.
-    Its text is written for the user; the app shows it as it is."""
+    on the server's keys, (`own`) the limit they set for their own keys, or
+    (`voyage`) what an account on its own model key may use of the server's
+    Voyage key. Its text is written for the user; the app shows it as it is."""
 
-    def __init__(self, *, own: bool, limit: Decimal, resets: date) -> None:
+    def __init__(self, *, own: bool, limit: Decimal, resets: date, voyage: bool = False) -> None:
         amount, day = f"${limit:.2f}", f"{resets:%B} {resets.day}"
-        super().__init__(
-            f"You've reached the {amount} monthly limit you set for your own key. "
-            f"Raise it in Settings, or wait until {day}."
-            if own
-            else f"You've used this month's free {amount}. "
-            f"Add your own API key in Settings, or wait until {day}."
-        )
+        if own:
+            text = (
+                f"You've reached the {amount} monthly limit you set for your own key. "
+                f"Raise it in Settings, or wait until {day}."
+            )
+        elif voyage:
+            text = (
+                f"You've used this month's free {amount} of Voyage, which indexes and "
+                f"searches your saves. Add your own Voyage key in Settings, or wait until {day}."
+            )
+        else:
+            text = (
+                f"You've used this month's free {amount}. "
+                f"Add your own API key in Settings, or wait until {day}."
+            )
+        super().__init__(text)
         self.own = own
+        self.voyage = voyage
         self.limit = limit
         self.resets = resets
 

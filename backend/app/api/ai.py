@@ -4,9 +4,11 @@ A user starts on the server's keys, free up to FREE_MONTHLY_USD a month. Here
 they save a key of their own for a provider (checked with that provider
 first, sealed before it is stored, never returned), choose which saved key is
 in use and which of its models do each job, and set a monthly limit on what
-their own keys may spend. Every route answers with the whole of it, so the
-app redraws from one shape. Routing and the limits themselves are in
-app/ai/routing.py.
+their own keys may spend. A Voyage key is saved the same way but beside the
+provider's, never in its place: it makes their embedding and reranking calls,
+which otherwise stay on the server's key. Every route answers with the whole
+of it, so the app redraws from one shape. Routing and the limits themselves
+are in app/ai/routing.py.
 """
 
 from __future__ import annotations
@@ -77,6 +79,21 @@ class OwnOut(BaseModel):
     spent: float
 
 
+class VoyageOut(BaseModel):
+    # What the `/ai/keys` routes call it.
+    id: str
+    name: str
+    placeholder: str
+    help: str
+    # The user's own Voyage key, which makes their Voyage calls when saved.
+    key: KeyOut | None
+    # What the account may use of the server's Voyage key this month, when
+    # it is capped apart from the free allowance (on its own model key, with
+    # no Voyage key), and what it has used.
+    limit: float | None
+    spent: float
+
+
 class AISettingsOut(BaseModel):
     admin: bool
     # False when the server can't keep keys (no KEYS_SECRET).
@@ -85,6 +102,7 @@ class AISettingsOut(BaseModel):
     provider: str | None
     free: FreeOut
     own: OwnOut
+    voyage: VoyageOut
     providers: list[ProviderOut]
 
 
@@ -114,6 +132,15 @@ def _provider(provider: str) -> catalog.Provider:
     return known
 
 
+def _keyed(provider: str) -> catalog.Provider:
+    """Whose key it is: a model provider's, or Voyage's."""
+    return catalog.VOYAGE if provider == catalog.VOYAGE.id else _provider(provider)
+
+
+def _key_out(key: ProviderKey | None) -> KeyOut | None:
+    return KeyOut(hint=key.hint, region=key.region, added=key.created_at) if key else None
+
+
 def _refuse(detail: str) -> HTTPException:
     """A 422 whose detail is a sentence the app shows as it is."""
     return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
@@ -132,6 +159,7 @@ async def _settings(session: AsyncSession, user: User) -> AISettingsOut:
             status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer exists"
         )
     limit = None if acct.is_admin else routing.free_limit()
+    voyage_limit = acct.voyage_limit
     return AISettingsOut(
         admin=acct.is_admin,
         keys=secretbox.available(),
@@ -145,6 +173,15 @@ async def _settings(session: AsyncSession, user: User) -> AISettingsOut:
             limit=None if acct.own_limit is None else float(acct.own_limit),
             spent=round(float(acct.own_spent), 4),
         ),
+        voyage=VoyageOut(
+            id=catalog.VOYAGE.id,
+            name=catalog.VOYAGE.name,
+            placeholder=catalog.VOYAGE.placeholder,
+            help=catalog.VOYAGE.help,
+            key=_key_out(saved.get(catalog.VOYAGE.id)),
+            limit=None if voyage_limit is None else float(voyage_limit),
+            spent=round(float(acct.voyage_spent), 4),
+        ),
         providers=[
             ProviderOut(
                 id=p.id,
@@ -152,9 +189,7 @@ async def _settings(session: AsyncSession, user: User) -> AISettingsOut:
                 placeholder=p.placeholder,
                 help=p.help,
                 region=p.region,
-                key=KeyOut(hint=key.hint, region=key.region, added=key.created_at)
-                if (key := saved.get(p.id))
-                else None,
+                key=_key_out(saved.get(p.id)),
                 models=[ModelOut(id=m.id, name=m.name) for m in p.models],
                 chosen={
                     str(role): model for role, model in catalog.chosen(p.id, acct.models).items()
@@ -183,8 +218,8 @@ async def save_key(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> AISettingsOut:
     """Saves the user's key for a provider, once the provider has accepted
-    it, and puts it in use."""
-    known = _provider(provider)
+    it, and puts it in use. A Voyage key is in use while it is saved."""
+    known = _keyed(provider)
     if not secretbox.available():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -220,9 +255,10 @@ async def save_key(
             set_={**values, "created_at": func.now()},
         )
     )
-    await session.execute(
-        update(User).where(User.id == current_user.id).values(ai_provider=provider)
-    )
+    if known is not catalog.VOYAGE:
+        await session.execute(
+            update(User).where(User.id == current_user.id).values(ai_provider=provider)
+        )
     await session.commit()
     return await _settings(session, current_user)
 
@@ -234,8 +270,8 @@ async def remove_key(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> AISettingsOut:
     """Forgets the key. If it was in use, the account is back on the
-    server's models."""
-    _provider(provider)
+    server's models, or for a Voyage key on the server's Voyage."""
+    _keyed(provider)
     await session.execute(
         delete(ProviderKey).where(
             ProviderKey.user_id == current_user.id, ProviderKey.provider == provider
