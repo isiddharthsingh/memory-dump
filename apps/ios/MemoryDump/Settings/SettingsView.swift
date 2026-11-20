@@ -16,6 +16,8 @@ struct SettingsView: View {
   @State private var exporting = false
   @State private var exported: ExportedFile?
   @State private var exportError: String?
+  /// Whose models are in use and the month's spend; nil until it's known.
+  @State private var ai: AISettings?
 
   var body: some View {
     NavigationStack {
@@ -35,6 +37,15 @@ struct SettingsView: View {
           }
           .listRowBackground(Palette.card)
         }
+
+        Section {
+          NavigationLink {
+            AISettingsView(settings: $ai)
+          } label: {
+            LabeledContent("Models & usage", value: ai?.summary ?? "")
+          }
+        }
+        .listRowBackground(Palette.card)
 
         Section {
           AppearancePicker(selection: $appearance)
@@ -138,6 +149,7 @@ struct SettingsView: View {
       }
     }
     .task { await check() }
+    .task { await loadAI() }
     // Again when the queue changes: what it just sent is now being analyzed.
     .task(id: app.queued.count) { await countAnalyzing() }
   }
@@ -156,6 +168,15 @@ struct SettingsView: View {
     health = await APIClient.shared.health()
     checking = false
     health == true ? Haptics.success() : Haptics.error()
+  }
+
+  /// The saved copy first, then the server's. The row says nothing when
+  /// there's neither.
+  private func loadAI() async {
+    if ai == nil { ai = try? await APIClient.saved.aiSettings() }
+    let before = ai
+    // Not over a change made on the screen meanwhile: its answer is newer.
+    if let fresh = try? await APIClient.shared.aiSettings(), ai == before { ai = fresh }
   }
 
   /// Counts the saves the server has but hasn't finished with, for as long as
