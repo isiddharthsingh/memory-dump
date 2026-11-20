@@ -355,6 +355,23 @@ struct AISettings: Codable, Hashable {
     var chosen: Chosen
   }
 
+  /// Voyage indexes and searches the library, whichever provider's models
+  /// the account uses, so its key is saved beside a provider's.
+  struct Voyage: Codable, Hashable {
+    /// What the `/ai/keys` routes call it.
+    let id: String
+    let name: String
+    let placeholder: String
+    let help: String
+    /// The user's own Voyage key, which makes their Voyage calls when saved.
+    let key: Provider.Key?
+    /// What the account may use of Memory Dump's Voyage key this month, when
+    /// that is capped on its own (on the user's own models, with no Voyage
+    /// key); nil when it isn't.
+    let limit: Double?
+    let spent: Double
+  }
+
   /// No cap on Memory Dump's own models for this account.
   let admin: Bool
   /// False when the server isn't set up to store keys.
@@ -363,6 +380,8 @@ struct AISettings: Codable, Hashable {
   var provider: String?
   let free: Free
   var own: Own
+  /// Nil in a copy saved before the server said anything of Voyage.
+  var voyage: Voyage? = nil
   var providers: [Provider]
 
   /// The bodies of the two `/ai` writes whose value can be nil. It goes out

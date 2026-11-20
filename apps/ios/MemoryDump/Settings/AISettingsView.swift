@@ -22,6 +22,8 @@ struct AISettingsView: View {
   @FocusState private var limitFocused: Bool
   /// A change other than a key is on its way.
   @State private var busy = false
+  /// The Search section is checking or removing a Voyage key.
+  @State private var voyageWorking = false
   @State private var error: String?
 
   private static let defaultRegion = "us-east-1"
@@ -30,6 +32,10 @@ struct AISettingsView: View {
   private var shown: AISettings.Provider? {
     settings?.providers.first { $0.id == pending ?? settings?.provider }
   }
+
+  /// Another change is on its way. Each one's answer replaces the whole of
+  /// `settings`, so they go one at a time.
+  private var locked: Bool { busy || voyageWorking }
 
   private var trimmedKey: String { key.trimmingCharacters(in: .whitespacesAndNewlines) }
   private var trimmedRegion: String { region.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -73,9 +79,12 @@ struct AISettingsView: View {
       usageSection(ai.usage)
       if ai.keys {
         providerSection(ai)
-        if let provider = ai.inUse, pending == nil {
-          modelsSection(provider)
-          limitSection(ai)
+        if let provider = ai.inUse, pending == nil { modelsSection(provider) }
+        // The limit is on every key of the user's own, a Voyage key alone too.
+        if pending == nil, ai.inUse != nil || ai.voyage?.key != nil { limitSection(ai) }
+        if pending == nil, let voyage = ai.voyage, let usage = ai.voyageUsage {
+          VoyageKeySection(settings: $settings, voyage: voyage, usage: usage, working: $voyageWorking)
+            .disabled(busy || checking)
         }
       }
     }
@@ -111,7 +120,7 @@ struct AISettingsView: View {
         ForEach(ai.providers) { Text($0.name).tag(String?.some($0.id)) }
       }
       .pickerStyle(.menu)
-      .disabled(busy || checking)
+      .disabled(locked || checking)
       if let provider = shown {
         if let saved = provider.key, !replacing {
           LabeledContent("Key", value: "•••• \(saved.hint)")
@@ -121,7 +130,7 @@ struct AISettingsView: View {
             region = saved.region ?? Self.defaultRegion
             replacing = true
           }
-          Button("Remove key", role: .destructive) { confirmRemove = true }
+          Button("Remove key", role: .destructive) { confirmRemove = true }.disabled(locked)
         } else {
           keyForm(provider)
         }
@@ -149,7 +158,7 @@ struct AISettingsView: View {
     }
     if let keyError { Text(keyError).font(.footnote).foregroundStyle(Palette.failed) }
     Button(checking ? "Checking…" : "Save key") { Task { await saveKey(provider) } }
-      .disabled(checking || trimmedKey.isEmpty || (provider.region && trimmedRegion.isEmpty))
+      .disabled(checking || voyageWorking || trimmedKey.isEmpty || (provider.region && trimmedRegion.isEmpty))
     if replacing { Button("Cancel") { clearKeyForm() }.disabled(checking) }
   }
 
@@ -169,7 +178,7 @@ struct AISettingsView: View {
       ForEach(AISettings.Job.allCases) { modelPicker($0, provider) }
     }
     .listRowBackground(Palette.card)
-    .disabled(busy)
+    .disabled(locked)
   }
 
   private func modelPicker(_ job: AISettings.Job, _ provider: AISettings.Provider) -> some View {
@@ -205,7 +214,7 @@ struct AISettingsView: View {
       Text("When this month’s spend on your key reaches it, Memory Dump stops using the key until next month.")
     }
     .listRowBackground(Palette.card)
-    .disabled(busy)
+    .disabled(locked)
   }
 
   // MARK: Loading and changing
@@ -318,7 +327,7 @@ struct AISettingsView: View {
   }
 
   private func setLimit() {
-    guard !busy, let amount = AISettings.amount(limitText), amount != settings?.own.limit else { return }
+    guard !locked, let amount = AISettings.amount(limitText), amount != settings?.own.limit else { return }
     limitFocused = false
     Task {
       if await write({ try await APIClient.shared.setSpendLimit(amount) }) { Haptics.success() }
@@ -357,7 +366,8 @@ extension AISettings {
     let resets = Format.day(free.resets)
     var usage: Usage
     if let inUse {
-      usage = Usage(text: "\(Format.money(own.spent)) on your \(inUse.name) key this month")
+      let whose = voyage?.key == nil ? "\(inUse.name) key" : "\(inUse.name) and Voyage keys"
+      usage = Usage(text: "\(Format.money(own.spent)) on your \(whose) this month")
       if let limit = own.limit, limit > 0 {
         usage.fraction = min(1, max(0, own.spent / limit))
         usage.isUsedUp = own.spent >= limit

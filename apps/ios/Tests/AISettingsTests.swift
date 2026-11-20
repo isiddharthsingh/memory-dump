@@ -29,14 +29,20 @@ import Testing
       chosen: .init(analysis: "small", synthesis: "large", ask: "large"))
   }
 
+  private static func voyage(key: Bool = false, limit: Double? = nil, spent: Double = 0) -> AISettings.Voyage {
+    AISettings.Voyage(
+      id: "voyage", name: "Voyage", placeholder: "pa-…", help: "Create a key at dashboard.voyageai.com under API keys.",
+      key: key ? .init(hint: "VOYG", region: nil, added: .now) : nil, limit: limit, spent: spent)
+  }
+
   private static func settings(
     admin: Bool = false, keys: Bool = true, provider: String? = nil, free: Double? = 3, spent: Double = 0.4213,
-    ownLimit: Double? = nil, ownSpent: Double = 0
+    ownLimit: Double? = nil, ownSpent: Double = 0, voyage: AISettings.Voyage? = nil
   ) -> AISettings {
     AISettings(
       admin: admin, keys: keys, provider: provider,
       free: .init(limit: free, spent: spent, resets: "2026-12-01"),
-      own: .init(limit: ownLimit, spent: ownSpent),
+      own: .init(limit: ownLimit, spent: ownSpent), voyage: voyage,
       providers: [Self.provider("anthropic", "Anthropic", key: false), Self.provider("openai", "OpenAI", key: true)])
   }
 
@@ -139,6 +145,62 @@ import Testing
     #expect(reached.fraction == 1)
     #expect(reached.isUsedUp)
     #expect(reached.footer == "You’ve reached your $10.00 limit. Memory Dump won’t use the key again until Dec 1.")
+  }
+
+  /// A copy saved before the server said anything of Voyage still opens.
+  @Test func decodesVoyageWhenTheServerSendsIt() throws {
+    let old = try JSONDecoder.api.decode(AISettings.self, from: Data(Self.json.utf8))
+    #expect(old.voyage == nil)
+    #expect(old.voyageUsage == nil)
+
+    let json = Self.json.replacingOccurrences(
+      of: #""providers": ["#,
+      with: #"""
+        "voyage": {"id": "voyage", "name": "Voyage", "placeholder": "pa-…", "help": "Create a key.",
+                   "key": {"hint": "VOYG", "region": null, "added": "2026-11-19T20:01:02.123456Z"},
+                   "limit": null, "spent": 0.0936},
+        "providers": [
+        """#)
+    let ai = try JSONDecoder.api.decode(AISettings.self, from: Data(json.utf8))
+    #expect(ai.voyage?.id == "voyage")
+    #expect(ai.voyage?.key?.hint == "VOYG")
+    #expect(ai.voyage?.limit == nil)
+    #expect(ai.voyage?.spent == 0.0936)
+    #expect(ai.usage.text == "$1.20 on your Amazon Bedrock and Voyage keys this month")
+  }
+
+  /// On their own models, Memory Dump's Voyage key is free up to its own
+  /// amount; a Voyage key of their own takes its place.
+  @Test func searchShowsTheFreeVoyageAmountUntilTheUserBringsAKey() {
+    let help = "Create a key at dashboard.voyageai.com under API keys."
+    let what = "Voyage indexes and searches what you save."
+
+    let free = Self.settings(provider: "openai", voyage: Self.voyage(limit: 1, spent: 0.25)).voyageUsage
+    #expect(free?.text == "$0.25 of $1.00 free on Memory Dump’s Voyage key")
+    #expect(free?.fraction == 0.25)
+    #expect(free?.isUsedUp == false)
+    #expect(free?.footer == "\(what) Resets Dec 1. With your own key there’s no cap. \(help)")
+
+    let used = Self.settings(provider: "openai", voyage: Self.voyage(limit: 1, spent: 1.004)).voyageUsage
+    #expect(used?.text == "You’ve used this month’s free $1.00 of Voyage. Add your own key, or wait until Dec 1.")
+    #expect(used?.fraction == 1)
+    #expect(used?.isUsedUp == true)
+
+    let own = Self.settings(provider: "openai", voyage: Self.voyage(key: true, spent: 1.004)).voyageUsage
+    #expect(own == .init(text: "", footer: "\(what) Your key is kept encrypted on the server and never shown again."))
+
+    // An admin on their own models has no cap to show.
+    let admin = Self.settings(admin: true, provider: "openai", voyage: Self.voyage()).voyageUsage
+    #expect(admin == .init(text: "", footer: "\(what) It runs on Memory Dump’s key. \(help)"))
+  }
+
+  /// On Memory Dump's models Voyage is part of the free amount, so nothing
+  /// offers a key for it; one already saved still shows, to be removed.
+  @Test func searchIsOnlyOfferedWhereAVoyageKeyChangesSomething() {
+    #expect(Self.settings(voyage: Self.voyage()).voyageUsage == nil)
+    #expect(Self.settings(voyage: Self.voyage(key: true)).voyageUsage != nil)
+    #expect(Self.settings(keys: false, provider: "openai", voyage: Self.voyage(limit: 1)).voyageUsage == nil)
+    #expect(Self.settings(provider: "openai").voyageUsage == nil)
   }
 
   /// With nowhere to keep keys, nothing offers one.
