@@ -22,9 +22,10 @@ from app.ai import catalog, clients, routing
 from app.ai import synthesize as synthesize_ai
 from app.ai.wire import Message, ProviderError, Text, Usage
 from app.config import get_settings
-from app.db.models import Item, LlmUsage, ProviderKey, User
+from app.db.models import Item, LlmUsage, ProviderKey, TopicPage, User
 from app.errors import SpendLimitReached, is_transient, user_message
 from app.main import app
+from app.workers import correct, ingest
 from app.workers.ingest import _reason
 from tests.conftest import signup
 
@@ -1045,3 +1046,72 @@ async def test_a_page_rewrite_past_the_limit_leaves_the_page_as_it_is(
         slug="ramen", title="Ramen", body="Body.", corrections=["It closed in 2024."]
     )
     assert rewritten is None
+
+
+def test_where_voyage_would_refuse_nothing_is_fetched_or_paid_for_first(
+    client: TestClient,
+    db: Any,
+    account: tuple[dict[str, str], uuid.UUID],
+    accepted: list[tuple[str, str, str | None]],
+    jobs: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    headers, user_id = account
+    client.put("/v1/ai/keys/openai", json={"key": KEY}, headers=headers)
+    item_id, page_id = uuid.uuid4(), uuid.uuid4()
+    with db.begin() as conn:
+        conn.execute(
+            insert(Item.__table__).values(
+                id=item_id,
+                user_id=user_id,
+                url="https://example.com/a",
+                source="webpage",
+                status="pending",
+            )
+        )
+        conn.execute(
+            insert(TopicPage.__table__).values(
+                id=page_id,
+                user_id=user_id,
+                slug="ramen",
+                title="Ramen",
+                body_md="Body.",
+                source_item_ids=[item_id],
+                corrections=[{"id": "c1", "text": "It closed in 2024.", "at": "2026-11-20"}],
+            )
+        )
+    _spend(db, user_id, "1", model="voyage-3-large")
+
+    worked: list[str] = []
+
+    def unpaid(*_: Any, **__: Any) -> Any:
+        worked.append("fetched or paid for")
+        raise AssertionError("worked on before Voyage was asked")
+
+    # The embedding comes last, so a save Voyage would refuse is stopped
+    # before its page is fetched or its analysis paid for on the user's key.
+    monkeypatch.setattr(ingest, "get_extractor", unpaid)
+    monkeypatch.setattr(ingest, "analyze", unpaid)
+    assert client.portal.call(ingest.ingest_item, {"job_try": 1}, str(item_id)) == "failed"  # type: ignore[union-attr]
+    with db.connect() as conn:
+        error = conn.execute(select(Item.error).where(Item.id == item_id)).scalar_one()
+    assert error.startswith("SpendLimitReached: You've used this month's free $1.00 of Voyage")
+
+    # So is a retry, which says why instead of queueing the same failure.
+    retry = client.post(f"/v1/items/{item_id}/retry", headers=headers)
+    assert retry.status_code == 402, retry.text
+    assert retry.json()["detail"].startswith("You've used this month's free $1.00 of Voyage")
+    assert jobs == []
+
+    # And a correction's rewrite, which would be thrown away unembedded.
+    monkeypatch.setattr(correct.ai, "correct_page", unpaid)
+    outcome = client.portal.call(  # type: ignore[union-attr]
+        correct.correct_page, {"job_try": 1}, str(user_id), str(page_id)
+    )
+    assert outcome == "failed"
+    with db.connect() as conn:
+        page = conn.execute(
+            select(TopicPage.body_md, TopicPage.version).where(TopicPage.id == page_id)
+        ).one()
+    assert page == ("Body.", 1)
+    assert worked == []

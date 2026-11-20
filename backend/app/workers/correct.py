@@ -18,6 +18,7 @@ from typing import Any
 
 import structlog
 
+from app.ai import routing
 from app.ai import synthesize as ai
 from app.ai.synthesize import WIKILINK_RE
 from app.db.models import TopicPage
@@ -65,6 +66,8 @@ async def _correct(user_id: uuid.UUID, page_id: uuid.UUID) -> str | None:
             return "nothing"
         version, slug, title, body = page.version, page.slug, page.title, page.body_md
 
+    # The rewrite is embedded last: not paid for when Voyage would refuse it.
+    await routing.voyage()
     rewritten = await ai.correct_page(slug=slug, title=title, body=body, corrections=corrections)
     if rewritten is None:
         log.warning("correct: no rewrite of %s; its corrections wait for the next patch", slug)

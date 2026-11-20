@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai import routing
 from app.ai.synthesize import (
     WIKILINK_RE,
     PatchedPage,
@@ -219,6 +220,8 @@ async def _draft(
         return _Draft(basis, None, [])
     body, title = (page.body_md, page.title) if page else ("", None)
     corrections = correction_texts(page) if page else []
+    # The patched page is embedded last: not paid for when Voyage would refuse it.
+    await routing.voyage()
     # The item that held the slug goes in first, so the page takes the items
     # in the order they were saved; this item's patch always runs.
     for source in (holder, snap):

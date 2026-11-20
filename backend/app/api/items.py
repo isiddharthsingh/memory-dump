@@ -290,7 +290,9 @@ async def retry_item(
             detail="Uploaded files can't be retried. Share the file again.",
         )
     # Past the month's spend limit it would only fail again: 402 says why.
+    # Voyage's share of it too, which the save meets last.
     await routing.resolve()
+    await routing.voyage()
     await session.execute(
         update(Item)
         .where(Item.id == item.id)

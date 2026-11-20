@@ -21,6 +21,7 @@ import structlog
 from sqlalchemy import delete, func, select, update
 
 from app import kv, storage, thumbnails
+from app.ai import routing
 from app.ai.analyze import Analysis, analyze
 from app.ai.embed import chunk_text, embed_chunks
 from app.ai.providers import get_vision_provider
@@ -255,6 +256,10 @@ async def ingest_item(ctx: dict[str, Any], item_id: str, generation: int | None 
         return "skipped"
 
     try:
+        # Voyage embeds the save last. Where it would refuse (the month's
+        # allowance used up, a Voyage key of the user's that can't be read),
+        # say so before the page is fetched and the analysis paid for.
+        await routing.voyage()
         extractor = get_extractor(claim.source)
         async with asyncio.timeout(get_settings().extract_timeout_s):
             content = await extractor.extract(claim.url, share_text=claim.share_text)
@@ -318,6 +323,8 @@ async def ingest_file(
     mime = claim.upload_mime or mime_type or ""
 
     try:
+        # As in ingest_item: nothing is read or paid for a save Voyage would refuse.
+        await routing.voyage()
         if claim.upload_key:
             data = await storage.get_storage().read(claim.upload_key)
         elif file_path:
