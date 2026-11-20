@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import kv, thumbnails
+from app.ai import routing
 from app.api.cached import cached_json
 from app.api.schemas import (
     ItemChanges,
@@ -45,9 +46,7 @@ TAGS_TTL_S = 300
 CHANGES_OVERLAP = timedelta(seconds=60)
 
 
-async def _get_owned_item(
-    session: AsyncSession, item_id: uuid.UUID, user: User
-) -> Item:
+async def _get_owned_item(session: AsyncSession, item_id: uuid.UUID, user: User) -> Item:
     """Fetch an item or 404. 404 (not 403) on cross-user access so we
     don't leak which ids exist on the system."""
     item = await session.get(Item, item_id)
@@ -290,6 +289,8 @@ async def retry_item(
             status_code=status.HTTP_409_CONFLICT,
             detail="Uploaded files can't be retried. Share the file again.",
         )
+    # Past the month's spend limit it would only fail again: 402 says why.
+    await routing.resolve()
     await session.execute(
         update(Item)
         .where(Item.id == item.id)

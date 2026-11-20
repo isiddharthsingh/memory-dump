@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import ask as ask_module
+from app.ai import routing
 from app.ai.retrieval import Scope
 from app.api.schemas import AskRequest, AskResponse, CitationOut
 from app.auth.rate_limit import rate_limit
@@ -20,7 +21,17 @@ log = logging.getLogger(__name__)
 
 _ask_rate_limit = rate_limit("ask", "rate_limit_ask_per_hour")
 
-router = APIRouter(prefix="/ask", tags=["ask"], dependencies=[Depends(_ask_rate_limit)])
+
+async def _within_limit(current_user: Annotated[User, Depends(get_current_user)]) -> None:
+    """Answers 402 before anything is searched or streamed when the month's
+    spend limit is reached. Without it the search would fall back to keywords
+    and the answer would fail halfway, as an event in a 200."""
+    await routing.resolve()
+
+
+router = APIRouter(
+    prefix="/ask", tags=["ask"], dependencies=[Depends(_ask_rate_limit), Depends(_within_limit)]
+)
 
 
 def _history(body: AskRequest) -> list[ask_module.Turn]:

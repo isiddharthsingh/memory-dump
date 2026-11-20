@@ -13,12 +13,19 @@ from supertokens_python.framework.fastapi import get_middleware
 from voyageai import error as voyage_error
 
 from app import kv, logging_setup  # noqa: F401  — configures stdlib + structlog
-from app.api import ask, auth, chats, devices, export, ingest, items, search, wiki
+from app.ai.wire import ProviderError
+from app.api import ai, ask, auth, chats, devices, export, ingest, items, search, wiki
 from app.auth.rate_limit import AuthRateLimit
 from app.auth.supertokens import init_supertokens
 from app.config import get_settings
 from app.db.session import get_engine, get_sessionmaker
-from app.errors import ProviderUnavailable, is_transient, retry_after, user_message
+from app.errors import (
+    ProviderUnavailable,
+    SpendLimitReached,
+    is_transient,
+    retry_after,
+    user_message,
+)
 from app.metrics import render
 from app.observability import BodyLimit, MinAppBuild, RequestContext, init_sentry
 from app.queue import close_arq_pool
@@ -112,8 +119,28 @@ async def _upstream_failed(request: Request, exc: Exception) -> Response:
     return JSONResponse({"detail": user_message(exc)}, status_code=502)
 
 
+async def _limit_reached(request: Request, exc: Exception) -> Response:
+    """The month's free allowance, or the user's own limit, is used up. The
+    sentence says which, and what to do about it."""
+    return JSONResponse({"detail": user_message(exc)}, status_code=402)
+
+
+async def _own_key_failed(request: Request, exc: Exception) -> Response:
+    """The provider of the user's own key failed under a request. One a
+    later try can get past is answered like any provider's; the rest are the
+    user's to fix (a key it turned down, no credit, a model their account
+    can't use): a 424 whose sentence says which, and no error for us."""
+    assert isinstance(exc, ProviderError)
+    if is_transient(exc):
+        return await _upstream_failed(request, exc)
+    log.warning("%s refused a call on a user's own key: %s", exc.provider, exc.status_code)
+    return JSONResponse({"detail": user_message(exc)}, status_code=424)
+
+
 for error in (ProviderUnavailable, anthropic.APIError, voyage_error.VoyageError):
     app.add_exception_handler(error, _upstream_failed)
+app.add_exception_handler(ProviderError, _own_key_failed)
+app.add_exception_handler(SpendLimitReached, _limit_reached)
 
 for router in (
     auth.router,
@@ -125,6 +152,7 @@ for router in (
     wiki.router,
     devices.router,
     export.router,
+    ai.router,
 ):
     app.include_router(router, prefix="/v1")
     # The same routes unversioned, for app builds from before /v1.
