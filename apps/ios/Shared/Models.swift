@@ -302,6 +302,95 @@ struct ItemChanges: Codable {
   let until: String
 }
 
+/// Whose models work for this account and what they have cost this month
+/// (`/ai`): Memory Dump's own, free up to a monthly amount, or a provider the
+/// user saved their own API key for. Every write to it answers with all of it.
+struct AISettings: Codable, Hashable {
+  /// Spend on Memory Dump's own key this calendar month, in USD.
+  struct Free: Codable, Hashable {
+    /// Nil for an admin, who has no cap.
+    let limit: Double?
+    let spent: Double
+    /// The day the month rolls over, "yyyy-MM-dd".
+    let resets: String
+  }
+
+  /// Spend on the user's own keys this calendar month, in USD.
+  struct Own: Codable, Hashable {
+    /// The monthly limit the user set to protect their key; nil for none.
+    var limit: Double?
+    let spent: Double
+  }
+
+  struct Provider: Codable, Hashable, Identifiable {
+    /// A saved key. The key itself never comes back, only its last 4 characters.
+    struct Key: Codable, Hashable {
+      let hint: String
+      /// The AWS region, for a provider that needs one.
+      let region: String?
+      let added: Date
+    }
+
+    struct Model: Codable, Hashable, Identifiable {
+      let id: String
+      let name: String
+    }
+
+    /// The model in use for each of the three jobs.
+    struct Chosen: Codable, Hashable {
+      var analysis: String
+      var synthesis: String
+      var ask: String
+    }
+
+    let id: String
+    let name: String
+    let placeholder: String
+    /// Where to get a key, in a sentence.
+    let help: String
+    /// Its key form also asks for an AWS region.
+    let region: Bool
+    let key: Key?
+    let models: [Model]
+    var chosen: Chosen
+  }
+
+  /// No cap on Memory Dump's own models for this account.
+  let admin: Bool
+  /// False when the server isn't set up to store keys.
+  let keys: Bool
+  /// The provider whose saved key is in use; nil for Memory Dump's own models.
+  var provider: String?
+  let free: Free
+  var own: Own
+  var providers: [Provider]
+
+  /// The bodies of the two `/ai` writes whose value can be nil. It goes out
+  /// as null, which a synthesized encoder would leave out: the server reads
+  /// null as "Memory Dump's own models" and "no limit".
+  struct ProviderBody: Encodable {
+    let provider: String?
+
+    func encode(to encoder: Encoder) throws {
+      var c = encoder.container(keyedBy: CodingKeys.self)
+      try c.encode(provider, forKey: .provider)
+    }
+
+    private enum CodingKeys: String, CodingKey { case provider }
+  }
+
+  struct LimitBody: Encodable {
+    let limit: Double?
+
+    func encode(to encoder: Encoder) throws {
+      var c = encoder.container(keyedBy: CodingKeys.self)
+      try c.encode(limit, forKey: .limit)
+    }
+
+    private enum CodingKeys: String, CodingKey { case limit }
+  }
+}
+
 struct TagCount: Codable, Hashable {
   let tag: String
   let count: Int

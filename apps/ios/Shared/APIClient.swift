@@ -245,6 +245,45 @@ final class APIClient {
       "/wiki/\(slug)/corrections/\(id.lower)", method: "DELETE", saveAs: "/wiki/\(slug)")
   }
 
+  // MARK: Models & usage
+
+  /// Whose models work for this account, its saved keys and the month's spend.
+  func aiSettings() async throws -> AISettings {
+    try await send("/ai")
+  }
+
+  /// The server checks the key with the provider, keeps it and starts using
+  /// it. A key the provider refuses is a 422 whose detail says so. A nil
+  /// `region` goes out as null (a dictionary's nil does).
+  func saveKey(provider: String, key: String, region: String?) async throws -> AISettings {
+    try await send(
+      "/ai/keys/\(provider)", method: "PUT", body: ["key": key, "region": region], saveAs: "/ai")
+  }
+
+  func removeKey(provider: String) async throws -> AISettings {
+    try await send("/ai/keys/\(provider)", method: "DELETE", saveAs: "/ai")
+  }
+
+  /// Uses the key saved for that provider, or Memory Dump's own models for nil.
+  func useProvider(_ provider: String?) async throws -> AISettings {
+    try await send(
+      "/ai/provider", method: "PUT", body: AISettings.ProviderBody(provider: provider), saveAs: "/ai")
+  }
+
+  /// The most the user's own keys may spend in a month, in USD; nil for no limit.
+  func setSpendLimit(_ limit: Double?) async throws -> AISettings {
+    try await send("/ai/limit", method: "PUT", body: AISettings.LimitBody(limit: limit), saveAs: "/ai")
+  }
+
+  /// The provider's model for each job: reading saves, writing the wiki, answering.
+  func setModels(
+    provider: String, analysis: String, synthesis: String, ask: String
+  ) async throws -> AISettings {
+    try await send(
+      "/ai/models/\(provider)", method: "PUT",
+      body: ["analysis": analysis, "synthesis": synthesis, "ask": ask], saveAs: "/ai")
+  }
+
   // MARK: Export
 
   /// Where an export waits for the share sheet.
