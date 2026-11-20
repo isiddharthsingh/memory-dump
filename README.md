@@ -152,6 +152,12 @@ versioned.
 | POST   | `/v1/wiki/{slug}/corrections` | say what the page gets wrong; it is rewritten to agree |
 | DELETE | `/v1/wiki/{slug}/corrections/{id}` | stop holding the page to a correction |
 | GET    | `/v1/export/obsidian` | the library as a zip of Markdown notes for an Obsidian vault |
+| GET    | `/v1/ai`              | whose models the account uses, its saved keys (last 4 characters only) and the month's spend |
+| PUT    | `/v1/ai/keys/{provider}` | save your own key for `anthropic`, `openai`, `gemini`, `openrouter` or `bedrock` (checked with the provider, stored encrypted) and use it |
+| DELETE | `/v1/ai/keys/{provider}` | forget a saved key                   |
+| PUT    | `/v1/ai/provider`     | which saved key is in use (`{"provider": null}` for the server's models) |
+| PUT    | `/v1/ai/models/{provider}` | that provider's model for each job (`analysis`, `synthesis`, `ask`) |
+| PUT    | `/v1/ai/limit`        | monthly spend limit on your own keys (`{"limit": 10}`, or `null`) |
 
 Everything except the health checks, metrics, sign-up, sign-in and refresh takes
 `Authorization: Bearer <access token>`. Send `st-auth-mode: header` with sign-up
