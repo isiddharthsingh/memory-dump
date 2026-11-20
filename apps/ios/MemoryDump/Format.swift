@@ -103,6 +103,26 @@ enum Format {
     "\(n) \(n == 1 ? singular : pluralForm ?? singular + "s")"
   }
 
+  /// US dollars: "$0.42", "$12.50", "$0.00" for nothing, and "<$0.01" for an
+  /// amount that would round to nothing. `short` drops the cents of a whole
+  /// amount: "$3".
+  static func money(_ usd: Double, short: Bool = false) -> String {
+    if usd > 0, usd < 0.005 { return "<$0.01" }
+    let amount = String(format: "%.2f", usd)
+    return "$" + (short && amount.hasSuffix(".00") ? String(amount.dropLast(3)) : amount)
+  }
+
+  /// "2026-12-01" → "Dec 1": a day the server names without a time, so it is
+  /// that day wherever the phone is.
+  static func day(_ ymd: String) -> String {
+    let parts = ymd.split(separator: "-").compactMap { Int($0) }
+    guard parts.count == 3,
+      let date = Calendar(identifier: .gregorian).date(
+        from: DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: 12))
+    else { return ymd }
+    return date.formatted(.dateTime.month(.abbreviated).day())
+  }
+
   static func daysAgo(_ date: Date, now: Date = .now) -> Int {
     let cal = Calendar.current
     let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: now)).day ?? 0
@@ -160,8 +180,23 @@ enum Format {
   /// Shared PDFs and images are stored as `file://<id>/<name>` and deleted once processed.
   static func isUploadedFile(_ url: String) -> Bool { url.hasPrefix("file://") }
 
+  /// A failed save whose reason is the account and not the link: the month's
+  /// spend limit, or the user's own key at their provider. For both the
+  /// server writes the sentence to show after the error's name, saying which
+  /// and what to do. Nil for every other failure.
+  static func accountIngestError(_ raw: String?) -> (title: String, detail: String)? {
+    let titles = [
+      ("SpendLimitReached: ", "This month’s limit is reached"),
+      ("ProviderError: ", "Your own API key couldn’t do this"),
+    ]
+    let e = raw ?? ""
+    guard let (prefix, title) = titles.first(where: { e.hasPrefix($0.0) }) else { return nil }
+    return (title, String(e.dropFirst(prefix.count)))
+  }
+
   /// The worker stores exception text; show people what happened instead.
   static func friendlyIngestError(_ raw: String?, url: String = "") -> String {
+    if let account = accountIngestError(raw) { return account.title }
     if isUploadedFile(url) { return "Couldn’t process this file" }
     let e = raw ?? ""
     // The server only fetches addresses on the open internet, pages up to
@@ -189,6 +224,15 @@ enum Format {
     }
     if case APIError.http(429, _, _) = error {
       return ("Hourly limit reached", "Try again in a little while.")
+    }
+    // The month's free amount is used up, or the limit on their own key is
+    // reached; the server says which.
+    if case APIError.http(402, let detail, _) = error, !detail.isEmpty {
+      return ("This month’s limit is reached", detail)
+    }
+    // Their own key was turned down by its provider; the server says how.
+    if case APIError.http(424, let detail, _) = error, !detail.isEmpty {
+      return ("Your own API key couldn’t do this", detail)
     }
     // Claude or Voyage is out for a moment, and the server says so.
     if case APIError.http(503, let detail, _) = error, !detail.isEmpty {

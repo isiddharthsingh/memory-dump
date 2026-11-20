@@ -87,11 +87,22 @@ import Testing
     #expect(Format.friendlyIngestError("TooLarge: 7340032 bytes") == "This page is too large to save")
     #expect(Format.friendlyIngestError("TimeoutError: example.com") == "The site took too long to answer")
     #expect(Format.friendlyIngestError("anything", url: "file://a.pdf") == "Couldn’t process this file")
+    // The account's own trouble, whatever was being saved.
+    let limit = "You've used this month's free $3.00. Add your own API key in Settings, or wait until December 1."
+    #expect(Format.friendlyIngestError("SpendLimitReached: \(limit)", url: "file://a.pdf") == "This month’s limit is reached")
+    #expect(Format.accountIngestError("SpendLimitReached: \(limit)")?.detail == limit)
+    let rejected = "OpenAI didn't accept your API key. Check it in Settings."
+    #expect(Format.friendlyIngestError("ProviderError: \(rejected)") == "Your own API key couldn’t do this")
+    #expect(Format.accountIngestError("ProviderError: \(rejected)")?.detail == rejected)
+    #expect(Format.accountIngestError("HTTPStatusError: 403 Forbidden") == nil)
     #expect(Format.friendlyAskError(APIError.http(429, "rate limit")).title == "Hourly limit reached")
     #expect(Format.friendlyAskError(URLError(.notConnectedToInternet)).title == "Can’t reach your server")
     let busy = Format.friendlyAskError(APIError.http(503, "That's taking longer than it should right now."))
     #expect(busy.detail == "That's taking longer than it should right now.")
     #expect(Format.friendlyAskError(APIError.updateRequired("Update from TestFlight.")).detail == "Update from TestFlight.")
+    let ownKey = Format.friendlyAskError(APIError.http(424, "OpenAI didn't accept your API key. Check it in Settings."))
+    #expect(ownKey.title == "Your own API key couldn’t do this")
+    #expect(ownKey.detail == "OpenAI didn't accept your API key. Check it in Settings.")
     #expect(Format.friendlyAskError(APIError.http(404, "Item not found")).title == "It’s no longer in your library")
     #expect(Format.friendlyAskError(APIError.http(404, "Topic page not found")).title == "It’s no longer in your library")
     // Any other 404 isn't a deleted item.

@@ -33,6 +33,10 @@ final class LibraryModel {
   private(set) var isSearching = false
   private(set) var searchError: Error?
 
+  /// Why the server refused the last Retry (the month's spend limit is
+  /// reached, say), for an alert.
+  var retryError: String?
+
   var filter: Filter = .all
 
   private let api = APIClient.shared
@@ -165,7 +169,12 @@ final class LibraryModel {
   // MARK: Actions
 
   func retry(_ item: ItemSummary) async {
-    _ = try? await api.retryItem(item.id)
+    do {
+      _ = try await api.retryItem(item.id)
+    } catch {
+      Haptics.error()
+      retryError = error.localizedDescription
+    }
     await reload()
   }
 

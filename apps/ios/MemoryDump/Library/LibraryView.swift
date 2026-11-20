@@ -46,6 +46,11 @@ struct LibraryView: View {
         }
       }
       .sheet(isPresented: $showSettings) { SettingsView() }
+      .alert("Couldn’t retry", isPresented: .constant(model.retryError != nil)) {
+        Button("OK") { model.retryError = nil }
+      } message: {
+        Text(model.retryError ?? "")
+      }
       .sheet(isPresented: $showSaveLink) {
         SaveLinkSheet { await model.reload() }
       }

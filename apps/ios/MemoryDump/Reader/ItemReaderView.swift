@@ -12,6 +12,9 @@ final class ItemReaderModel {
   private(set) var previewBlocks: [MarkdownBlock]?
   private(set) var readMinutes = 0
   var retrying = false
+  /// Why the server refused the last Retry (the month's spend limit is
+  /// reached, say), shown in place of the usual hint.
+  private(set) var retryError: String?
 
   private static let previewMaxChars = 1200
   private static let collapseThreshold = 1600
@@ -41,7 +44,13 @@ final class ItemReaderModel {
   func retry() async {
     retrying = true
     defer { retrying = false }
-    if let item = try? await APIClient.shared.retryItem(id) { apply(item) }
+    do {
+      apply(try await APIClient.shared.retryItem(id))
+      retryError = nil
+    } catch {
+      Haptics.error()
+      retryError = error.localizedDescription
+    }
   }
 
   /// Marks the item done or not done.
@@ -258,7 +267,8 @@ struct ItemReaderView: View {
       } else {
         ErrorNotice(
           title: Format.friendlyIngestError(it.error, url: it.url),
-          detail: "We couldn’t fetch \(Format.domain(it.url)). Check the link, or try again."
+          detail: model.retryError ?? Format.accountIngestError(it.error)?.detail
+            ?? "We couldn’t fetch \(Format.domain(it.url)). Check the link, or try again."
         ) { Task { await model.retry() } }
       }
     } else if it.status != "ready" {
