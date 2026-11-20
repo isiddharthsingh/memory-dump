@@ -154,7 +154,8 @@ versioned.
 | GET    | `/v1/export/obsidian` | the library as a zip of Markdown notes for an Obsidian vault |
 | GET    | `/v1/ai`              | whose models the account uses, its saved keys (last 4 characters only) and the month's spend |
 | PUT    | `/v1/ai/keys/{provider}` | save your own key for `anthropic`, `openai`, `gemini`, `openrouter` or `bedrock` (checked with the provider, stored encrypted) and use it |
-| DELETE | `/v1/ai/keys/{provider}` | forget a saved key                   |
+| PUT    | `/v1/ai/keys/voyage`  | save your own Voyage key, used for embeddings and reranking beside whichever models are in use |
+| DELETE | `/v1/ai/keys/{provider}` | forget a saved key (`voyage` too)    |
 | PUT    | `/v1/ai/provider`     | which saved key is in use (`{"provider": null}` for the server's models) |
 | PUT    | `/v1/ai/models/{provider}` | that provider's model for each job (`analysis`, `synthesis`, `ask`) |
 | PUT    | `/v1/ai/limit`        | monthly spend limit on your own keys (`{"limit": 10}`, or `null`) |
