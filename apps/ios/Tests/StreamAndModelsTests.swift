@@ -100,6 +100,12 @@ import Testing
     let user = try JSONDecoder.api.decode(User.self, from: Data(json.utf8))
     #expect(user.email == "e@x.com")
     #expect(user.displayName == nil)
+    // A server from before it sent the phone, and a session saved then.
+    #expect(user.phone == nil)
+    let withPhone = json.replacingOccurrences(of: #""display_name": null"#, with: #""display_name": "Jane", "phone": "+14155550132""#)
+    let jane = try JSONDecoder.api.decode(User.self, from: Data(withPhone.utf8))
+    #expect(jane.displayName == "Jane")
+    #expect(jane.phone == "+14155550132")
   }
 
   /// SessionStore writes with JSONEncoder.api and reads with JSONDecoder.api.

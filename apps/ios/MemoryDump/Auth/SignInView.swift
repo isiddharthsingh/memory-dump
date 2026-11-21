@@ -5,14 +5,33 @@ struct SignInView: View {
   @Environment(AppModel.self) private var app
   @State private var creating = false
   @State private var name = ""
+  @State private var phone = ""
+  @State private var country = DialCode.local
   @State private var email = ""
   @State private var password = ""
   @State private var busy = false
   @State private var error: String?
 
-  private var canSubmit: Bool { !email.isEmpty && !password.isEmpty }
+  private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
+  private var canSubmit: Bool {
+    guard !email.isEmpty, !password.isEmpty else { return false }
+    return !creating || (!trimmedName.isEmpty && !DialCode.digits(phone).isEmpty)
+  }
 
   var body: some View {
+    ScrollViewReader { proxy in
+      form
+        // The notice pushes the button down, under the keyboard on the longer
+        // form, and the phone pad has no key that puts it away.
+        .onChange(of: error) {
+          if error != nil { withAnimation { proxy.scrollTo(Self.submitButton, anchor: .bottom) } }
+        }
+    }
+  }
+
+  private static let submitButton = "submit"
+
+  private var form: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 12) {
         VStack(alignment: .leading, spacing: 6) {
@@ -23,8 +42,11 @@ struct SignInView: View {
         .padding(.bottom, 16)
 
         if creating {
-          field("Name (optional)") {
+          field("Name") {
             TextField("Jane Doe", text: $name).textContentType(.name)
+          }
+          field("Phone") {
+            PhoneField(country: $country, phone: $phone)
           }
         }
         field("Email") {
@@ -57,6 +79,7 @@ struct SignInView: View {
         .tint(Palette.ink)
         .disabled(!canSubmit)
         .padding(.top, 8)
+        .id(Self.submitButton)
 
         HStack(spacing: 4) {
           Text(creating ? "Already have an account?" : "New to Memory Dump?").foregroundStyle(Palette.ink2)
@@ -94,9 +117,12 @@ struct SignInView: View {
     defer { busy = false }
     do {
       if creating {
-        try await app.signUp(
-          email: email, password: password,
-          displayName: name.trimmingCharacters(in: .whitespaces).nilIfEmpty)
+        guard let number = country.number(phone) else {
+          error = DialCode.refusal
+          Haptics.error()
+          return
+        }
+        try await app.signUp(email: email, password: password, name: trimmedName, phone: number)
       } else {
         try await app.signIn(email: email, password: password)
       }

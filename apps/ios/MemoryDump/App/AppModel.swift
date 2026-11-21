@@ -24,6 +24,9 @@ final class AppModel {
   private(set) var isSendingQueue = false
 
   private let store = SessionStore.shared
+  /// Counts the profile saves the server took, so `refreshProfile` can tell
+  /// that its answer was asked for before one.
+  private var profileSaves = 0
   private var toastTask: Task<Void, Never>?
   private var queueTask: Task<Void, Never>?
   private var isActive = false
@@ -60,8 +63,8 @@ final class AppModel {
     finishSignIn(try await AuthAPI.signIn(email: email, password: password))
   }
 
-  func signUp(email: String, password: String, displayName: String?) async throws {
-    finishSignIn(try await AuthAPI.signUp(email: email, password: password, displayName: displayName))
+  func signUp(email: String, password: String, name: String, phone: String) async throws {
+    finishSignIn(try await AuthAPI.signUp(email: email, password: password, name: name, phone: phone))
   }
 
   func signOut() async {
@@ -79,6 +82,26 @@ final class AppModel {
     store.clear()
     Self.forgetSavedCopies()
     session = nil
+  }
+
+  /// The session keeps the account as it was at sign-in; this brings its name
+  /// and phone up to date with the server.
+  func refreshProfile() async {
+    let saves = profileSaves
+    // Not over a save made meanwhile: its answer is the newer one.
+    guard let user = try? await APIClient.shared.profile(), saves == profileSaves else { return }
+    await keep(user)
+  }
+
+  /// Nil leaves the name or the phone as it is.
+  func updateProfile(name: String?, phone: String?) async throws {
+    let user = try await APIClient.shared.updateProfile(name: name, phone: phone)
+    profileSaves += 1
+    await keep(user)
+  }
+
+  private func keep(_ user: User) async {
+    if let updated = await store.setUser(user) { session = updated }
   }
 
   private func finishSignIn(_ session: Session) {

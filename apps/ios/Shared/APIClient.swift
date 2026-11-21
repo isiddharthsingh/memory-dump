@@ -322,6 +322,18 @@ final class APIClient {
     _ = try await data("/auth/me", method: "DELETE")
   }
 
+  /// The account as the server has it now. Kept off the disk: the session
+  /// holds the copy the app shows.
+  func profile() async throws -> User {
+    try await send("/auth/me", saves: false)
+  }
+
+  /// Changes the name, the phone number or both. A nil one stays as it is (a
+  /// dictionary's nil goes out as null).
+  func updateProfile(name: String?, phone: String?) async throws -> User {
+    try await send("/auth/me", method: "PATCH", body: ["name": name, "phone": phone])
+  }
+
   // MARK: Devices and health
 
   func registerDevice(token: String, apnsEnv: String) async throws {

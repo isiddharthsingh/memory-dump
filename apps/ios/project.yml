@@ -21,6 +21,15 @@ settings:
     DEVELOPMENT_TEAM: L53NYQQX76
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 
+# Pinned to a commit, the one tagged 5.0.15: the generated project, and the
+# Package.resolved inside it, are gitignored, and a tag can be moved. This is
+# the maintained home of the library; marmelroy/PhoneNumberKit is frozen at
+# 4.3.0 and points here.
+packages:
+  PhoneNumberKit:
+    url: https://github.com/PhoneNumberKit/PhoneNumberKit
+    revision: 3c9c4e9f084c7bf8b51b1f078867dbd8f51eb1b2
+
 targets:
   MemoryDump:
     type: application
@@ -125,6 +134,7 @@ targets:
           - $(PROJECT_DIR)/Generated/$(TARGET_NAME)/Server.swift
     dependencies:
       - target: ShareExtension
+      - package: PhoneNumberKit
     scheme:
       testTargets:
         - MemoryDumpTests

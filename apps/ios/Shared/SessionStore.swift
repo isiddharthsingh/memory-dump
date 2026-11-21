@@ -32,6 +32,18 @@ final class SessionStore {
     onSignedOut?()
   }
 
+  /// Puts the account's newer details in the saved session, under the refresh
+  /// lock and with the tokens it holds then: the other process may be rotating
+  /// them. Nil when that account is no longer the one signed in.
+  func setUser(_ user: User) async -> Session? {
+    try? await AppGroup.withFileLock("session.lock") {
+      guard let now = current(), now.user.id == user.id else { return nil }
+      let updated = Session(accessToken: now.accessToken, refreshToken: now.refreshToken, user: user)
+      save(updated)
+      return updated
+    }
+  }
+
   /// One refresh at a time across the app and the extension. SuperTokens
   /// rotates the refresh token and ends the session when a replaced one is
   /// used again, so a second caller must pick up the tokens the first one

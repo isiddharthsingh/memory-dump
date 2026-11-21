@@ -419,6 +419,9 @@ struct User: Codable, Hashable {
   let id: UUID
   let email: String
   let displayName: String?
+  /// `+` and digits, country code first. Nil for an account made before sign-up
+  /// asked for it, and in a session saved before the server sent it.
+  var phone: String? = nil
   let createdAt: Date
 }
 

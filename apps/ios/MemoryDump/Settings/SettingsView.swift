@@ -24,16 +24,21 @@ struct SettingsView: View {
       Form {
         if let user = app.session?.user {
           Section {
-            HStack(spacing: 14) {
-              Text(Format.initials(user.displayName ?? user.email))
-                .font(.title3.weight(.semibold)).foregroundStyle(Palette.onInk)
-                .frame(width: 56, height: 56)
-                .background(Palette.ink, in: .circle)
-              VStack(alignment: .leading, spacing: 2) {
-                Text(user.displayName ?? user.email).font(.headline)
-                if user.displayName != nil { Text(user.email).font(.subheadline).foregroundStyle(Palette.ink2) }
+            // By value, so the screen (and the phone library its fields
+            // need) is made when it is opened, not each time this one draws.
+            NavigationLink(value: user) {
+              HStack(spacing: 14) {
+                Text(Format.initials(user.displayName ?? user.email))
+                  .font(.title3.weight(.semibold)).foregroundStyle(Palette.onInk)
+                  .frame(width: 56, height: 56)
+                  .background(Palette.ink, in: .circle)
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(user.displayName ?? user.email).font(.headline)
+                  if user.displayName != nil { Text(user.email).font(.subheadline).foregroundStyle(Palette.ink2) }
+                }
               }
             }
+            .accessibilityHint("Edit your name and phone number")
           }
           .listRowBackground(Palette.card)
         }
@@ -114,6 +119,7 @@ struct SettingsView: View {
       .background(Palette.ground)
       .navigationTitle("Settings")
       .navigationBarTitleDisplayMode(.inline)
+      .navigationDestination(for: User.self) { ProfileView(user: $0) }
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
           Button("Done") { dismiss() }

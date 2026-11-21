@@ -8,10 +8,10 @@ enum AuthAPI {
     try await session("/auth/signin", [("email", email), ("password", password)])
   }
 
-  static func signUp(email: String, password: String, displayName: String?) async throws -> Session {
-    var fields = [("email", email), ("password", password)]
-    if let displayName { fields.append(("name", displayName)) }
-    return try await session("/auth/signup", fields)
+  /// `phone` is `+`, the country code and the number, digits only.
+  static func signUp(email: String, password: String, name: String, phone: String) async throws -> Session {
+    try await session(
+      "/auth/signup", [("email", email), ("password", password), ("name", name), ("phone", phone)])
   }
 
   /// New tokens for old. SuperTokens rotates the refresh token each time, and a
