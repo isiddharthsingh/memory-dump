@@ -127,6 +127,7 @@ versioned.
 | POST   | `/auth/session/refresh` | new tokens for the refresh token      |
 | POST   | `/auth/signout`       | end this session                        |
 | GET    | `/v1/auth/me`         | the signed-in account                   |
+| PATCH  | `/v1/auth/me`         | change the name or phone number         |
 | DELETE | `/v1/auth/me`         | delete the account and everything in it |
 | POST   | `/v1/ingest`          | submit a URL                            |
 | POST   | `/v1/ingest/file`     | upload a PDF or image, up to 5 MB (`Idempotency-Key`) |
