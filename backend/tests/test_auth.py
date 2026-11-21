@@ -84,6 +84,105 @@ def test_signup_long_name_is_a_field_error(client: TestClient) -> None:
     assert resp.json()["formFields"][0]["id"] == "name"
 
 
+def _me(client: TestClient, access: str) -> dict:
+    resp = client.get("/auth/me", headers=_bearer(access))
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def test_signup_keeps_the_phone_number_with_its_country_code(client: TestClient) -> None:
+    access, _ = _signup(client, name="Tester", phone="+1 (415) 555-0132")
+    assert _me(client, access)["phone"] == "+14155550132"
+    client.delete("/auth/me", headers=_bearer(access))
+
+
+def test_signup_with_an_empty_phone_keeps_none(client: TestClient) -> None:
+    access, _ = _signup(client, phone="")
+    assert _me(client, access)["phone"] is None
+    client.delete("/auth/me", headers=_bearer(access))
+
+
+@pytest.mark.parametrize(
+    "phone",
+    [
+        "call me",
+        "+12345",
+        "415 555 0132",
+        "+1 415 555 0132 ext 9",
+        "+" + "1" * 16,
+        "+0 7911 123456",
+        "+٩١٩٨٧٦٥٤٣٢١٠",
+    ],
+)
+def test_signup_bad_phone_is_a_field_error(client: TestClient, phone: str) -> None:
+    resp = client.post("/auth/signup", json=form(unique_email(), phone=phone), headers=HEADER_MODE)
+    assert resp.json()["status"] == "FIELD_ERROR"
+    assert resp.json()["formFields"][0]["id"] == "phone"
+
+
+def test_profile_edit_changes_the_name_and_phone(client: TestClient) -> None:
+    email = unique_email()
+    access, _ = _signup(client, email, name="Tester", phone="+14155550132")
+    resp = client.patch(
+        "/auth/me",
+        json={"name": "  New Name ", "phone": "+91 98765 43210"},
+        headers=_bearer(access),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["display_name"] == "New Name"
+    assert resp.json()["phone"] == "+919876543210"
+    assert resp.json()["email"] == email
+    assert _me(client, access) == resp.json()
+    client.delete("/auth/me", headers=_bearer(access))
+
+
+def test_profile_edit_leaves_what_it_does_not_name(client: TestClient) -> None:
+    access, _ = _signup(client, name="Tester", phone="+14155550132")
+    resp = client.patch("/auth/me", json={"name": "Renamed"}, headers=_bearer(access))
+    assert resp.json()["display_name"] == "Renamed"
+    assert resp.json()["phone"] == "+14155550132"
+    resp = client.patch(
+        "/auth/me", json={"name": None, "phone": "+447911123456"}, headers=_bearer(access)
+    )
+    assert resp.json()["display_name"] == "Renamed"
+    assert resp.json()["phone"] == "+447911123456"
+    # Nothing to change is not an error.
+    assert client.patch("/auth/me", json={}, headers=_bearer(access)).json() == resp.json()
+    client.delete("/auth/me", headers=_bearer(access))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"name": "   "},
+        {"name": "n" * 101},
+        {"phone": ""},
+        {"phone": "415 555 0132"},
+        {"phone": "+0 7911 123456"},
+        {"name": "Fine", "phone": "call me"},
+    ],
+)
+def test_profile_edit_refuses_a_bad_name_or_phone(client: TestClient, body: dict) -> None:
+    access, _ = _signup(client, name="Tester", phone="+14155550132")
+    resp = client.patch("/auth/me", json=body, headers=_bearer(access))
+    assert resp.status_code == 422, resp.text
+    assert isinstance(resp.json()["detail"], str)
+    # Neither field changed, the good one beside a bad one included.
+    me = _me(client, access)
+    assert (me["display_name"], me["phone"]) == ("Tester", "+14155550132")
+    client.delete("/auth/me", headers=_bearer(access))
+
+
+def test_profile_edit_needs_a_session_and_changes_only_its_own_account(client: TestClient) -> None:
+    assert client.patch("/auth/me", json={"name": "Nobody"}).status_code == 401
+    mine, _ = _signup(client, name="Mine", phone="+14155550132")
+    theirs, _ = _signup(client, name="Theirs", phone="+14155550133")
+    client.patch("/auth/me", json={"name": "Changed"}, headers=_bearer(mine))
+    assert _me(client, theirs)["display_name"] == "Theirs"
+    for access in (mine, theirs):
+        client.delete("/auth/me", headers=_bearer(access))
+
+
 def test_signup_normalizes_email_case(client: TestClient) -> None:
     email = unique_email("Foo").replace("example.com", "Example.COM")
     access, _ = _signup(client, email)

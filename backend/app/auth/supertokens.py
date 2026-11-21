@@ -11,6 +11,7 @@ an email/password user, whether from the app's sign-up form or the dashboard.
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any
 
@@ -31,25 +32,46 @@ from app.config import Settings
 from app.db.models import User
 from app.db.session import get_sessionmaker
 
-# Optional sign-up form field, kept in users.display_name.
+# Optional sign-up form fields, kept in users.display_name and users.phone. The
+# app asks for both; builds from before the phone field and the dashboard send
+# neither.
 NAME_FIELD = "name"
+PHONE_FIELD = "phone"
 _DISPLAY_NAME_KEY = "memory_dump_display_name"
+_PHONE_KEY = "memory_dump_phone"
 MIN_PASSWORD_LEN = 10
-_MAX_FIELD_LEN = 100
+MAX_FIELD_LEN = 100
 
 
 async def _validate_password(value: Any, _tenant_id: str) -> str | None:
     if not isinstance(value, str) or len(value) < MIN_PASSWORD_LEN:
         return f"Password must be at least {MIN_PASSWORD_LEN} characters"
-    if len(value) > _MAX_FIELD_LEN:
-        return f"Password must be at most {_MAX_FIELD_LEN} characters"
+    if len(value) > MAX_FIELD_LEN:
+        return f"Password must be at most {MAX_FIELD_LEN} characters"
     return None
 
 
 async def _validate_name(value: Any, _tenant_id: str) -> str | None:
-    if not isinstance(value, str) or len(value) > _MAX_FIELD_LEN:
-        return f"Name must be text of at most {_MAX_FIELD_LEN} characters"
+    if not isinstance(value, str) or len(value) > MAX_FIELD_LEN:
+        return f"Name must be text of at most {MAX_FIELD_LEN} characters"
     return None
+
+
+def phone_number(value: Any) -> str | None:
+    """A phone number as `+` and its digits, country code first, or None when
+    it isn't one: a `+`, then 7 to 15 digits 0-9 of which the first isn't 0
+    (no country code starts with it), spaced or punctuated the usual ways."""
+    if not isinstance(value, str):
+        return None
+    number = re.sub(r"[\s().-]", "", value)
+    return number if re.fullmatch(r"\+[1-9][0-9]{6,14}", number) else None
+
+
+BAD_PHONE = "Enter a valid phone number with its country code"
+
+
+async def _validate_phone(value: Any, _tenant_id: str) -> str | None:
+    return None if phone_number(value) else BAD_PHONE
 
 
 def _override_apis(original: APIInterface, allow_signup: bool) -> APIInterface:
@@ -67,10 +89,12 @@ def _override_apis(original: APIInterface, allow_signup: bool) -> APIInterface:
             # Sign-in still works, and the dashboard can still create users.
             return GeneralErrorResponse("Sign-ups are closed on this server.")
         # The recipe's sign_up below only sees email and password, so hand it
-        # the name through the user context.
+        # the name and phone through the user context.
         name = next((f.value for f in form_fields if f.id == NAME_FIELD), None)
         if isinstance(name, str) and name.strip():
             user_context[_DISPLAY_NAME_KEY] = name.strip()
+        phone = next((f.value for f in form_fields if f.id == PHONE_FIELD), None)
+        user_context[_PHONE_KEY] = phone_number(phone)
         return await original_sign_up_post(
             form_fields,
             tenant_id,
@@ -105,6 +129,7 @@ def _override_functions(original: RecipeInterface) -> RecipeInterface:
                         User(
                             id=uuid.UUID(result.user.id),
                             display_name=user_context.get(_DISPLAY_NAME_KEY),
+                            phone=user_context.get(_PHONE_KEY),
                         )
                     )
                     await db.commit()
@@ -143,6 +168,9 @@ def init_supertokens(settings: Settings) -> None:
                         emailpassword.InputFormField(id="password", validate=_validate_password),
                         emailpassword.InputFormField(
                             id=NAME_FIELD, validate=_validate_name, optional=True
+                        ),
+                        emailpassword.InputFormField(
+                            id=PHONE_FIELD, validate=_validate_phone, optional=True
                         ),
                     ]
                 ),
