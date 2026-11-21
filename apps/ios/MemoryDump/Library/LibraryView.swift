@@ -108,7 +108,7 @@ struct LibraryView: View {
   }
 
   @ViewBuilder private var cards: some View {
-    chips.padding(.horizontal, -16)
+    chips.endsAtSideBars().padding(.horizontal, -16)
     if model.filter == .all {
       Rediscover(pool: model.pool)
     }

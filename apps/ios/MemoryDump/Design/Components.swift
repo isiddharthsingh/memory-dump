@@ -279,6 +279,16 @@ struct PressableCardStyle: ButtonStyle {
   }
 }
 
+extension View {
+  /// For a row that scrolls sideways out to the screen's edges. Where a bar
+  /// sits at the screen's side (iPhone Duo) the row would run on under it: this
+  /// ends it at the bar, for the eye and for taps. It goes on the ScrollView
+  /// itself, before any negative padding.
+  func endsAtSideBars() -> some View {
+    clipped().contentShape(.rect)
+  }
+}
+
 /// Columns of cards, each item going to the shortest column, so a wall of
 /// mixed heights stays level. `estimate` guesses a card's height before layout.
 struct Masonry<Item: Identifiable, Content: View>: View {

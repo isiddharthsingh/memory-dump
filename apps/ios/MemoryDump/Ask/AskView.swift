@@ -392,6 +392,7 @@ private struct AskTurnView: View {
             .padding(.horizontal, 22)
             .padding(.vertical, 14)
           }
+          .endsAtSideBars()
           .padding(.horizontal, -16)
         }
       }

@@ -388,6 +388,7 @@ struct ItemReaderView: View {
             }
             .padding(.horizontal, 16)
           }
+          .endsAtSideBars()
         }
       }
     }
