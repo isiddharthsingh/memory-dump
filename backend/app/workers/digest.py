@@ -57,6 +57,6 @@ async def digest_user(ctx: dict[str, Any], user_id: str) -> str:
             f"Most recent: {(top.title or top.url)[:80]}"
         )
         sent = await send_to_user(
-            session, uid, title="Your week in memory-dump", body=body, data={}
+            session, uid, title="Your week in Memory Dump", body=body, data={}
         )
     return f"devices:{sent}"
