@@ -4,18 +4,26 @@
 # the development conveniences (published database ports, code mounted with
 # reload).
 #
-# Only the API's port is published. Put it behind a TLS-terminating proxy and
-# set FORWARDED_ALLOW_IPS (in ../.env) to the proxy's address so uvicorn takes
-# client addresses from X-Forwarded-For (the sign-in rate limit counts per
-# address). For Postgres, prefer a managed instance with point-in-time
-# recovery over the postgres-data volume.
+# Only the API's port is published, and only on this machine (127.0.0.1): put
+# a TLS-terminating proxy on the host in front of it, and set
+# FORWARDED_ALLOW_IPS (in ../.env) to the address the proxy's requests arrive
+# from so uvicorn takes client addresses from X-Forwarded-For (the sign-in rate
+# limit counts per address). For Postgres, prefer a managed instance with
+# point-in-time recovery over the postgres-data volume.
+#
+# POSTGRES_PASSWORD, REDIS_PASSWORD, SUPERTOKENS_API_KEY and the S3 key pair
+# must be set (in your shell or backend/.env; compose won't start without
+# them): the sandboxed children that decode uploads can reach this network,
+# so nothing on it may answer without a secret.
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:0.8.7-pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-memory}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-memory}
+      # Used when the volume is first created; changing it later needs
+      # ALTER USER as well (see AGENTS.md).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in backend/.env}
       POSTGRES_DB: ${POSTGRES_DB:-memory_dump}
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -28,20 +36,19 @@ services:
   # The job queue lives here, so: an append-only file synced every second, so
   # a restart loses at most a second of queued jobs (the reconciler puts back
   # the rest), and no eviction, so memory pressure fails writes loudly instead
-  # of dropping jobs. Set REDIS_PASSWORD (from your shell or backend/.env, like
-  # POSTGRES_*) and put it in REDIS_URL as redis://:<password>@redis:6379/0.
+  # of dropping jobs. REDIS_PASSWORD comes from your shell or backend/.env,
+  # like POSTGRES_*, and the api and worker are handed REDIS_URL built from it.
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
     restart: unless-stopped
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in backend/.env}
     command:
       - sh
       - -c
       - >
         exec redis-server --appendonly yes --appendfsync everysec
-        --maxmemory-policy noeviction
-        $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}
+        --maxmemory-policy noeviction --requirepass "$$REDIS_PASSWORD"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -57,15 +64,17 @@ services:
   # SUPERTOKENS_API_KEY in ../.env; like POSTGRES_*, compose reads it from your
   # shell or backend/.env.
   supertokens:
-    image: registry.supertokens.io/supertokens/supertokens-postgresql:12.4.1
+    image: registry.supertokens.io/supertokens/supertokens-postgresql:12.4.3
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      POSTGRESQL_CONNECTION_URI: postgresql://${POSTGRES_USER:-memory}:${POSTGRES_PASSWORD:-memory}@postgres:5432/${POSTGRES_DB:-memory_dump}
+      POSTGRESQL_CONNECTION_URI: postgresql://${POSTGRES_USER:-memory}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in backend/.env}@postgres:5432/${POSTGRES_DB:-memory_dump}
       POSTGRESQL_TABLE_SCHEMA: supertokens
-      API_KEYS: ${SUPERTOKENS_API_KEY:-}
+      # Without it the core answers anyone on this network, who could then
+      # sign in as any user.
+      API_KEYS: ${SUPERTOKENS_API_KEY:?set SUPERTOKENS_API_KEY in backend/.env}
       # 15-minute access tokens, refresh tokens that expire after 30 days unused.
       ACCESS_TOKEN_VALIDITY: 900
       REFRESH_TOKEN_VALIDITY: 43200
@@ -113,9 +122,12 @@ services:
       supertokens:
         condition: service_healthy
     environment:
-      # The key the core was given, from the same place (your shell or
-      # backend/.env), so the two can't disagree.
-      SUPERTOKENS_API_KEY: ${SUPERTOKENS_API_KEY:-}
+      # The secrets the services were given, from the same place (your shell
+      # or backend/.env), so they can't disagree.
+      SUPERTOKENS_API_KEY: ${SUPERTOKENS_API_KEY:?set SUPERTOKENS_API_KEY in backend/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in backend/.env}
+    security_opt:
+      - no-new-privileges:true
     command: ["alembic", "upgrade", "head"]
 
   api:
@@ -124,7 +136,9 @@ services:
     env_file:
       - ../.env
     environment:
-      SUPERTOKENS_API_KEY: ${SUPERTOKENS_API_KEY:-}
+      SUPERTOKENS_API_KEY: ${SUPERTOKENS_API_KEY:?set SUPERTOKENS_API_KEY in backend/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in backend/.env}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in backend/.env}@redis:6379/0
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
       # uvicorn worker processes; each has its own database pool
@@ -143,8 +157,12 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    # This machine only, for a proxy on the host; the override publishes it
+    # on every interface for development.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
+    security_opt:
+      - no-new-privileges:true
     command:
       - sh
       - -c
@@ -175,10 +193,17 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
-      SUPERTOKENS_API_KEY: ${SUPERTOKENS_API_KEY:-}
+      SUPERTOKENS_API_KEY: ${SUPERTOKENS_API_KEY:?set SUPERTOKENS_API_KEY in backend/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in backend/.env}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in backend/.env}@redis:6379/0
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
     command: ["arq", "app.workers.worker.WorkerSettings"]
+    # It reads what strangers' links and files hold: a ceiling on its memory
+    # keeps one bad input from taking the host (and Postgres) down with it.
+    mem_limit: ${WORKER_MEM_LIMIT:-4g}
+    security_opt:
+      - no-new-privileges:true
     # Reaps the ffmpeg a timed-out reel child leaves (app/extractors/reel.py):
     # arq, as PID 1, wouldn't.
     init: true

@@ -2,13 +2,15 @@
 # file by itself. Publishes the databases (for running the api or worker on the
 # host, or connecting a client) and mounts the code so changes hot-reload.
 services:
+  # This machine only: plain `docker compose up` on a server would otherwise
+  # put the databases on the internet.
   postgres:
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
 
   redis:
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
 
   # Bound to localhost only, for an api run on the host with
   # SUPERTOKENS_CONNECTION_URI=http://localhost:3567.
@@ -26,6 +28,9 @@ services:
       - .:/app
 
   api:
+    # Every interface, so a phone on this Wi-Fi reaches http://<mac>.local:8000.
+    ports: !override
+      - "8000:8000"
     # With pytest, ruff and mypy: docker compose exec api pytest
     build:
       context: .
