@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     # {api_domain}/auth/dashboard.
     api_domain: str = "http://localhost:8000"
     allow_signup: bool = True
+    # The SuperTokens user dashboard at {api_domain}/auth/dashboard. Off unless
+    # set: it is served on the public address, and any dashboard login can
+    # change or delete every account. Turn it on only while you need it.
+    dashboard_enabled: bool = False
 
     # Per-user rate limits on the endpoints that spend Claude and Voyage
     # tokens, and per-address limits on sign-in and sign-up. Token buckets in

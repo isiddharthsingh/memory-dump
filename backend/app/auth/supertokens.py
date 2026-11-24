@@ -105,6 +105,14 @@ def _override_apis(original: APIInterface, allow_signup: bool) -> APIInterface:
         )
 
     original.sign_up_post = sign_up_post  # type: ignore[method-assign]
+    # No password reset until there's an email provider of our own: the SDK's
+    # would send each address to SuperTokens' mail service with a link to a
+    # page nothing serves, to anyone who asks, unlimited. And no "does this
+    # email have an account" lookup, which the app doesn't use and anyone
+    # could ask of every address.
+    original.disable_generate_password_reset_token_post = True
+    original.disable_password_reset_post = True
+    original.disable_email_exists_get = True
     return original
 
 
@@ -161,7 +169,9 @@ def init_supertokens(settings: Settings) -> None:
         mode="asgi",
         telemetry=False,
         recipe_list=[
-            session.init(),
+            # Header-based only, as the app uses them: no cookie sessions,
+            # which would need CSRF protection this API doesn't have.
+            session.init(get_token_transfer_method=lambda _request, _for_create, _ctx: "header"),
             emailpassword.init(
                 sign_up_feature=emailpassword.InputSignUpFeature(
                     form_fields=[
@@ -179,7 +189,8 @@ def init_supertokens(settings: Settings) -> None:
                     functions=_override_functions,
                 ),
             ),
-            # The user management UI at {api_domain}/auth/dashboard.
-            dashboard.init(),
+            # The user management UI at {api_domain}/auth/dashboard, only
+            # while DASHBOARD_ENABLED is set (see Settings.dashboard_enabled).
+            *([dashboard.init()] if settings.dashboard_enabled else []),
         ],
     )
