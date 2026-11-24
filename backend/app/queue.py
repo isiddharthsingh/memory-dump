@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -13,11 +14,40 @@ from app.config import get_settings
 _pool: ArqRedis | None = None
 
 
+def job_serializer(data: Any) -> bytes:
+    """Jobs and their results go to Redis as JSON, not arq's default pickle,
+    which runs whatever a job's bytes say when it's read: anyone who could
+    write to Redis could run code in the worker. Every job's arguments are
+    strings and numbers; a result that isn't (an exception) is kept as its
+    repr.
+
+    Jobs queued as pickle by a build from before this can't be read: arq
+    fails each one, so drain the queue before upgrading (see AGENTS.md)."""
+    return json.dumps(data, default=_json_default, separators=(",", ":")).encode()
+
+
+def _json_default(value: Any) -> str:
+    # A failed job's result is its exception, kept as its repr. Anything else
+    # that isn't JSON is an argument a job would get back as a repr string in
+    # place of the value (a UUID, a datetime), so enqueueing it fails instead.
+    if isinstance(value, BaseException):
+        return repr(value)
+    raise TypeError(f"{type(value).__name__} can't go in a job; pass strings and numbers")
+
+
+def job_deserializer(data: bytes) -> Any:
+    return json.loads(data)
+
+
 async def get_arq_pool() -> ArqRedis:
     global _pool
     if _pool is None:
         settings = get_settings()
-        _pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+        _pool = await create_pool(
+            RedisSettings.from_dsn(settings.redis_url),
+            job_serializer=job_serializer,
+            job_deserializer=job_deserializer,
+        )
     return _pool
 
 
