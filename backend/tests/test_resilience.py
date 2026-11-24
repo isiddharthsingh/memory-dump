@@ -10,7 +10,9 @@ import logging
 import os
 import pwd
 import sys
+import tracemalloc
 import uuid
+import zlib
 from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -257,6 +259,68 @@ async def test_page_bodies_are_capped_after_decompression() -> None:
             await client.get("https://example.com/")
     async with _CappedClient(transport=transport, max_bytes=10_000) as client:
         assert (await client.get("https://example.com/")).text == "a" * 5000
+
+
+async def test_a_compression_bomb_never_expands_past_the_cap() -> None:
+    # 64 MiB of zeros in about 64 KB, sent as a single network chunk: httpx's
+    # own decoder would expand all of it before a size check could run.
+    bomb = gzip.compress(b"\0" * (64 * 1024 * 1024), 9)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Accept-Encoding"] == "gzip, deflate"
+        return httpx.Response(
+            200, stream=httpx.ByteStream(bomb), headers={"Content-Encoding": "gzip"}
+        )
+
+    transport = httpx.MockTransport(handler)
+    tracemalloc.start()
+    try:
+        async with _CappedClient(transport=transport, max_bytes=100_000) as client:
+            with pytest.raises(TooLarge):
+                await client.get("https://example.com/")
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    # The compressed body plus at most the cap, never the 64 MiB.
+    assert peak < 4 * 1024 * 1024
+
+
+@pytest.mark.parametrize("coding", ["gzip, gzip", "br", "zstd", "compress"])
+async def test_codings_it_did_not_ask_for_are_refused(coding: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, stream=httpx.ByteStream(b"whatever"), headers={"Content-Encoding": coding}
+        )
+
+    async with _CappedClient(transport=httpx.MockTransport(handler), max_bytes=1000) as client:
+        with pytest.raises(httpx.DecodingError):
+            await client.get("https://example.com/")
+
+
+@pytest.mark.parametrize("coding", ["UTF-8", "none", "identity", "binary"])
+async def test_a_content_encoding_that_compresses_nothing_is_ignored(coding: str) -> None:
+    # Misconfigured servers send these; httpx reads the body as it is, and so does this.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, stream=httpx.ByteStream(b"plain page"), headers={"Content-Encoding": coding}
+        )
+
+    async with _CappedClient(transport=httpx.MockTransport(handler), max_bytes=1000) as client:
+        assert (await client.get("https://example.com/")).text == "plain page"
+
+
+@pytest.mark.parametrize("wbits", [zlib.MAX_WBITS, -zlib.MAX_WBITS])
+async def test_deflate_bodies_read_wrapped_or_raw(wbits: int) -> None:
+    packer = zlib.compressobj(wbits=wbits)
+    body = packer.compress(b"hello " * 100) + packer.flush()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, stream=httpx.ByteStream(body), headers={"Content-Encoding": "deflate"}
+        )
+
+    async with _CappedClient(transport=httpx.MockTransport(handler), max_bytes=1000) as client:
+        assert (await client.get("https://example.com/")).text == "hello " * 100
 
 
 async def test_redirect_bodies_are_never_read() -> None:
