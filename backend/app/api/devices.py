@@ -1,8 +1,8 @@
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Path, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/devices", tags=["devices"])
 class DeviceRegister(BaseModel):
     push_token: str = Field(pattern=r"^[0-9a-f]{64,200}$")
     apns_env: Literal["sandbox", "production"]
-    platform: str | None = None
+    platform: str | None = Field(default=None, max_length=16)
 
 
 @router.post("/register")
@@ -49,6 +49,21 @@ async def register_device(
     row = (await session.execute(stmt)).scalar_one()
     await session.commit()
     return {"id": str(row)}
+
+
+@router.delete("/{push_token}", status_code=status.HTTP_204_NO_CONTENT)
+async def unregister_device(
+    push_token: Annotated[str, Path(pattern=r"^[0-9a-f]{64,200}$")],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    """Stops pushes to this phone for this account: the app calls it as it
+    signs out, so the next person to use the phone isn't sent this account's
+    titles. Answers 204 whether or not the token was registered."""
+    await session.execute(
+        delete(Device).where(Device.user_id == current_user.id, Device.push_token == push_token)
+    )
+    await session.commit()
 
 
 @router.get("/count")

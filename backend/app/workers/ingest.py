@@ -221,7 +221,7 @@ async def _failed(ctx: dict[str, Any], claim: _Claim, exc: Exception) -> str:
             session,
             claim.user_id,
             title="Save failed",
-            body=(claim.title or claim.url)[:120] + f" — {type(exc).__name__}",
+            body=(claim.title or claim.url)[:120],
             data={"item_id": str(claim.item_id)},
         )
     return "failed"

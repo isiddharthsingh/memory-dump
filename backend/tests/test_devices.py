@@ -49,6 +49,7 @@ def test_register_apns_token(client: TestClient, two_users: tuple) -> None:
         {"push_token": "ABCDEF" * 11, "apns_env": "production"},
         {"push_token": secrets.token_hex(32), "apns_env": "development"},
         {"expo_push_token": secrets.token_hex(32)},
+        {"push_token": secrets.token_hex(32), "apns_env": "sandbox", "platform": "x" * 17},
     ],
 )
 def test_register_rejects_bad_input(client: TestClient, two_users: tuple, body: dict) -> None:
@@ -68,3 +69,18 @@ def test_same_token_moves_to_the_new_user(client: TestClient, two_users: tuple) 
     assert resp.status_code == 200, resp.text
     assert _count(client, a) == 0
     assert _count(client, b) == 1
+
+
+def test_signing_out_unregisters_only_your_own_token(client: TestClient, two_users: tuple) -> None:
+    a, b = two_users
+    token = secrets.token_hex(32)
+    body = {"push_token": token, "apns_env": "sandbox", "platform": "ios"}
+    assert client.post("/devices/register", json=body, headers=a).status_code == 200
+    # Someone else can't take it off a's account.
+    assert client.delete(f"/devices/{token}", headers=b).status_code == 204
+    assert _count(client, a) == 1
+    assert client.delete(f"/v1/devices/{token}", headers=a).status_code == 204
+    assert _count(client, a) == 0
+    # Already gone, and a malformed token, the same as ever.
+    assert client.delete(f"/devices/{token}", headers=a).status_code == 204
+    assert client.delete("/devices/not-a-token", headers=a).status_code == 422
