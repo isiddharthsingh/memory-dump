@@ -685,3 +685,48 @@ def test_search_is_rate_limited_per_user(
         assert "retry-after" in limited.headers
     finally:
         client.delete("/auth/me", headers=auth)
+
+
+async def test_jobs_go_to_redis_as_json_never_pickle() -> None:
+    import pickle
+
+    from arq.jobs import Job
+
+    from app import queue
+    from app.workers.worker import WorkerSettings
+
+    assert WorkerSettings.job_serializer is queue.job_serializer
+    assert WorkerSettings.job_deserializer is queue.job_deserializer
+    job = {"t": 1, "f": "ingest_item", "a": [str(uuid.uuid4())], "k": {"generation": 2}}
+    assert queue.job_deserializer(queue.job_serializer(job)) == job
+    # A result that isn't JSON (a failure's exception) is kept as its repr.
+    assert queue.job_deserializer(queue.job_serializer({"r": ValueError("x")})) == {
+        "r": "ValueError('x')"
+    }
+    # Pickled bytes, which would run code as they're read, are refused.
+    with pytest.raises(ValueError):
+        queue.job_deserializer(pickle.dumps(job))
+    # An argument that isn't JSON fails as it's queued, never reaching the
+    # job as its repr.
+    with pytest.raises(TypeError):
+        queue.job_serializer({"a": [uuid.uuid4()]})
+
+    pool = await queue.get_arq_pool()
+    # A queue of its own, which the compose worker running beside the tests
+    # never takes jobs from.
+    queue_name = f"arq:test:{uuid.uuid4()}"
+    try:
+        queued = await queue.enqueue(
+            "digest_user", "someone", _job_id=f"json-{uuid.uuid4()}", _queue_name=queue_name
+        )
+        assert queued is not None
+        raw = await pool.get(f"arq:job:{queued.job_id}")
+        assert raw is not None and raw.startswith(b"{")
+        info = await Job(
+            queued.job_id, pool, _queue_name=queue_name, _deserializer=queue.job_deserializer
+        ).info()
+        assert info is not None and list(info.args) == ["someone"]
+        await pool.delete(f"arq:job:{queued.job_id}")
+        await pool.delete(queue_name)
+    finally:
+        await queue.close_arq_pool()
