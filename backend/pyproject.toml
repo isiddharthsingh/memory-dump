@@ -39,7 +39,8 @@ dependencies = [
     "pillow>=11",
     "pypdfium2>=4.30",
     "prometheus-client>=0.21",
-    "sentry-sdk>=2.19",
+    # 3.x drops options init_sentry passes (app/observability.py).
+    "sentry-sdk>=2.19,<3",
 ]
 
 [project.optional-dependencies]

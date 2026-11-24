@@ -730,3 +730,24 @@ async def test_jobs_go_to_redis_as_json_never_pickle() -> None:
         await pool.delete(queue_name)
     finally:
         await queue.close_arq_pool()
+
+
+def test_sentry_starts_with_the_options_it_is_given() -> None:
+    # A Sentry SDK that rejects an option would stop the api and the worker
+    # from starting at all, so start it for real, in a process of its own.
+    import subprocess
+
+    code = (
+        "from app.observability import init_sentry; import sentry_sdk;"
+        "init_sentry('api'); o = sentry_sdk.get_client().options;"
+        "assert o['include_local_variables'] is False, o;"
+        "assert o['max_request_body_size'] == 'never', o;"
+        "assert o['send_default_pii'] is False, o"
+    )
+    env = {
+        **os.environ,
+        "SENTRY_DSN": "https://key@o0.ingest.sentry.io/0",
+        "SENTRY_AGENT_HINTS": "0",
+    }
+    done = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
