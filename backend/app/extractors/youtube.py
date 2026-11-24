@@ -13,6 +13,10 @@ log = logging.getLogger(__name__)
 VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 
+def watch_url(video_id: str) -> str:
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
 def extract_video_id(url: str) -> str | None:
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower().removeprefix("www.")
@@ -39,7 +43,10 @@ class YouTubeExtractor:
             return ExtractedContent(raw_text=share_text or url)
 
         metadata, transcript = await asyncio.gather(
-            asyncio.to_thread(self._fetch_metadata, url),
+            # The video's own address, rebuilt from its id: yt-dlp parses URLs
+            # its own way and doesn't go through public_client, so it never
+            # sees what the user typed.
+            asyncio.to_thread(self._fetch_metadata, watch_url(video_id)),
             asyncio.to_thread(self._fetch_transcript, video_id),
         )
 
@@ -83,6 +90,9 @@ class YouTubeExtractor:
                 "skip_download": True,
                 "extract_flat": False,
                 "noplaylist": True,
+                # YouTube's extractor only, never the generic one that fetches
+                # whatever address it's handed.
+                "allowed_extractors": ["youtube"],
             }
             with YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
