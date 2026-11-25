@@ -189,3 +189,39 @@ def test_the_phone_is_optional_and_can_be_removed(client: TestClient) -> None:
         assert bad.status_code == 422
     finally:
         client.delete("/auth/me", headers=headers)
+
+
+@pytest.mark.parametrize("path", ["/privacy", "/terms", "/support"])
+def test_the_legal_pages_are_public_and_name_who_to_contact(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    monkeypatch.setattr(get_settings(), "operator_name", "Sam <Example>")
+    monkeypatch.setattr(get_settings(), "support_email", "help@example.com")
+    # Open to every build, like the health checks: a browser sends none.
+    monkeypatch.setattr(get_settings(), "min_app_build", 99)
+    resp = client.get(path)
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "mailto:help@example.com" in resp.text
+    if path != "/support":
+        assert "Sam &lt;Example&gt;" in resp.text
+    # Not under /v1: these are pages, not the API.
+    assert client.get(f"/v1{path}").status_code == 404
+
+
+def test_the_privacy_policy_names_every_service_the_consent_screen_does(
+    client: TestClient,
+) -> None:
+    text = client.get("/privacy").text
+    for service in (
+        "Anthropic",
+        "Voyage AI",
+        "OpenAI",
+        "Google",
+        "OpenRouter",
+        "Bedrock",
+        "FxTwitter",
+        "Jina AI",
+        "Apple",
+    ):
+        assert service in text, service
