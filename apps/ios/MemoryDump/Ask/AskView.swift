@@ -230,6 +230,22 @@ struct AskView: View {
     }
     .onChange(of: router.askDraft) { takeDraft() }
     .onDisappear { voice.stop() }
+    .alert(
+      "Voice isn’t available",
+      isPresented: Binding(get: { voice.problem != nil }, set: { if !$0 { voice.problem = nil } }),
+      presenting: voice.problem
+    ) { problem in
+      if problem == .denied {
+        // Not through openURL: here that's the Router, which opens only web
+        // and mail links.
+        Button("Open Settings") {
+          if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+        }
+      }
+      Button("OK", role: .cancel) {}
+    } message: { problem in
+      Text(problem.message)
+    }
   }
 
   /// "Ask about this" on the reader or a topic opens this tab with a drafted
