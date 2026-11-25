@@ -30,11 +30,11 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Memory Dump connects to your self-hosted server on your local network.</string>
+	<string>Memory Dump uses your local network only to reach a development server on your Wi-Fi.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Allow Memory Dump to use the microphone so you can ask questions by voice.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Allow Memory Dump to turn your voice into questions.</string>
+	<string>Memory Dump turns what you say into a question. Your audio is processed on your iPhone, or by Apple when on-device recognition isn't available.</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>Newsreader_400Regular.ttf</string>
