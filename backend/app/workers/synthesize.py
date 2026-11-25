@@ -24,7 +24,7 @@ from app.ai.synthesize import (
 )
 from app.db.models import Chat, Item, TopicPage, TopicPageChunk
 from app.db.session import get_sessionmaker
-from app.errors import SpendLimitReached, is_transient
+from app.errors import AccountRefusal, is_transient
 from app.workers.jobs import job, last_try, later
 
 log = logging.getLogger(__name__)
@@ -101,9 +101,9 @@ def retry_or_give_up(ctx: dict[str, Any], exc: Exception, what: str) -> None:
     if (busy or is_transient(exc)) and not last_try(ctx):
         log.warning("%s: retrying later: %r", what, exc)
         raise later(ctx, 15 if busy else 60, exc) from exc
-    if isinstance(exc, SpendLimitReached):
-        # The month's limit doing what it is for.
-        log.warning("%s: not done, the spend limit is reached", what)
+    if isinstance(exc, AccountRefusal):
+        # The month's limit, or the user's consent, doing what it is for.
+        log.warning("%s: not done: %s", what, type(exc).__name__)
         return
     log.error("%s: giving up: %r", what, exc, exc_info=exc)
 

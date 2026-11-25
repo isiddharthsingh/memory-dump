@@ -18,6 +18,12 @@ The user comes from the log context, as in app/usage.py. A call with no user
 under an exempt job (`exempt`), which is the server's whoever's rows it
 works on. Spend is read before each call and written after it, so calls in
 flight together can overshoot a limit by what they cost.
+
+Nothing of a user's goes to a model or to Voyage until they agree to it
+(users.ai_consent_at, asked for by the app): every call made for them
+raises ConsentRequired instead. The exempt jobs aren't asked: `reembed` and
+`classify` skip those accounts themselves, and `forget_item` finishes a
+deletion the user asked for.
 """
 
 from __future__ import annotations
@@ -39,7 +45,7 @@ from app.ai.wire import ProviderError
 from app.config import get_settings
 from app.db.models import LlmUsage, ProviderKey, User
 from app.db.session import get_sessionmaker
-from app.errors import SpendLimitReached
+from app.errors import ConsentRequired, SpendLimitReached
 
 # Work that is the server's to do and pay for, on its own keys and outside
 # every cap, whoever the rows belong to: the operator's runs over every
@@ -81,6 +87,8 @@ class Account:
     # The user's own Voyage key, and the month's Voyage on the server's.
     voyage_secret: str | None
     voyage_spent: Decimal
+    # Agreed to their content going to the AI services (users.ai_consent_at).
+    consented: bool = True
 
     @property
     def on_own_key(self) -> bool:
@@ -138,6 +146,7 @@ async def account(user_id: uuid.UUID) -> Account | None:
             _spent("own"),
             voyage_key.secret,
             _spent("platform", voyage=True),
+            User.ai_consent_at.is_not(None),
         )
         .outerjoin(
             ProviderKey,
@@ -161,11 +170,16 @@ def exempt() -> bool:
 
 
 async def _caller() -> Account | None:
-    """The account a call is made for; None when it is the server's own."""
+    """The account a call is made for; None when it is the server's own.
+    ConsentRequired when its user hasn't agreed to the AI services: nothing
+    of theirs goes to a model or to Voyage."""
     user_id = structlog.contextvars.get_contextvars().get("user_id")
     if user_id is None or exempt():
         return None
-    return await account(uuid.UUID(user_id))
+    acct = await account(uuid.UUID(user_id))
+    if acct is not None and not acct.consented:
+        raise ConsentRequired()
+    return acct
 
 
 def _check_free(acct: Account) -> None:

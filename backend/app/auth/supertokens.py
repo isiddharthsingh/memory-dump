@@ -33,8 +33,8 @@ from app.db.models import User
 from app.db.session import get_sessionmaker
 
 # Optional sign-up form fields, kept in users.display_name and users.phone. The
-# app asks for both; builds from before the phone field and the dashboard send
-# neither.
+# app asks for the name and offers the phone; builds from before the phone
+# field and the dashboard send neither.
 NAME_FIELD = "name"
 PHONE_FIELD = "phone"
 _DISPLAY_NAME_KEY = "memory_dump_display_name"
@@ -71,6 +71,9 @@ BAD_PHONE = "Enter a valid phone number with its country code"
 
 
 async def _validate_phone(value: Any, _tenant_id: str) -> str | None:
+    # Optional: left out or left empty, no number is kept.
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
     return None if phone_number(value) else BAD_PHONE
 
 

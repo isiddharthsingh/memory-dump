@@ -57,6 +57,10 @@ class User(Base):
     ai_models: Mapped[dict[str, dict[str, str]] | None] = mapped_column(JSONB)
     # The most the user lets a month's calls on their own keys cost.
     own_spend_limit_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    # When the user agreed to their content going to the AI services (App
+    # Review 5.1.2(i)); null until they do, and again once they withdraw it.
+    # No model or Voyage call is made for them while it's null (routing.py).
+    ai_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ProviderKey(Base):

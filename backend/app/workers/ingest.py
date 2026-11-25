@@ -29,7 +29,7 @@ from app.ai.wire import ProviderError
 from app.config import get_settings
 from app.db.models import Item, ItemChunk
 from app.db.session import get_sessionmaker
-from app.errors import SpendLimitReached, is_transient, user_message
+from app.errors import AccountRefusal, is_transient, user_message
 from app.extractors.base import flatten, get_extractor
 from app.notifications import send_to_user
 from app.queue import enqueue, synthesize_job_id
@@ -209,9 +209,9 @@ async def _failed(ctx: dict[str, Any], claim: _Claim, exc: Exception) -> str:
         raise later(ctx, 60, exc) from exc
     if is_transient(exc):
         log.error("ingest: gave up after %s tries: %r", ctx.get("job_try", 1), exc)
-    elif isinstance(exc, SpendLimitReached):
-        # The month's limit doing what it is for.
-        log.warning("ingest: not done, the spend limit is reached")
+    elif isinstance(exc, AccountRefusal):
+        # The month's limit, or the user's consent, doing what it is for.
+        log.warning("ingest: not done: %s", type(exc).__name__)
     else:
         log.exception("ingest failed")
     if not await _set_status(claim, "failed", _reason(exc)):
@@ -256,9 +256,10 @@ async def ingest_item(ctx: dict[str, Any], item_id: str, generation: int | None 
         return "skipped"
 
     try:
-        # Voyage embeds the save last. Where it would refuse (the month's
-        # allowance used up, a Voyage key of the user's that can't be read),
-        # say so before the page is fetched and the analysis paid for.
+        # Voyage embeds the save last. Where it would refuse (no consent to the
+        # AI services, the month's allowance used up, a Voyage key of the
+        # user's that can't be read), say so before the page is fetched (by
+        # FxTwitter or Jina, sometimes) and the analysis paid for.
         await routing.voyage()
         extractor = get_extractor(claim.source)
         async with asyncio.timeout(get_settings().extract_timeout_s):

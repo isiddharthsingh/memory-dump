@@ -1,4 +1,5 @@
-"""The signed-in account: read it, edit its name and phone, or delete it.
+"""The signed-in account: read it, edit its name and phone, give or withdraw
+consent to the AI services, or delete it.
 
 Sign-up, sign-in, sign-out and refresh are SuperTokens' own routes under
 /auth (see app/auth/supertokens.py); these sit beside them.
@@ -12,7 +13,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import text, update
+from sqlalchemy import func, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from supertokens_python.asyncio import delete_user, get_user
 
@@ -30,10 +31,14 @@ class UserOut(BaseModel):
     display_name: str | None
     phone: str | None
     created_at: datetime
+    # When the user agreed to their content going to the AI services; null
+    # until they do (or after they withdraw), and nothing is sent meanwhile.
+    ai_consent_at: datetime | None
 
 
 class ProfileIn(BaseModel):
-    """What to change; a field left out or null stays as it is."""
+    """What to change; a field left out or null stays as it is. An empty
+    phone removes it: it's optional, so it can be taken back."""
 
     name: str | None = None
     phone: str | None = None
@@ -48,6 +53,7 @@ async def _profile(user: User) -> UserOut:
         display_name=user.display_name,
         phone=user.phone,
         created_at=user.created_at,
+        ai_consent_at=user.ai_consent_at,
     )
 
 
@@ -63,15 +69,21 @@ async def update_me(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> UserOut:
     """Changes the name, the phone number or both, held to sign-up's rules. A
-    name or number can be replaced, not removed; the email is SuperTokens'."""
+    name can be replaced, not removed; an empty phone removes the number. The
+    email is SuperTokens'."""
     name = body.name.strip() if body.name is not None else None
     if name is not None and not 0 < len(name) <= MAX_FIELD_LEN:
         raise _refuse(f"Name must be 1 to {MAX_FIELD_LEN} characters")
-    phone = phone_number(body.phone) if body.phone is not None else None
-    if body.phone is not None and phone is None:
-        raise _refuse(BAD_PHONE)
-    given = (("display_name", name), ("phone", phone))
-    values = {field: value for field, value in given if value is not None}
+    values: dict[str, str | None] = {}
+    if name is not None:
+        values["display_name"] = name
+    if body.phone is not None and not body.phone.strip():
+        values["phone"] = None
+    elif body.phone is not None:
+        phone = phone_number(body.phone)
+        if phone is None:
+            raise _refuse(BAD_PHONE)
+        values["phone"] = phone
     if values:
         # Written as given, not as a difference from the row read when the
         # request began: another device may have changed it since.
@@ -79,6 +91,40 @@ async def update_me(
         await session.commit()
         for field, value in values.items():
             setattr(current_user, field, value)
+    return await _profile(current_user)
+
+
+@router.put("/me/ai-consent", response_model=UserOut)
+async def give_ai_consent(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> UserOut:
+    """The user agrees to their content going to the AI services the app
+    named. Kept from the first time: agreeing again changes nothing."""
+    consented = (
+        await session.execute(
+            update(User)
+            .where(User.id == current_user.id)
+            .values(ai_consent_at=func.coalesce(User.ai_consent_at, func.now()))
+            .returning(User.ai_consent_at)
+        )
+    ).scalar_one()
+    await session.commit()
+    current_user.ai_consent_at = consented
+    return await _profile(current_user)
+
+
+@router.delete("/me/ai-consent", response_model=UserOut)
+async def withdraw_ai_consent(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> UserOut:
+    """From now on nothing of the user's goes to an AI service: saves fail
+    with ConsentRequired, Ask answers 403, and Search uses keywords only,
+    until they agree again."""
+    await session.execute(update(User).where(User.id == current_user.id).values(ai_consent_at=None))
+    await session.commit()
+    current_user.ai_consent_at = None
     return await _profile(current_user)
 
 
