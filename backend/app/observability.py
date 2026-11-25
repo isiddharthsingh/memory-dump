@@ -143,7 +143,18 @@ class MinAppBuild:
     minimum set those are refused too. Health, metrics, docs and SuperTokens'
     /auth routes stay open."""
 
-    OPEN = ("/healthz", "/livez", "/readyz", "/metrics", "/docs", "/openapi.json", "/auth/")
+    OPEN = (
+        "/healthz",
+        "/livez",
+        "/readyz",
+        "/metrics",
+        "/docs",
+        "/openapi.json",
+        "/auth/",
+        "/privacy",
+        "/terms",
+        "/support",
+    )
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app

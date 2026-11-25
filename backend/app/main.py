@@ -14,7 +14,7 @@ from voyageai import error as voyage_error
 
 from app import kv, logging_setup  # noqa: F401  — configures stdlib + structlog
 from app.ai.wire import ProviderError
-from app.api import ai, ask, auth, chats, devices, export, ingest, items, search, wiki
+from app.api import ai, ask, auth, chats, devices, export, ingest, items, legal, search, wiki
 from app.auth.rate_limit import AuthRateLimit
 from app.auth.supertokens import init_supertokens
 from app.config import get_settings
@@ -165,3 +165,5 @@ for router in (
     app.include_router(router, prefix="/v1")
     # The same routes unversioned, for app builds from before /v1.
     app.include_router(router, include_in_schema=False)
+# The privacy policy, terms and support page, for browsers: no /v1, no sign-in.
+app.include_router(legal.router)

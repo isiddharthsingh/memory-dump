@@ -20,6 +20,15 @@ class Settings(BaseSettings):
     # change or delete every account. Turn it on only while you need it.
     dashboard_enabled: bool = False
 
+    # Who runs this service and how to reach them, for the privacy policy,
+    # terms and support page at /privacy, /terms and /support (app/api/legal.py),
+    # which App Store Connect and the app link to. Set both before publishing.
+    operator_name: str = ""
+    support_email: str = ""
+    # Whose laws the terms are under, e.g. "the State of New York, USA"; the
+    # clause is left out while it's empty.
+    governing_law: str = ""
+
     # Per-user rate limits on the endpoints that spend Claude and Voyage
     # tokens, and per-address limits on sign-in and sign-up. Token buckets in
     # Redis (app/auth/rate_limit.py); 0 turns a limit off.
