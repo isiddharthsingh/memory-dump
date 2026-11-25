@@ -81,12 +81,14 @@ struct SettingsView: View {
             LabeledContent("Being analyzed", value: analyzing == 0 ? "None" : Format.plural(analyzing, "save"))
           }
           Button("Notifications") {
-            if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+            // Not through openURL: in the tabs that's the Router, which opens
+            // only web and mail links.
+            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
           }
         } header: {
           Text("Saving")
         } footer: {
-          Text("Shares wait in the offline queue until your server takes them. It then analyzes each one.")
+          Text("Shares wait in the offline queue until they can be sent. Memory Dump then analyzes each one.")
         }
         .listRowBackground(Palette.card)
 

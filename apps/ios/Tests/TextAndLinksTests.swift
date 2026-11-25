@@ -48,6 +48,33 @@ import Testing
     #expect(router.libraryPath == [.wiki("llm-scaling"), .item(UUID(uuidString: a)!)])
   }
 
+  /// A wiki link names a page only when it's a slug the server could make;
+  /// anything else would be a path of its own in the request.
+  @Test func routerOpensOnlyRealSlugs() {
+    let router = Router()
+    _ = router.open(URL(string: "memorydump://wiki/../auth/me")!)
+    _ = router.open(URL(string: "memorydump://cite/wiki:LLM%20Scaling")!)
+    _ = router.open(URL(string: "memorydump://cite/wiki:llm-scaling")!)
+    #expect(router.libraryPath == [.wiki("llm-scaling")])
+    #expect(Router.isSlug("llm-scaling-2026"))
+    #expect(!Router.isSlug(""))
+    #expect(!Router.isSlug("-leading"))
+    #expect(!Router.isSlug("Upper"))
+    #expect(!Router.isSlug("a/b"))
+    #expect(!Router.isSlug(String(repeating: "a", count: 256)))
+  }
+
+  /// Only web and mail links leave the app; a model-written link to another
+  /// app's scheme, a file or a phone number goes nowhere.
+  @Test func routerSendsOnlyWebAndMailLinksToTheSystem() {
+    for link in ["https://example.com", "http://example.com/a", "mailto:hi@example.com", "HTTPS://EXAMPLE.COM"] {
+      #expect(Router.goesToSystem(URL(string: link)!), "\(link)")
+    }
+    for link in ["tel:5551234", "sms:5551234", "file:///etc/passwd", "javascript:alert(1)", "shortcuts://run", "memorydump://x"] {
+      #expect(!Router.goesToSystem(URL(string: link)!), "\(link)")
+    }
+  }
+
   @Test func askCarriesItsScopeAndAPlainAskDropsIt() {
     let router = Router()
     router.ask("What do I know about LLM Scaling?", scope: .topic(slug: "llm-scaling", title: "LLM Scaling"))
