@@ -273,7 +273,7 @@ struct QueuedShares: View {
           .font(.callout.weight(.semibold))
           .foregroundStyle(Palette.accent)
         // The same words while it retries, so a server that's down doesn't look stuck.
-        Text("\(Format.plural(shares.count, "share")) waiting for your server")
+        Text("\(Format.plural(shares.count, "share")) waiting to send")
           .font(.subheadline.weight(.semibold))
           .foregroundStyle(Palette.ink)
         Spacer(minLength: 0)

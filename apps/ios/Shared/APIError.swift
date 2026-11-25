@@ -28,11 +28,14 @@ enum APIError: LocalizedError, Equatable {
     switch self {
     case .signedOut: "Not signed in."
     case .http(429, "", _): "Too many tries. Try again later."
-    case .http(let status, let detail, _): detail.isEmpty ? "HTTP \(status)" : detail
+    // No sentence to show: a proxy's page, or a bare status.
+    case .http(500..., "", _): "Memory Dump isn’t available right now. Try again in a moment."
+    case .http(_, "", _): "Something went wrong. Try again."
+    case .http(_, let detail, _): detail
     case .auth(let message): message
     case .notSaved: "Not saved on this phone yet."
     case .updateRequired(let detail):
-      detail.isEmpty ? "This version of Memory Dump is too old for your server. Update the app." : detail
+      detail.isEmpty ? "This version of Memory Dump is no longer supported. Update the app." : detail
     }
   }
 
@@ -69,12 +72,14 @@ extension Error {
 }
 
 /// FastAPI errors look like {"detail": "..."}; validation errors carry a list.
-/// SuperTokens' own /auth routes answer {"message": "..."}. Nonisolated:
-/// APIError, an Error and so nonisolated, reads it.
+/// SuperTokens' own /auth routes answer {"message": "..."}. Anything else (a
+/// proxy's HTML page, a plain-text 500) is not written for people, so it reads
+/// as no detail and APIError says something general. Nonisolated: APIError,
+/// an Error and so nonisolated, reads it.
 nonisolated enum FastAPIError {
   static func detail(in data: Data) -> String {
     guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-      return String(data: data, encoding: .utf8) ?? ""
+      return ""
     }
     if let s = obj["detail"] as? String { return s }
     if let list = obj["detail"] as? [[String: Any]], let msg = list.first?["msg"] as? String {

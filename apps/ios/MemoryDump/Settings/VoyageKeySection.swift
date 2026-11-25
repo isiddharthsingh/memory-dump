@@ -43,7 +43,7 @@ struct VoyageKeySection: View {
           ) {
             Button("Remove key", role: .destructive) { Task { await remove() } }
           } message: {
-            Text("The server deletes it, and search goes back to Memory Dump’s \(voyage.name) key.")
+            Text("It’s deleted, and search goes back to Memory Dump’s \(voyage.name) key.")
           }
           .alert("Couldn’t remove the key", isPresented: .constant(removeError != nil)) {
             Button("OK") { removeError = nil }
@@ -113,7 +113,7 @@ extension AISettings {
     guard keys, let voyage, inUse != nil || voyage.key != nil else { return nil }
     let what = "\(voyage.name) indexes and searches what you save."
     if voyage.key != nil {
-      return Usage(text: "", footer: "\(what) Your key is kept encrypted on the server and never shown again.")
+      return Usage(text: "", footer: "\(what) Your key is stored encrypted and never shown again.")
     }
     guard let limit = voyage.limit, limit > 0 else {
       return Usage(text: "", footer: "\(what) It runs on Memory Dump’s key. \(voyage.help)")
@@ -121,7 +121,7 @@ extension AISettings {
     let resets = Format.day(free.resets)
     if voyage.spent >= limit {
       return Usage(
-        text: "You’ve used this month’s free \(Format.money(limit)) of \(voyage.name). Add your own key, or wait until \(resets).",
+        text: "You’ve used this month’s free \(Format.money(limit)) of \(voyage.name). You can add your own key, or wait until \(resets).",
         fraction: 1, isUsedUp: true, footer: "\(what) \(voyage.help)")
     }
     return Usage(

@@ -217,10 +217,10 @@ enum Format {
   static func friendlyAskError(_ error: Error) -> (title: String, detail: String) {
     let raw = error.localizedDescription
     if raw.contains(/(?i)credit balance/) {
-      return ("Ask is unavailable right now", "Your server’s AI provider rejected the request: the account is out of credits.")
+      return ("Ask is unavailable right now", "The AI service turned the request down. Try again later.")
     }
     if error is URLError {
-      return ("Can’t reach your server", "Check your connection and try again.")
+      return ("Can’t connect to Memory Dump", "Check your connection and try again.")
     }
     if case APIError.http(429, _, _) = error {
       return ("Hourly limit reached", "Try again in a little while.")
@@ -249,7 +249,7 @@ enum Format {
     if case APIError.http(404, let detail, _) = error, ["Item not found", "Topic page not found"].contains(detail) {
       return ("It’s no longer in your library", "The item or topic this chat is about was deleted.")
     }
-    return ("Couldn’t get an answer", "Something went wrong on the server. Try again.")
+    return ("Couldn’t get an answer", "Something went wrong. Try again.")
   }
 }
 

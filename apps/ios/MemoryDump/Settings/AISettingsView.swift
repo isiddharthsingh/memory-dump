@@ -65,7 +65,7 @@ struct AISettingsView: View {
     ) {
       Button("Remove key", role: .destructive) { removeKey() }
     } message: {
-      Text("The server deletes it, and Memory Dump goes back to its own models.")
+      Text("It’s deleted, and Memory Dump goes back to its own models.")
     }
     .alert("Couldn’t save that change", isPresented: .constant(error != nil)) {
       Button("OK") { error = nil }
@@ -164,7 +164,7 @@ struct AISettingsView: View {
 
   private func providerFooter(_ ai: AISettings) -> String {
     guard let shown else { return "Pick a provider to use your own API key." }
-    var lines = [shown.help, "Kept encrypted on the server and never shown again."]
+    var lines = [shown.help, "Stored encrypted and never shown again."]
     if shown.key == nil, let inUse = ai.inUse {
       lines.append("Your \(inUse.name) key stays in use until this one is saved.")
     }
@@ -379,7 +379,7 @@ extension AISettings {
         usage.footer = "Resets \(resets)."
       }
     } else if let limit = freeLimit, free.spent >= limit {
-      let wait = keys ? "Add your own key to keep going, or wait until \(resets)." : "It’s free again on \(resets)."
+      let wait = keys ? "You can add your own API key, or wait until \(resets)." : "It’s free again on \(resets)."
       usage = Usage(text: "You’ve used this month’s free \(Format.money(limit)). \(wait)", fraction: 1, isUsedUp: true)
     } else if let limit = freeLimit {
       usage = Usage(
@@ -390,7 +390,7 @@ extension AISettings {
       usage = Usage(text: "\(Format.money(free.spent)) spent this month", footer: "No limit on this account.")
     }
     if !keys {
-      usage.footer += (usage.footer.isEmpty ? "" : " ") + "This server isn’t set up to store your own API keys."
+      usage.footer += (usage.footer.isEmpty ? "" : " ") + "Using your own API keys isn’t available yet."
     }
     return usage
   }

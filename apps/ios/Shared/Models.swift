@@ -453,7 +453,7 @@ struct AuthResult: Decodable {
     case "OK": nil
     case "WRONG_CREDENTIALS_ERROR": "Incorrect email or password."
     case "FIELD_ERROR": formFields?.first?.error ?? "Check your email and password."
-    default: message ?? reason ?? "The server said \(status)."
+    default: message ?? reason ?? "Something went wrong. Try again."
     }
   }
 }
