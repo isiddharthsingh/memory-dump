@@ -144,6 +144,10 @@ import Testing
     #expect(limited.localizedDescription == "Too many attempts. Try again later.")
     #expect(limited.retryAfter == 30)
     #expect(APIError(status: 429, body: Data(), response: response(429)).localizedDescription == "Too many tries. Try again later.")
+    // A body with no sentence in it is never shown as it came.
+    let proxy = APIError(status: 502, body: Data("<html>Bad Gateway</html>".utf8), response: response(502))
+    #expect(proxy.localizedDescription == "Memory Dump isn’t available right now. Try again in a moment.")
+    #expect(APIError(status: 400, body: Data("Bad Request".utf8), response: response(400)).localizedDescription == "Something went wrong. Try again.")
     let old = APIError(status: 426, body: Data(#"{"detail": "Update the app."}"#.utf8), response: response(426))
     #expect(old == .updateRequired("Update the app."))
     #expect(old.localizedDescription == "Update the app.")

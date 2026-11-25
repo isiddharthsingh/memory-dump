@@ -120,7 +120,7 @@ import Testing
     #expect(some.footer == "Resets Dec 1. With your own key there’s no cap.")
 
     let none = Self.settings(spent: 3.0001).usage
-    #expect(none.text == "You’ve used this month’s free $3.00. Add your own key to keep going, or wait until Dec 1.")
+    #expect(none.text == "You’ve used this month’s free $3.00. You can add your own API key, or wait until Dec 1.")
     #expect(none.fraction == 1)
     #expect(none.isUsedUp)
     #expect(none.footer.isEmpty)
@@ -182,12 +182,12 @@ import Testing
     #expect(free?.footer == "\(what) Resets Dec 1. With your own key there’s no cap. \(help)")
 
     let used = Self.settings(provider: "openai", voyage: Self.voyage(limit: 1, spent: 1.004)).voyageUsage
-    #expect(used?.text == "You’ve used this month’s free $1.00 of Voyage. Add your own key, or wait until Dec 1.")
+    #expect(used?.text == "You’ve used this month’s free $1.00 of Voyage. You can add your own key, or wait until Dec 1.")
     #expect(used?.fraction == 1)
     #expect(used?.isUsedUp == true)
 
     let own = Self.settings(provider: "openai", voyage: Self.voyage(key: true, spent: 1.004)).voyageUsage
-    #expect(own == .init(text: "", footer: "\(what) Your key is kept encrypted on the server and never shown again."))
+    #expect(own == .init(text: "", footer: "\(what) Your key is stored encrypted and never shown again."))
 
     // An admin on their own models has no cap to show.
     let admin = Self.settings(admin: true, provider: "openai", voyage: Self.voyage()).voyageUsage
@@ -206,10 +206,10 @@ import Testing
   /// With nowhere to keep keys, nothing offers one.
   @Test func aServerThatCannotStoreKeysSaysSoOnce() {
     let usage = Self.settings(keys: false).usage
-    #expect(usage.footer == "Resets Dec 1. This server isn’t set up to store your own API keys.")
+    #expect(usage.footer == "Resets Dec 1. Using your own API keys isn’t available yet.")
     let usedUp = Self.settings(keys: false, spent: 3).usage
     #expect(usedUp.text == "You’ve used this month’s free $3.00. It’s free again on Dec 1.")
-    #expect(usedUp.footer == "This server isn’t set up to store your own API keys.")
+    #expect(usedUp.footer == "Using your own API keys isn’t available yet.")
   }
 
   @Test func aLimitIsAnAmountOverZero() {

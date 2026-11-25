@@ -36,7 +36,7 @@ struct SSEParser {
     case "error":
       // The message is written for people and shown as is.
       let message = (try? JSONDecoder.api.decode(ErrorData.self, from: json).message)
-      return .error(message ?? "Something went wrong on the server. Try again.")
+      return .error(message ?? "Something went wrong. Try again.")
     default:
       return nil
     }
