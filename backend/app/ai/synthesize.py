@@ -21,7 +21,7 @@ from slugify import slugify
 
 from app.ai.clients import claude, claude_json
 from app.ai.embed import chunk_text, embed_chunks
-from app.errors import Refused, SpendLimitReached
+from app.errors import AccountRefusal, Refused
 
 PROPOSE_SYSTEM = """You file a new item into a personal wiki of topic \
 pages, each of which gathers what several saved items say about one topic. \
@@ -314,7 +314,7 @@ async def _rewrite(purpose: str, system: str, user: str) -> str | None:
             system=system,
             messages=[{"role": "user", "content": user}],
         )
-    except (Refused, SpendLimitReached):
+    except (Refused, AccountRefusal):
         return None
     if resp.stop_reason != "end_turn":
         return None

@@ -23,13 +23,13 @@ import uuid
 from dataclasses import dataclass
 
 import structlog
-from sqlalchemy import delete, exists, select
+from sqlalchemy import delete, exists, func, select
 
 from app import kv
 from app.ai.analyze import Analysis
 from app.ai.embed import chunk_text, embed_chunks
 from app.ai.synthesize import embed_page_chunks
-from app.db.models import Item, ItemChunk, TopicPage, TopicPageChunk
+from app.db.models import Item, ItemChunk, TopicPage, TopicPageChunk, User
 from app.db.session import get_engine, get_sessionmaker
 from app.logging_setup import configure_logging
 from app.workers.ingest import _embed_context, _text_for_embed
@@ -118,20 +118,43 @@ async def reembed_page(page_id: uuid.UUID) -> bool:
 
 async def reembed(user_id: uuid.UUID | None = None) -> Counts:
     """Every ready item and every page with chunks, or only `user_id`'s."""
-    items = select(Item.id).where(Item.status == "ready").order_by(Item.created_at)
+    # Only accounts that agreed to their content going to the AI services.
+    consented = select(User.id).where(User.ai_consent_at.is_not(None))
+    items = (
+        select(Item.id)
+        .where(Item.status == "ready", Item.user_id.in_(consented))
+        .order_by(Item.created_at)
+    )
     # Stubs (`_pending_` pages nothing filled in yet) are never embedded.
     pages = (
         select(TopicPage.id)
-        .where(exists().where(TopicPageChunk.topic_page_id == TopicPage.id))
+        .where(
+            exists().where(TopicPageChunk.topic_page_id == TopicPage.id),
+            TopicPage.user_id.in_(consented),
+        )
         .order_by(TopicPage.updated_at)
+    )
+    # Accounts with saves that are left out for want of consent.
+    left_out = select(func.count(func.distinct(Item.user_id))).where(
+        Item.status == "ready", Item.user_id.not_in(consented)
     )
     if user_id is not None:
         items = items.where(Item.user_id == user_id)
         pages = pages.where(TopicPage.user_id == user_id)
+        left_out = left_out.where(Item.user_id == user_id)
     async with get_sessionmaker()() as session:
         item_ids = list((await session.execute(items)).scalars())
         page_ids = list((await session.execute(pages)).scalars())
+        waiting = (await session.execute(left_out)).scalar_one()
         await session.commit()
+    if waiting:
+        # Nothing re-embeds them when they agree later: their chunks keep the
+        # vectors they had until this runs again for them (--user <id>).
+        log.warning(
+            "reembed: %d account(s) left out, not agreed to the AI services; "
+            "run again with --user <id> once one agrees",
+            waiting,
+        )
 
     counts = Counts()
     # Background work: it takes the jobs' share of Voyage's slots

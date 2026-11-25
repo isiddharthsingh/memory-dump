@@ -20,6 +20,7 @@ from app.auth.supertokens import init_supertokens
 from app.config import get_settings
 from app.db.session import get_engine, get_sessionmaker
 from app.errors import (
+    ConsentRequired,
     ProviderUnavailable,
     SpendLimitReached,
     is_transient,
@@ -125,6 +126,12 @@ async def _limit_reached(request: Request, exc: Exception) -> Response:
     return JSONResponse({"detail": user_message(exc)}, status_code=402)
 
 
+async def _consent_required(request: Request, exc: Exception) -> Response:
+    """The user hasn't agreed to their content going to the AI services, so
+    the request would need a call it may not make. The app asks first."""
+    return JSONResponse({"detail": user_message(exc)}, status_code=403)
+
+
 async def _own_key_failed(request: Request, exc: Exception) -> Response:
     """The provider of the user's own key failed under a request. One a
     later try can get past is answered like any provider's; the rest are the
@@ -141,6 +148,7 @@ for error in (ProviderUnavailable, anthropic.APIError, voyage_error.VoyageError)
     app.add_exception_handler(error, _upstream_failed)
 app.add_exception_handler(ProviderError, _own_key_failed)
 app.add_exception_handler(SpendLimitReached, _limit_reached)
+app.add_exception_handler(ConsentRequired, _consent_required)
 
 for router in (
     auth.router,

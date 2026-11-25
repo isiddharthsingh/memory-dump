@@ -23,7 +23,7 @@ from sqlalchemy import select
 
 from app import kv
 from app.ai.analyze import classify
-from app.db.models import Item
+from app.db.models import Item, User
 from app.db.session import get_engine, get_sessionmaker
 from app.errors import Refused
 from app.logging_setup import configure_logging
@@ -68,7 +68,12 @@ async def classify_all(user_id: uuid.UUID | None = None, limit: int | None = Non
     """Classifies the ready items that have no kind; returns how many failed."""
     stmt = (
         select(Item.id)
-        .where(Item.status == "ready", Item.kind.is_(None))
+        .where(
+            Item.status == "ready",
+            Item.kind.is_(None),
+            # Only accounts that agreed to their content going to the AI services.
+            Item.user_id.in_(select(User.id).where(User.ai_consent_at.is_not(None))),
+        )
         .order_by(Item.created_at.desc())
     )
     if user_id is not None:

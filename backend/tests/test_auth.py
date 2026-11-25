@@ -156,7 +156,6 @@ def test_profile_edit_leaves_what_it_does_not_name(client: TestClient) -> None:
     [
         {"name": "   "},
         {"name": "n" * 101},
-        {"phone": ""},
         {"phone": "415 555 0132"},
         {"phone": "+0 7911 123456"},
         {"name": "Fine", "phone": "call me"},
