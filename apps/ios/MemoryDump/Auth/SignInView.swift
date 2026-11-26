@@ -13,9 +13,10 @@ struct SignInView: View {
   @State private var error: String?
 
   private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
+  /// A name is needed to create an account; a phone number isn't.
   private var canSubmit: Bool {
     guard !email.isEmpty, !password.isEmpty else { return false }
-    return !creating || (!trimmedName.isEmpty && !DialCode.digits(phone).isEmpty)
+    return !creating || !trimmedName.isEmpty
   }
 
   var body: some View {
@@ -45,7 +46,7 @@ struct SignInView: View {
           field("Name") {
             TextField("Jane Doe", text: $name).textContentType(.name)
           }
-          field("Phone") {
+          field("Phone (optional)") {
             PhoneField(country: $country, phone: $phone)
           }
         }
@@ -81,6 +82,15 @@ struct SignInView: View {
         .padding(.top, 8)
         .id(Self.submitButton)
 
+        if creating {
+          Text(agreement)
+            .font(.footnote)
+            .foregroundStyle(Palette.ink2)
+            .tint(Palette.accent)
+            .frame(maxWidth: .infinity)
+            .multilineTextAlignment(.center)
+        }
+
         HStack(spacing: 4) {
           Text(creating ? "Already have an account?" : "New to Memory Dump?").foregroundStyle(Palette.ink2)
           Button(creating ? "Sign in" : "Create an account") {
@@ -100,6 +110,21 @@ struct SignInView: View {
     .background(Palette.bg)
   }
 
+  /// "By creating an account, you agree to the Terms of Use and Privacy
+  /// Policy.", each a link the system opens.
+  private var agreement: AttributedString {
+    var terms = AttributedString("Terms of Use")
+    terms.link = PublicPage.terms
+    var privacy = AttributedString("Privacy Policy")
+    privacy.link = PublicPage.privacy
+    var text = AttributedString("By creating an account, you agree to the ")
+    text.append(terms)
+    text.append(AttributedString(" and "))
+    text.append(privacy)
+    text.append(AttributedString("."))
+    return text
+  }
+
   private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
     VStack(alignment: .leading, spacing: 2) {
       Text(label).font(.caption).foregroundStyle(Palette.ink3)
@@ -117,17 +142,22 @@ struct SignInView: View {
     defer { busy = false }
     do {
       if creating {
-        guard let number = country.number(phone) else {
-          error = DialCode.refusal
-          Haptics.error()
-          return
+        // The phone is optional, but one that's typed must read as a number.
+        var number: String?
+        if !DialCode.digits(phone).isEmpty {
+          number = country.number(phone)
+          guard number != nil else {
+            error = DialCode.refusal
+            Haptics.error()
+            return
+          }
         }
         try await app.signUp(email: email, password: password, name: trimmedName, phone: number)
       } else {
         try await app.signIn(email: email, password: password)
       }
     } catch is URLError {
-      error = "Can’t reach \(Format.domain(Server.url.absoluteString)). Check your connection and try again."
+      error = "Can’t connect to Memory Dump. Check your connection and try again."
     } catch {
       self.error = error.localizedDescription
     }

@@ -45,7 +45,7 @@ enum SharePayload {
   /// The system deletes the provider's file when the handler returns, so copy it
   /// into the App Group first. It must outlive the sheet if it goes to the queue.
   private static func copyFile(from provider: NSItemProvider, type: UTType) async throws -> URL {
-    let folder = AppGroup.directory("Inbox").appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    let folder = ShareQueue.inbox.appending(path: UUID().uuidString, directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     return try await withCheckedThrowingContinuation { continuation in
       _ = provider.loadFileRepresentation(for: type, openInPlace: false) { @Sendable url, _, error in

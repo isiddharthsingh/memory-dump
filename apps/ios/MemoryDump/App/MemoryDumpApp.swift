@@ -54,6 +54,9 @@ struct RootView: View {
     Group {
       if app.session == nil {
         SignInView()
+      } else if app.session?.user.aiConsentAt == nil {
+        // Nothing of the account's goes to the AI services before it agrees.
+        ConsentView()
       } else {
         MainTabs()
       }
