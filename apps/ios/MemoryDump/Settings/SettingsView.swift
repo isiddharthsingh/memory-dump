@@ -3,10 +3,11 @@ import SwiftUI
 struct SettingsView: View {
   @Environment(AppModel.self) private var app
   @Environment(\.dismiss) private var dismiss
-  @Environment(\.openURL) private var openURL
   @AppStorage(Appearance.key) private var appearance = Appearance.system
-  @State private var health: Bool?
-  @State private var checking = false
+  #if DEBUG
+    @State private var health: Bool?
+    @State private var checking = false
+  #endif
   /// Saves the server is still analyzing; nil when it can't be asked.
   @State private var analyzing: Int?
   @State private var confirmDiscard = false
@@ -16,6 +17,9 @@ struct SettingsView: View {
   @State private var exporting = false
   @State private var exported: ExportedFile?
   @State private var exportError: String?
+  @State private var confirmWithdraw = false
+  @State private var withdrawing = false
+  @State private var withdrawError: String?
   /// Whose models are in use and the month's spend; nil until it's known.
   @State private var ai: AISettings?
 
@@ -61,14 +65,17 @@ struct SettingsView: View {
         }
         .listRowBackground(Palette.card)
 
-        Section("Server") {
-          LabeledContent("Address", value: Format.domain(Server.url.absoluteString))
-          LabeledContent("Status") {
-            Text(statusLabel.text).foregroundStyle(statusLabel.color)
+        // Which backend a development build talks to; a release build has one.
+        #if DEBUG
+          Section("Server") {
+            LabeledContent("Address", value: Format.domain(Server.url.absoluteString))
+            LabeledContent("Status") {
+              Text(statusLabel.text).foregroundStyle(statusLabel.color)
+            }
+            Button("Test connection") { Task { await check() } }
           }
-          Button("Test connection") { Task { await check() } }
-        }
-        .listRowBackground(Palette.card)
+          .listRowBackground(Palette.card)
+        #endif
 
         Section {
           let queued = app.queued.count
@@ -103,6 +110,26 @@ struct SettingsView: View {
         .listRowBackground(Palette.card)
 
         Section {
+          let consented = app.session?.user.aiConsentAt != nil
+          Button {
+            confirmWithdraw = true
+          } label: {
+            LabeledContent("AI processing", value: consented ? "On" : "Off")
+          }
+          .tint(Palette.ink)
+          .disabled(!consented || withdrawing)
+          .accessibilityHint(consented ? "Withdraw your consent to AI processing" : "")
+          Link("Privacy Policy", destination: PublicPage.privacy)
+          Link("Terms of Use", destination: PublicPage.terms)
+          Link("Help & Support", destination: PublicPage.support)
+        } header: {
+          Text("Privacy")
+        } footer: {
+          Text("Memory Dump sends what you save, search and ask to AI services to read, organize and answer it.")
+        }
+        .listRowBackground(Palette.card)
+
+        Section {
           Button("Sign out", role: .destructive) { confirmSignOut = true }
           Button("Delete account…", role: .destructive) { confirmDelete = true }
         } footer: {
@@ -130,7 +157,19 @@ struct SettingsView: View {
       .confirmationDialog("Discard \(Format.plural(app.queued.count, "queued share"))?", isPresented: $confirmDiscard, titleVisibility: .visible) {
         Button("Discard", role: .destructive) { app.discardQueue() }
       } message: {
-        Text("They haven’t reached your server yet.")
+        Text("They haven’t been sent yet.")
+      }
+      .confirmationDialog("Withdraw consent?", isPresented: $confirmWithdraw, titleVisibility: .visible) {
+        Button("Withdraw", role: .destructive) { Task { await withdraw() } }
+      } message: {
+        Text(
+          "Memory Dump will stop sending your content to AI services. You won’t be able to save or ask anything new until you allow it again."
+        )
+      }
+      .alert("Couldn’t withdraw consent", isPresented: .constant(withdrawError != nil)) {
+        Button("OK") { withdrawError = nil }
+      } message: {
+        Text(withdrawError ?? "")
       }
       .confirmationDialog("Sign out?", isPresented: $confirmSignOut, titleVisibility: .visible) {
         Button("Sign out", role: .destructive) { Task { await app.signOut() } }
@@ -156,26 +195,47 @@ struct SettingsView: View {
         ShareSheet(file: file.url).presentationDetents([.medium, .large])
       }
     }
-    .task { await check() }
+    #if DEBUG
+      .task { await check() }
+    #endif
     .task { await loadAI() }
     // Again when the queue changes: what it just sent is now being analyzed.
     .task(id: app.queued.count) { await countAnalyzing() }
   }
 
-  private var statusLabel: (text: String, color: Color) {
-    if checking { return ("Checking…", Palette.ink2) }
-    switch health {
-    case true?: return ("Connected", Palette.ready)
-    case false?: return ("Unreachable", Palette.failed)
-    case nil: return ("", Palette.ink2)
+  #if DEBUG
+    private var statusLabel: (text: String, color: Color) {
+      if checking { return ("Checking…", Palette.ink2) }
+      switch health {
+      case true?: return ("Connected", Palette.ready)
+      case false?: return ("Unreachable", Palette.failed)
+      case nil: return ("", Palette.ink2)
+      }
     }
-  }
 
-  private func check() async {
-    checking = true
-    health = await APIClient.shared.health()
-    checking = false
-    health == true ? Haptics.success() : Haptics.error()
+    private func check() async {
+      checking = true
+      health = await APIClient.shared.health()
+      checking = false
+      health == true ? Haptics.success() : Haptics.error()
+    }
+  #endif
+
+  /// Takes the consent back. The account the server answers with has none,
+  /// so RootView puts ConsentView in place of the app, and this sheet with it.
+  private func withdraw() async {
+    withdrawing = true
+    defer { withdrawing = false }
+    do {
+      try await app.setAIConsent(false)
+      Haptics.success()
+    } catch is URLError {
+      Haptics.error()
+      withdrawError = "Can’t connect to Memory Dump. Check your connection and try again."
+    } catch {
+      Haptics.error()
+      withdrawError = error.localizedDescription
+    }
   }
 
   /// The saved copy first, then the server's. The row says nothing when

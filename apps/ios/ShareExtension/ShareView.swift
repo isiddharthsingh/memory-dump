@@ -46,6 +46,14 @@ final class ShareModel {
         phase = .failed("This share couldn’t be kept: \(error.localizedDescription)")
         return
       }
+      // An account that hasn't agreed to AI processing would have it fail on
+      // the server (a file deleted there). It waits for the app, which sends
+      // the queue once the account agrees.
+      if let user = SessionStore.shared.current()?.user, user.aiConsentAt == nil {
+        phase = .queued("Open Memory Dump to finish setting up, and it sends.")
+        await finish(after: .seconds(1.8))
+        return
+      }
       phase = .sending
       switch await ShareQueue.send(entry) {
       case .sent:

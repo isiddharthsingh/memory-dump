@@ -38,12 +38,16 @@ struct ProfileView: View {
     let number = Self.field(loaded.phone)
     return country == number.country && phone == number.text
   }
-  private var phoneChanged: Bool { !phoneUntouched && hasPhone && country.number(phone) != loaded.phone }
+  /// The field was emptied of a saved number: saving removes it.
+  private var phoneRemoved: Bool { !hasPhone && loaded.phone != nil }
+  private var phoneChanged: Bool {
+    !phoneUntouched && (hasPhone ? country.number(phone) != loaded.phone : phoneRemoved)
+  }
   /// Whether the fields still show what they were filled with.
   private var untouched: Bool { name == (loaded.displayName ?? "") && phoneUntouched }
-  /// A name is needed, and a number can be replaced but not removed.
+  /// A name is needed; the phone number is optional, so it can be removed.
   private var canSave: Bool {
-    !saving && !trimmedName.isEmpty && (hasPhone || loaded.phone == nil) && (nameChanged || phoneChanged)
+    !saving && !trimmedName.isEmpty && (nameChanged || phoneChanged)
   }
 
   var body: some View {
@@ -60,8 +64,10 @@ struct ProfileView: View {
       } footer: {
         if let error {
           Text(error).foregroundStyle(Palette.failed)
-        } else if !hasPhone, loaded.phone != nil {
-          Text("A phone number can be replaced, not removed.")
+        } else if phoneRemoved {
+          Text("Saving removes your phone number.")
+        } else {
+          Text("Optional.")
         }
       }
       .listRowBackground(Palette.card)
@@ -112,18 +118,22 @@ struct ProfileView: View {
         Haptics.error()
         return
       }
+    } else if phoneRemoved {
+      // An empty number is how the server is told to remove it.
+      number = ""
     }
     saving = true
     error = nil
     defer { saving = false }
     do {
-      // Nil for a number that wasn't touched or reads as the saved one.
+      // Nil for a number that wasn't touched or reads as the saved one; ""
+      // for one that was removed.
       try await app.updateProfile(
         name: nameChanged ? trimmedName : nil, phone: number == loaded.phone ? nil : number)
       Haptics.success()
       dismiss()
     } catch is URLError {
-      error = "Can’t reach \(Format.domain(Server.url.absoluteString)). Check your connection and try again."
+      error = "Can’t connect to Memory Dump. Check your connection and try again."
     } catch {
       self.error = error.localizedDescription
     }

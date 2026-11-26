@@ -35,7 +35,7 @@ final class AppModel {
   init() {
     session = store.current()
     store.onSignedOut = { [weak self] in
-      Self.forgetSavedCopies()
+      Self.forgetSavedCopies(queue: false)
       self?.session = nil
       self?.stopSendingQueue()
     }
@@ -63,16 +63,25 @@ final class AppModel {
     finishSignIn(try await AuthAPI.signIn(email: email, password: password))
   }
 
-  func signUp(email: String, password: String, name: String, phone: String) async throws {
+  /// A nil phone signs up without one.
+  func signUp(email: String, password: String, name: String, phone: String?) async throws {
     finishSignIn(try await AuthAPI.signUp(email: email, password: password, name: name, phone: phone))
   }
 
   func signOut() async {
     // Best effort: the local session is cleared either way.
-    if session != nil { try? await APIClient.shared.signOut() }
+    if session != nil {
+      // While the session still works: this phone stops getting the
+      // account's pushes.
+      if let token = UserDefaults.standard.string(forKey: Self.pushTokenKey) {
+        try? await APIClient.shared.unregisterDevice(token: token)
+      }
+      try? await APIClient.shared.signOut()
+    }
     stopSendingQueue()
     store.clear()
-    Self.forgetSavedCopies()
+    Self.forgetSavedCopies(queue: true)
+    queued = []
     session = nil
   }
 
@@ -80,12 +89,13 @@ final class AppModel {
     try await APIClient.shared.deleteAccount()
     stopSendingQueue()
     store.clear()
-    Self.forgetSavedCopies()
+    Self.forgetSavedCopies(queue: true)
+    queued = []
     session = nil
   }
 
-  /// The session keeps the account as it was at sign-in; this brings its name
-  /// and phone up to date with the server.
+  /// The session keeps the account as it was at sign-in; this brings its name,
+  /// phone and AI consent up to date with the server.
   func refreshProfile() async {
     let saves = profileSaves
     // Not over a save made meanwhile: its answer is the newer one.
@@ -93,31 +103,51 @@ final class AppModel {
     await keep(user)
   }
 
-  /// Nil leaves the name or the phone as it is.
+  /// Nil leaves the name or the phone as it is; an empty phone removes it.
   func updateProfile(name: String?, phone: String?) async throws {
     let user = try await APIClient.shared.updateProfile(name: name, phone: phone)
     profileSaves += 1
     await keep(user)
   }
 
+  /// Agrees to AI processing, or withdraws it. Without it RootView shows
+  /// ConsentView instead of the app, and the server does no AI work.
+  func setAIConsent(_ consent: Bool) async throws {
+    let user = try await APIClient.shared.setAIConsent(consent)
+    profileSaves += 1
+    await keep(user)
+  }
+
   private func keep(_ user: User) async {
+    let waited = session?.user.aiConsentAt == nil
     if let updated = await store.setUser(user) { session = updated }
+    // The queue waits for consent (sendQueue); send it once consent arrives,
+    // given here or on another device.
+    if waited, session?.user.aiConsentAt != nil { sendQueue() }
   }
 
   private func finishSignIn(_ session: Session) {
     Haptics.success()
     store.save(session)
     self.session = session
+    // Shares another account queued before its session ended aren't this one's.
+    ShareQueue.keepOnly(session.user.id)
     sendQueue()
     Task { await registerForPush() }
     Task { await OfflineSync.run() }
   }
 
-  /// Nothing from an account stays on the phone after it signs out.
-  private static func forgetSavedCopies() {
+  /// Nothing from an account stays on the phone after it signs out. Its
+  /// unsent shares go too when the person signs out or deletes the account
+  /// (`queue`); when the session just ended (refused, or the account deleted
+  /// elsewhere) they wait for the next sign-in, as the share extension says.
+  private static func forgetSavedCopies(queue: Bool) {
     SavedResponses.shared.clear()
     ImageCache.clear()
     APIClient.forgetExports()
+    PlaceLocator.forget()
+    ShareQueue.clearInbox()
+    if queue { ShareQueue.clear() }
   }
 
   // MARK: Becoming active
@@ -130,9 +160,12 @@ final class AppModel {
     if session != nil {
       session = store.current()
       // Or ended it, when the server refused its refresh there.
-      if session == nil { Self.forgetSavedCopies() }
+      if session == nil { Self.forgetSavedCopies(queue: false) }
     }
     guard session != nil else { return }
+    // Consent given or withdrawn on another device, and a session saved
+    // before the app knew of consent, come up to date.
+    Task { await refreshProfile() }
     sendQueue()
     libraryVersion += 1
     await OfflineSync.run()
@@ -149,13 +182,15 @@ final class AppModel {
 
   /// Sends the queue now, then again after 5, 10 and 20 s and every 30 s after
   /// that, or once the server's Retry-After has passed if that's later, for as
-  /// long as anything is left, someone is signed in, the server takes this
-  /// build and the app is in front. Called again (a new network, Retry) while
-  /// it waits, it tries at once unless Retry-After hasn't passed; a send under
-  /// way carries on.
+  /// long as anything is left, someone is signed in and has agreed to AI
+  /// processing, the server takes this build and the app is in front. Without
+  /// that consent every save would fail on the server, and a file's would be
+  /// deleted there, so the queue waits for it (`keep` sends it then). Called
+  /// again (a new network, Retry) while it waits, it tries at once unless
+  /// Retry-After hasn't passed; a send under way carries on.
   func sendQueue() {
     queued = ShareQueue.pending()
-    guard isActive, session != nil, !queued.isEmpty, !isSendingQueue else { return }
+    guard isActive, session?.user.aiConsentAt != nil, !queued.isEmpty, !isSendingQueue else { return }
     queueTask?.cancel()
     queueTask = Task {
       var pause = 5
@@ -172,7 +207,9 @@ final class AppModel {
         if result.refused > 0 {
           show("\(Format.plural(result.refused, "share")) couldn’t be sent and were removed.", ok: false)
         }
-        if queued.isEmpty || session == nil || !isActive || APIClient.shared.updateRequired != nil {
+        if queued.isEmpty || session?.user.aiConsentAt == nil || !isActive
+          || APIClient.shared.updateRequired != nil
+        {
           return
         }
         let retryAfter = ShareQueue.notBefore?.timeIntervalSinceNow ?? 0
@@ -195,6 +232,10 @@ final class AppModel {
     isSendingQueue = false
   }
 
+  /// Where the last push token APNs gave this phone is kept, so signing out
+  /// can take it off the account.
+  private static let pushTokenKey = "push-token"
+
   /// Asks for permission, then registers. The token arrives in AppDelegate.
   func registerForPush() async {
     let center = UNUserNotificationCenter.current()
@@ -203,8 +244,9 @@ final class AppModel {
   }
 
   func didReceivePushToken(_ token: Data) {
-    guard session != nil else { return }
     let hex = token.map { String(format: "%02x", $0) }.joined()
+    UserDefaults.standard.set(hex, forKey: Self.pushTokenKey)
+    guard session != nil else { return }
     #if DEBUG
       let env = "sandbox"  // Xcode builds talk to the APNs sandbox.
     #else

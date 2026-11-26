@@ -122,8 +122,15 @@ import Testing
     #expect(Format.friendlyIngestError("ProviderError: \(rejected)") == "Your own API key couldn’t do this")
     #expect(Format.accountIngestError("ProviderError: \(rejected)")?.detail == rejected)
     #expect(Format.accountIngestError("HTTPStatusError: 403 Forbidden") == nil)
+    // Saved while AI processing was off.
+    let consent = "Turn on AI processing in Memory Dump to save this."
+    #expect(Format.friendlyIngestError("ConsentRequired: \(consent)") == "AI processing is off")
+    #expect(Format.accountIngestError("ConsentRequired: \(consent)")?.detail == consent)
+    let off = Format.friendlyAskError(APIError.http(403, consent))
+    #expect(off.title == "AI processing is off")
+    #expect(off.detail == consent)
     #expect(Format.friendlyAskError(APIError.http(429, "rate limit")).title == "Hourly limit reached")
-    #expect(Format.friendlyAskError(URLError(.notConnectedToInternet)).title == "Can’t reach your server")
+    #expect(Format.friendlyAskError(URLError(.notConnectedToInternet)).title == "Can’t connect to Memory Dump")
     let busy = Format.friendlyAskError(APIError.http(503, "That's taking longer than it should right now."))
     #expect(busy.detail == "That's taking longer than it should right now.")
     #expect(Format.friendlyAskError(APIError.updateRequired("Update from TestFlight.")).detail == "Update from TestFlight.")

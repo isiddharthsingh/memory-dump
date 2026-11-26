@@ -181,13 +181,15 @@ enum Format {
   static func isUploadedFile(_ url: String) -> Bool { url.hasPrefix("file://") }
 
   /// A failed save whose reason is the account and not the link: the month's
-  /// spend limit, or the user's own key at their provider. For both the
-  /// server writes the sentence to show after the error's name, saying which
-  /// and what to do. Nil for every other failure.
+  /// spend limit, the user's own key at their provider, or AI processing the
+  /// account hasn't agreed to. For each the server writes the sentence to show
+  /// after the error's name, saying which and what to do. Nil for every other
+  /// failure.
   static func accountIngestError(_ raw: String?) -> (title: String, detail: String)? {
     let titles = [
       ("SpendLimitReached: ", "This month’s limit is reached"),
       ("ProviderError: ", "Your own API key couldn’t do this"),
+      ("ConsentRequired: ", "AI processing is off"),
     ]
     let e = raw ?? ""
     guard let (prefix, title) = titles.first(where: { e.hasPrefix($0.0) }) else { return nil }
@@ -233,6 +235,10 @@ enum Format {
     // Their own key was turned down by its provider; the server says how.
     if case APIError.http(424, let detail, _) = error, !detail.isEmpty {
       return ("Your own API key couldn’t do this", detail)
+    }
+    // The account withdrew its consent to AI processing (or never gave it).
+    if case APIError.http(403, let detail, _) = error, !detail.isEmpty {
+      return ("AI processing is off", detail)
     }
     // Claude or Voyage is out for a moment, and the server says so.
     if case APIError.http(503, let detail, _) = error, !detail.isEmpty {
