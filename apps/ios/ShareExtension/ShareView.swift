@@ -46,6 +46,14 @@ final class ShareModel {
         phase = .failed("This share couldn’t be kept: \(error.localizedDescription)")
         return
       }
+      // An account that hasn't agreed to AI processing would have it fail on
+      // the server (a file deleted there). It waits for the app, which sends
+      // the queue once the account agrees.
+      if let user = SessionStore.shared.current()?.user, user.aiConsentAt == nil {
+        phase = .queued("Open Memory Dump to finish setting up, and it sends.")
+        await finish(after: .seconds(1.8))
+        return
+      }
       phase = .sending
       switch await ShareQueue.send(entry) {
       case .sent:
@@ -59,16 +67,13 @@ final class ShareModel {
           // It sends once the app is updated.
           case APIError.updateRequired: error.localizedDescription
           case is ShareQueue.InProgress: "Memory Dump is sending it."
-          default: "Your server didn’t answer. It sends when it’s back."
+          default: "Couldn’t reach Memory Dump. It sends once it can."
           }
         phase = .queued(reason)
         await finish(after: .seconds(1.8))
       case .refused(let error):
-        if case APIError.http(let status, let detail, _) = error {
-          phase = .failed(detail.isEmpty ? "HTTP \(status)" : "\(status) · \(detail)")
-        } else {
-          phase = .failed(error.localizedDescription)
-        }
+        // The server's sentence, or a general one when it sent none.
+        phase = .failed(error.localizedDescription)
       }
     }
   }

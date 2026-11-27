@@ -116,12 +116,20 @@ def form(email: str, password: str = PASSWORD, **extra: str) -> dict:
     return {"formFields": [{"id": k, "value": v} for k, v in fields.items()]}
 
 
-def signup(client: TestClient, email: str | None = None, **extra: str) -> dict[str, str]:
-    """Signs up a fresh user; returns the Authorization header for its session."""
+def signup(
+    client: TestClient, email: str | None = None, *, consent: bool = True, **extra: str
+) -> dict[str, str]:
+    """Signs up a fresh user; returns the Authorization header for its session.
+    Like the app, it agrees to the AI services next (`consent=False` doesn't),
+    since no model call is made for an account that hasn't."""
     resp = client.post(
         "/auth/signup",
         json=form(email or unique_email(), **extra),
         headers={"st-auth-mode": "header"},
     )
     assert resp.status_code == 200 and resp.json()["status"] == "OK", resp.text
-    return {"Authorization": f"Bearer {resp.headers['st-access-token']}"}
+    auth = {"Authorization": f"Bearer {resp.headers['st-access-token']}"}
+    if consent:
+        agreed = client.put("/auth/me/ai-consent", headers=auth)
+        assert agreed.status_code == 200, agreed.text
+    return auth

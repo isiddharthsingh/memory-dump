@@ -8,10 +8,12 @@ enum AuthAPI {
     try await session("/auth/signin", [("email", email), ("password", password)])
   }
 
-  /// `phone` is `+`, the country code and the number, digits only.
-  static func signUp(email: String, password: String, name: String, phone: String) async throws -> Session {
-    try await session(
-      "/auth/signup", [("email", email), ("password", password), ("name", name), ("phone", phone)])
+  /// `phone` is `+`, the country code and the number, digits only. It's
+  /// optional: nil leaves the field out of the form.
+  static func signUp(email: String, password: String, name: String, phone: String?) async throws -> Session {
+    var fields = [("email", email), ("password", password), ("name", name)]
+    if let phone { fields.append(("phone", phone)) }
+    return try await session("/auth/signup", fields)
   }
 
   /// New tokens for old. SuperTokens rotates the refresh token each time, and a
@@ -62,7 +64,7 @@ enum AuthAPI {
       throw APIError.auth(problem)
     }
     guard let http = resp as? HTTPURLResponse, let tokens = Tokens(http) else {
-      throw APIError.auth("The server didn’t start a session.")
+      throw APIError.auth("Couldn’t sign you in. Try again.")
     }
     let me = try APIClient.shared.request("/auth/me", token: tokens.access)
     let (profile, meResp) = try await APIClient.session.data(for: me)

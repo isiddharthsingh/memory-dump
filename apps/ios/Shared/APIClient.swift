@@ -329,9 +329,15 @@ final class APIClient {
   }
 
   /// Changes the name, the phone number or both. A nil one stays as it is (a
-  /// dictionary's nil goes out as null).
+  /// dictionary's nil goes out as null); an empty phone removes the number.
   func updateProfile(name: String?, phone: String?) async throws -> User {
     try await send("/auth/me", method: "PATCH", body: ["name": name, "phone": phone])
+  }
+
+  /// Agrees to the account's content going to the AI services, or withdraws
+  /// that. The answer is the account, with `ai_consent_at` set or null.
+  func setAIConsent(_ consent: Bool) async throws -> User {
+    try await send("/auth/me/ai-consent", method: consent ? "PUT" : "DELETE")
   }
 
   // MARK: Devices and health
@@ -340,6 +346,13 @@ final class APIClient {
     let _: DeviceResponse = try await send(
       "/devices/register", method: "POST",
       body: ["push_token": token, "apns_env": apnsEnv, "platform": "ios"])
+  }
+
+  /// Takes this phone's push token off the signed-in account, so its pushes
+  /// stop coming here. A 204 whether or not the server had it. Short, since
+  /// signing out waits on it.
+  func unregisterDevice(token: String) async throws {
+    _ = try await data("/devices/\(token)", method: "DELETE", timeout: 10)
   }
 
   /// `/healthz` is unauthenticated and outside /v1.

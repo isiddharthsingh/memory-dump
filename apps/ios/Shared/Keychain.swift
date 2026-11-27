@@ -17,10 +17,14 @@ enum Keychain {
     return status == errSecSuccess ? out as? Data : nil
   }
 
+  /// Readable once the phone has been unlocked after a restart, so the share
+  /// extension and a refresh in the background still find the session, and
+  /// never restored to another device from a backup. An update sets it too,
+  /// so items saved with the older setting move to this one on their next save.
   static func set(_ data: Data, for key: String) {
     let attrs: [String: Any] = [
       kSecValueData as String: data,
-      kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+      kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
     ]
     withGroup { group in
       let q = query(key, group: group)

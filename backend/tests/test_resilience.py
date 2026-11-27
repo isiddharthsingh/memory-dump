@@ -10,7 +10,9 @@ import logging
 import os
 import pwd
 import sys
+import tracemalloc
 import uuid
+import zlib
 from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -257,6 +259,68 @@ async def test_page_bodies_are_capped_after_decompression() -> None:
             await client.get("https://example.com/")
     async with _CappedClient(transport=transport, max_bytes=10_000) as client:
         assert (await client.get("https://example.com/")).text == "a" * 5000
+
+
+async def test_a_compression_bomb_never_expands_past_the_cap() -> None:
+    # 64 MiB of zeros in about 64 KB, sent as a single network chunk: httpx's
+    # own decoder would expand all of it before a size check could run.
+    bomb = gzip.compress(b"\0" * (64 * 1024 * 1024), 9)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Accept-Encoding"] == "gzip, deflate"
+        return httpx.Response(
+            200, stream=httpx.ByteStream(bomb), headers={"Content-Encoding": "gzip"}
+        )
+
+    transport = httpx.MockTransport(handler)
+    tracemalloc.start()
+    try:
+        async with _CappedClient(transport=transport, max_bytes=100_000) as client:
+            with pytest.raises(TooLarge):
+                await client.get("https://example.com/")
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    # The compressed body plus at most the cap, never the 64 MiB.
+    assert peak < 4 * 1024 * 1024
+
+
+@pytest.mark.parametrize("coding", ["gzip, gzip", "br", "zstd", "compress"])
+async def test_codings_it_did_not_ask_for_are_refused(coding: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, stream=httpx.ByteStream(b"whatever"), headers={"Content-Encoding": coding}
+        )
+
+    async with _CappedClient(transport=httpx.MockTransport(handler), max_bytes=1000) as client:
+        with pytest.raises(httpx.DecodingError):
+            await client.get("https://example.com/")
+
+
+@pytest.mark.parametrize("coding", ["UTF-8", "none", "identity", "binary"])
+async def test_a_content_encoding_that_compresses_nothing_is_ignored(coding: str) -> None:
+    # Misconfigured servers send these; httpx reads the body as it is, and so does this.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, stream=httpx.ByteStream(b"plain page"), headers={"Content-Encoding": coding}
+        )
+
+    async with _CappedClient(transport=httpx.MockTransport(handler), max_bytes=1000) as client:
+        assert (await client.get("https://example.com/")).text == "plain page"
+
+
+@pytest.mark.parametrize("wbits", [zlib.MAX_WBITS, -zlib.MAX_WBITS])
+async def test_deflate_bodies_read_wrapped_or_raw(wbits: int) -> None:
+    packer = zlib.compressobj(wbits=wbits)
+    body = packer.compress(b"hello " * 100) + packer.flush()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, stream=httpx.ByteStream(body), headers={"Content-Encoding": "deflate"}
+        )
+
+    async with _CappedClient(transport=httpx.MockTransport(handler), max_bytes=1000) as client:
+        assert (await client.get("https://example.com/")).text == "hello " * 100
 
 
 async def test_redirect_bodies_are_never_read() -> None:
@@ -621,3 +685,69 @@ def test_search_is_rate_limited_per_user(
         assert "retry-after" in limited.headers
     finally:
         client.delete("/auth/me", headers=auth)
+
+
+async def test_jobs_go_to_redis_as_json_never_pickle() -> None:
+    import pickle
+
+    from arq.jobs import Job
+
+    from app import queue
+    from app.workers.worker import WorkerSettings
+
+    assert WorkerSettings.job_serializer is queue.job_serializer
+    assert WorkerSettings.job_deserializer is queue.job_deserializer
+    job = {"t": 1, "f": "ingest_item", "a": [str(uuid.uuid4())], "k": {"generation": 2}}
+    assert queue.job_deserializer(queue.job_serializer(job)) == job
+    # A result that isn't JSON (a failure's exception) is kept as its repr.
+    assert queue.job_deserializer(queue.job_serializer({"r": ValueError("x")})) == {
+        "r": "ValueError('x')"
+    }
+    # Pickled bytes, which would run code as they're read, are refused.
+    with pytest.raises(ValueError):
+        queue.job_deserializer(pickle.dumps(job))
+    # An argument that isn't JSON fails as it's queued, never reaching the
+    # job as its repr.
+    with pytest.raises(TypeError):
+        queue.job_serializer({"a": [uuid.uuid4()]})
+
+    pool = await queue.get_arq_pool()
+    # A queue of its own, which the compose worker running beside the tests
+    # never takes jobs from.
+    queue_name = f"arq:test:{uuid.uuid4()}"
+    try:
+        queued = await queue.enqueue(
+            "digest_user", "someone", _job_id=f"json-{uuid.uuid4()}", _queue_name=queue_name
+        )
+        assert queued is not None
+        raw = await pool.get(f"arq:job:{queued.job_id}")
+        assert raw is not None and raw.startswith(b"{")
+        info = await Job(
+            queued.job_id, pool, _queue_name=queue_name, _deserializer=queue.job_deserializer
+        ).info()
+        assert info is not None and list(info.args) == ["someone"]
+        await pool.delete(f"arq:job:{queued.job_id}")
+        await pool.delete(queue_name)
+    finally:
+        await queue.close_arq_pool()
+
+
+def test_sentry_starts_with_the_options_it_is_given() -> None:
+    # A Sentry SDK that rejects an option would stop the api and the worker
+    # from starting at all, so start it for real, in a process of its own.
+    import subprocess
+
+    code = (
+        "from app.observability import init_sentry; import sentry_sdk;"
+        "init_sentry('api'); o = sentry_sdk.get_client().options;"
+        "assert o['include_local_variables'] is False, o;"
+        "assert o['max_request_body_size'] == 'never', o;"
+        "assert o['send_default_pii'] is False, o"
+    )
+    env = {
+        **os.environ,
+        "SENTRY_DSN": "https://key@o0.ingest.sentry.io/0",
+        "SENTRY_AGENT_HINTS": "0",
+    }
+    done = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr

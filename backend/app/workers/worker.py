@@ -15,6 +15,7 @@ from arq import cron, func
 from arq.connections import RedisSettings
 from prometheus_client import start_http_server
 
+from app import queue
 from app.config import get_settings
 from app.logging_setup import adopt
 from app.observability import init_sentry
@@ -39,6 +40,9 @@ async def startup(ctx: dict[str, Any]) -> None:
 
 class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(_settings.redis_url)
+    # JSON, like the API's pool (app/queue.py): never pickle.
+    job_serializer = queue.job_serializer
+    job_deserializer = queue.job_deserializer
     functions = [
         ingest_item,
         ingest_file,

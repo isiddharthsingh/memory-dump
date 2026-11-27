@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import zlib
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -116,15 +117,30 @@ class PublicOnlyTransport(httpx.AsyncHTTPTransport):
         )
 
 
+# Asked for, and the only ones read: any other compressing coding (br, zstd,
+# or one stacked on another) is refused rather than handed to httpx, whose
+# decoders expand a whole network chunk at once, so a few hundred bytes could
+# become gigabytes before any size check ran.
+ACCEPT_ENCODING = "gzip, deflate"
+# The Content-Encoding values that compress. Others aren't codings at all.
+_COMPRESSING = frozenset(
+    {"gzip", "x-gzip", "deflate", "br", "zstd", "compress", "x-compress", "x-bzip2"}
+)
+
+
 class _CappedClient(httpx.AsyncClient):
     """Reads at most `max_bytes` of a response body, counted after
     decompression, so neither a huge download nor a small compressed bomb can
-    fill the worker's memory. Raises TooLarge past it. Follows redirects itself:
-    httpx would read each redirect's whole body before following it."""
+    fill the worker's memory. Raises TooLarge past it. It decompresses the raw
+    bytes itself, never producing more than the bytes still allowed, and
+    refuses a Content-Encoding it didn't ask for (httpx.DecodingError).
+    Follows redirects itself: httpx would read each redirect's whole body
+    before following it."""
 
     def __init__(self, *, max_bytes: int, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._max_bytes = max_bytes
+        self.headers["Accept-Encoding"] = ACCEPT_ENCODING
 
     async def send(  # type: ignore[override]
         self,
@@ -150,16 +166,103 @@ class _CappedClient(httpx.AsyncClient):
             length = response.headers.get("content-length", "")
             if length.isdigit() and int(length) > self._max_bytes:
                 raise TooLarge(str(request.url))
-            body = bytearray()
-            async for chunk in response.aiter_bytes():
-                body += chunk
-                if len(body) > self._max_bytes:
-                    raise TooLarge(str(request.url))
+            body = await _read_capped(response, self._max_bytes)
         finally:
             await response.aclose()
         # What Response.aread() would have stored.
         response._content = bytes(body)
         return response
+
+
+async def _read_capped(response: httpx.Response, max_bytes: int) -> bytearray:
+    """The body decoded, or TooLarge once its raw or decoded bytes pass
+    `max_bytes`. Each decompress call is asked for at most one byte more than
+    what's left, so memory stays within the cap whatever the ratio."""
+    url = str(response.request.url)
+    if response.is_stream_consumed:
+        # Built in memory with its body already read (a test's mock
+        # transport); a response off the network never arrives this way.
+        if len(response.content) > max_bytes:
+            raise TooLarge(url)
+        return bytearray(response.content)
+    decoder = _decoder(response)
+    body = bytearray()
+    raw = 0
+    async for chunk in response.aiter_raw():
+        raw += len(chunk)
+        if raw > max_bytes:
+            raise TooLarge(url)
+        if decoder is None:
+            body += chunk
+        else:
+            pending = chunk
+            while pending:
+                body += decoder.decompress(pending, max_bytes - len(body) + 1)
+                if len(body) > max_bytes:
+                    raise TooLarge(url)
+                pending = decoder.unconsumed_tail
+        if len(body) > max_bytes:
+            raise TooLarge(url)
+    if decoder is not None:
+        body += decoder.flush()
+        if len(body) > max_bytes:
+            raise TooLarge(url)
+    return body
+
+
+def _decoder(response: httpx.Response) -> _Inflater | None:
+    # Only codings that compress count: anything else a misconfigured server
+    # puts there ("UTF-8", "none", "binary") is ignored, as httpx ignores it,
+    # so such a page still saves.
+    codings = [
+        c.strip().lower()
+        for c in response.headers.get("content-encoding", "").split(",")
+        if c.strip().lower() in _COMPRESSING
+    ]
+    if not codings:
+        return None
+    if codings in (["gzip"], ["x-gzip"]):
+        return _Inflater(16 + zlib.MAX_WBITS)
+    if codings == ["deflate"]:
+        return _Inflater(zlib.MAX_WBITS, raw_fallback=True)
+    raise httpx.DecodingError(
+        f"unsupported Content-Encoding: {', '.join(codings)}", request=response.request
+    )
+
+
+class _Inflater:
+    """zlib's decompressobj, but a "deflate" body may be raw deflate rather
+    than zlib-wrapped (as httpx's own decoder allows); the first chunk says."""
+
+    def __init__(self, wbits: int, *, raw_fallback: bool = False) -> None:
+        self._wbits = wbits
+        self._raw_fallback = raw_fallback
+        self._started = False
+        self._d = zlib.decompressobj(wbits)
+
+    @property
+    def unconsumed_tail(self) -> bytes:
+        return self._d.unconsumed_tail
+
+    def decompress(self, data: bytes, max_length: int) -> bytes:
+        try:
+            out = self._d.decompress(data, max_length)
+        except zlib.error as exc:
+            if self._started or not self._raw_fallback:
+                raise httpx.DecodingError(str(exc)) from exc
+            self._d = zlib.decompressobj(-zlib.MAX_WBITS)
+            try:
+                out = self._d.decompress(data, max_length)
+            except zlib.error as again:
+                raise httpx.DecodingError(str(again)) from again
+        self._started = True
+        return out
+
+    def flush(self) -> bytes:
+        try:
+            return self._d.flush()
+        except zlib.error as exc:
+            raise httpx.DecodingError(str(exc)) from exc
 
 
 def public_client(**kwargs: Any) -> httpx.AsyncClient:

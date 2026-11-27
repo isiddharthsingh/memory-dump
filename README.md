@@ -34,8 +34,9 @@ memory-dump/
 ## Backend — quickstart
 
 ```bash
-cp .env.example .env             # fill in the AI keys and the S3 key pair
-ln -s ../.env backend/.env       # compose reads SUPERTOKENS_API_KEY and S3_* from here
+cp .env.example .env             # fill in the AI keys and every secret it marks Required
+ln -s ../.env backend/.env       # compose reads the secrets (POSTGRES_PASSWORD, REDIS_PASSWORD,
+                                 # SUPERTOKENS_API_KEY, S3_*) from here
 cd backend
 docker compose up --build
 ```
@@ -73,8 +74,9 @@ curl -X POST http://localhost:8000/v1/ask \
 
 Access tokens last 15 minutes; `POST /auth/session/refresh` with
 `Authorization: Bearer <st-refresh-token>` gets a new pair. To manage users,
-open <http://localhost:8000/auth/dashboard>; it shows the command for creating
-the first dashboard login.
+set `DASHBOARD_ENABLED=true` and open <http://localhost:8000/auth/dashboard>; it
+shows the command for creating the first dashboard login. It is off by
+default: on a public server, turn it on only while you need it.
 
 Voyage's free tier caps you at 3 requests/min — add a payment method on
 the Voyage dashboard if you plan to ingest more than a couple of items

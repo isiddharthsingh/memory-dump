@@ -156,7 +156,6 @@ def test_profile_edit_leaves_what_it_does_not_name(client: TestClient) -> None:
     [
         {"name": "   "},
         {"name": "n" * 101},
-        {"phone": ""},
         {"phone": "415 555 0132"},
         {"phone": "+0 7911 123456"},
         {"name": "Fine", "phone": "call me"},
@@ -250,3 +249,40 @@ def test_delete_me_removes_login_and_data(client: TestClient) -> None:
     assert client.get("/auth/me", headers=_bearer(access)).status_code == 401
     assert _refresh(client, refresh).status_code == 401
     assert _signin(client, email).json()["status"] == "WRONG_CREDENTIALS_ERROR"
+
+
+def test_password_reset_and_email_lookup_are_not_served(client: TestClient) -> None:
+    email = unique_email()
+    access, _ = _signup(client, email)
+    reset = client.post(
+        "/auth/user/password/reset/token",
+        json={"formFields": [{"id": "email", "value": email}]},
+        headers=HEADER_MODE,
+    )
+    assert reset.status_code == 404
+    applied = client.post(
+        "/auth/user/password/reset",
+        json={"formFields": [{"id": "password", "value": "x" * 12}], "token": "t"},
+        headers=HEADER_MODE,
+    )
+    assert applied.status_code == 404
+    for path in ("/auth/emailpassword/email/exists", "/auth/signup/email/exists"):
+        assert client.get(path, params={"email": email}).status_code == 404, path
+    client.delete("/auth/me", headers=_bearer(access))
+
+
+def test_the_dashboard_is_off_unless_turned_on(client: TestClient) -> None:
+    assert client.get("/auth/dashboard").status_code == 404
+    assert client.post("/auth/dashboard/api/signin", json={}).status_code == 404
+
+
+def test_sessions_are_header_based_even_when_a_cookie_is_asked_for(client: TestClient) -> None:
+    email = unique_email()
+    access, _ = _signup(client, email)
+    resp = client.post(
+        "/auth/signin", json=form(email, PASSWORD), headers={"st-auth-mode": "cookie"}
+    )
+    assert resp.json()["status"] == "OK"
+    assert "st-access-token" in resp.headers
+    assert "sAccessToken" not in resp.headers.get("set-cookie", "")
+    client.delete("/auth/me", headers=_bearer(access))

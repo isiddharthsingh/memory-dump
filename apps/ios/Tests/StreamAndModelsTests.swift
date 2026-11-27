@@ -106,6 +106,15 @@ import Testing
     let jane = try JSONDecoder.api.decode(User.self, from: Data(withPhone.utf8))
     #expect(jane.displayName == "Jane")
     #expect(jane.phone == "+14155550132")
+    // No consent until the server says when it was given.
+    #expect(user.aiConsentAt == nil)
+    let consented = json.replacingOccurrences(
+      of: #""display_name": null"#, with: #""display_name": null, "ai_consent_at": "2026-11-27T10:00:00.5Z""#)
+    let agreed = try JSONDecoder.api.decode(User.self, from: Data(consented.utf8))
+    #expect(agreed.aiConsentAt.map { abs($0.timeIntervalSince1970 - 1_795_773_600.5) < 0.001 } == true)
+    let withdrawn = json.replacingOccurrences(
+      of: #""display_name": null"#, with: #""display_name": null, "ai_consent_at": null"#)
+    #expect(try JSONDecoder.api.decode(User.self, from: Data(withdrawn.utf8)).aiConsentAt == nil)
   }
 
   /// SessionStore writes with JSONEncoder.api and reads with JSONDecoder.api.
@@ -114,12 +123,18 @@ import Testing
     let session = Session(accessToken: "a", refreshToken: "r", user: user)
     let data = try JSONEncoder.api.encode(session)
     #expect(try JSONDecoder.api.decode(Session.self, from: data) == session)
+    var agreed = user
+    agreed.aiConsentAt = Date(timeIntervalSince1970: 1_795_773_600)
+    let consented = Session(accessToken: "a", refreshToken: "r", user: agreed)
+    #expect(try JSONDecoder.api.decode(Session.self, from: JSONEncoder.api.encode(consented)) == consented)
   }
 
   @Test func readsFastAPIErrorDetail() {
     #expect(FastAPIError.detail(in: Data(#"{"detail": "Item not found"}"#.utf8)) == "Item not found")
     #expect(FastAPIError.detail(in: Data(#"{"detail": [{"msg": "bad email"}]}"#.utf8)) == "bad email")
-    #expect(FastAPIError.detail(in: Data("oops".utf8)) == "oops")
+    // Not written for people: a proxy's page or a plain-text 500.
+    #expect(FastAPIError.detail(in: Data("oops".utf8)) == "")
+    #expect(FastAPIError.detail(in: Data("<html><body>502 Bad Gateway</body></html>".utf8)) == "")
     #expect(FastAPIError.detail(in: Data(#"{"message": "try refresh token"}"#.utf8)) == "try refresh token")
   }
 
@@ -144,6 +159,10 @@ import Testing
     #expect(limited.localizedDescription == "Too many attempts. Try again later.")
     #expect(limited.retryAfter == 30)
     #expect(APIError(status: 429, body: Data(), response: response(429)).localizedDescription == "Too many tries. Try again later.")
+    // A body with no sentence in it is never shown as it came.
+    let proxy = APIError(status: 502, body: Data("<html>Bad Gateway</html>".utf8), response: response(502))
+    #expect(proxy.localizedDescription == "Memory Dump isn’t available right now. Try again in a moment.")
+    #expect(APIError(status: 400, body: Data("Bad Request".utf8), response: response(400)).localizedDescription == "Something went wrong. Try again.")
     let old = APIError(status: 426, body: Data(#"{"detail": "Update the app."}"#.utf8), response: response(426))
     #expect(old == .updateRequired("Update the app."))
     #expect(old.localizedDescription == "Update the app.")
@@ -397,6 +416,8 @@ import Testing
     let json = #"{"id":"79D14C05-0D65-4993-A998-D39D993620AE","queuedAt":815000000,"kind":{"link":{"_0":"https:\/\/x.com\/a\/status\/1"}}}"#
     let entry = try JSONDecoder().decode(QueuedShare.self, from: Data(json.utf8))
     #expect(entry.title == nil)
+    // Queued before entries named their account: whoever signs in sends it.
+    #expect(entry.owner == nil)
     #expect(QueuedShares.label(entry) == "x.com")
   }
 }

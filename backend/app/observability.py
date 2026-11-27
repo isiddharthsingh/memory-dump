@@ -38,6 +38,10 @@ def init_sentry(component: str) -> None:
         server_name=component,
         integrations=integrations,
         send_default_pii=False,
+        # Neither a frame's variables nor a request's body: either can hold a
+        # user's own API key (PUT /ai/keys, routing.Route) or what they saved.
+        include_local_variables=False,
+        max_request_body_size="never",
     )
 
 
@@ -139,7 +143,18 @@ class MinAppBuild:
     minimum set those are refused too. Health, metrics, docs and SuperTokens'
     /auth routes stay open."""
 
-    OPEN = ("/healthz", "/livez", "/readyz", "/metrics", "/docs", "/openapi.json", "/auth/")
+    OPEN = (
+        "/healthz",
+        "/livez",
+        "/readyz",
+        "/metrics",
+        "/docs",
+        "/openapi.json",
+        "/auth/",
+        "/privacy",
+        "/terms",
+        "/support",
+    )
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app

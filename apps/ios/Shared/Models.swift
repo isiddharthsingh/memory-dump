@@ -419,10 +419,14 @@ struct User: Codable, Hashable {
   let id: UUID
   let email: String
   let displayName: String?
-  /// `+` and digits, country code first. Nil for an account made before sign-up
-  /// asked for it, and in a session saved before the server sent it.
+  /// `+` and digits, country code first. Nil when none was given (it's
+  /// optional), and in a session saved before the server sent it.
   var phone: String? = nil
   let createdAt: Date
+  /// When the account agreed to its content going to the AI services; nil
+  /// until it does, after it withdraws, and in a session saved before the
+  /// server sent it. RootView shows ConsentView instead of the app while nil.
+  var aiConsentAt: Date? = nil
 }
 
 /// A SuperTokens session: the tokens from the `st-access-token` and
@@ -453,7 +457,7 @@ struct AuthResult: Decodable {
     case "OK": nil
     case "WRONG_CREDENTIALS_ERROR": "Incorrect email or password."
     case "FIELD_ERROR": formFields?.first?.error ?? "Check your email and password."
-    default: message ?? reason ?? "The server said \(status)."
+    default: message ?? reason ?? "Something went wrong. Try again."
     }
   }
 }

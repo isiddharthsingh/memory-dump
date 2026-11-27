@@ -14,7 +14,10 @@ settings:
     SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
     SWIFT_APPROACHABLE_CONCURRENCY: YES
     MARKETING_VERSION: "1.0.0"
-    CURRENT_PROJECT_VERSION: "1"
+    # 2: the first build that asks for AI consent. With the backend that
+    # requires it, set MIN_APP_BUILD=2 so older builds, which can't give it
+    # and would see every save fail, are told to update.
+    CURRENT_PROJECT_VERSION: "2"
     CODE_SIGN_STYLE: Automatic
     # Free Personal Team for now: device builds expire after 7 days, and push
     # is off (see aps-environment below). Swap in the paid team ID later.
@@ -39,6 +42,10 @@ targets:
       - Shared
       - path: Generated/MemoryDump/Server.swift
         optional: true
+      # What the app collects and which required-reason APIs it calls, for
+      # App Review. Kept outside MemoryDump/ so it isn't picked up twice.
+      - path: Privacy/App/PrivacyInfo.xcprivacy
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.siddharthsingh.memorydump
@@ -67,8 +74,8 @@ targets:
           - BricolageGrotesque_700Bold.ttf
           - BricolageGrotesque_800ExtraBold.ttf
         NSMicrophoneUsageDescription: Allow Memory Dump to use the microphone so you can ask questions by voice.
-        NSSpeechRecognitionUsageDescription: Allow Memory Dump to turn your voice into questions.
-        NSLocalNetworkUsageDescription: Memory Dump connects to your self-hosted server on your local network.
+        NSSpeechRecognitionUsageDescription: Memory Dump turns what you say into a question. Your audio is processed on your iPhone, or by Apple when on-device recognition isn't available.
+        NSLocalNetworkUsageDescription: Memory Dump uses your local network only to reach a development server on your Wi-Fi.
         # Plain http:// to *.local and unqualified hosts, for a server on your Wi-Fi.
         # Same exception the Expo app had.
         NSAppTransportSecurity:
@@ -103,6 +110,12 @@ targets:
           # the Swift string below.
           if ! printf '%s' "$url" | grep -Eq '^https?://[^/[:space:]?#"\\]+(/[^[:space:]?#"\\]*)?$'; then
             echo "error: API_DOMAIN in .env must be an http:// or https:// address, not $url"
+            exit 1
+          fi
+          # A release build goes to people's phones, and its traffic to the
+          # backend must be encrypted.
+          if [ "$CONFIGURATION" = Release ] && [ "${url%%:*}" = http ]; then
+            echo "error: API_DOMAIN in .env is $url. Release builds need an https:// API_DOMAIN."
             exit 1
           fi
           host=$(printf '%s' "$url" | sed -E 's#^https?://([^/:]+).*#\1#')
@@ -147,6 +160,8 @@ targets:
       - Shared
       - path: Generated/ShareExtension/Server.swift
         optional: true
+      - path: Privacy/ShareExtension/PrivacyInfo.xcprivacy
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.siddharthsingh.memorydump.share

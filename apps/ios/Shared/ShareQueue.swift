@@ -9,6 +9,9 @@ struct QueuedShare: Codable, Identifiable {
   let kind: Kind
   /// The page title or file name, for the Library while it waits.
   var title: String?
+  /// The account signed in when it was queued, so it never goes to another
+  /// one; nil when nobody was, and then it goes to whoever signs in next.
+  var owner: UUID? = nil
 
   enum Kind: Codable {
     case link(URL)
@@ -39,7 +42,9 @@ enum ShareQueue {
   private(set) static var notBefore: Date?
 
   static func enqueueLink(_ url: URL, note: String?, title: String?) throws -> QueuedShare {
-    let entry = QueuedShare(id: UUID(), queuedAt: .now, note: note, kind: .link(url), title: title)
+    let entry = QueuedShare(
+      id: UUID(), queuedAt: .now, note: note, kind: .link(url), title: title,
+      owner: SessionStore.shared.current()?.user.id)
     try write(entry)
     return entry
   }
@@ -52,7 +57,8 @@ enum ShareQueue {
     -> QueuedShare
   {
     let entry = QueuedShare(
-      id: UUID(), queuedAt: .now, note: note, kind: .file(name: name, mimeType: mimeType), title: name)
+      id: UUID(), queuedAt: .now, note: note, kind: .file(name: name, mimeType: mimeType), title: name,
+      owner: SessionStore.shared.current()?.user.id)
     try FileManager.default.moveItem(at: file, to: bytesURL(entry.id))
     try write(entry)
     return entry
@@ -75,8 +81,31 @@ enum ShareQueue {
     try? FileManager.default.removeItem(at: lockURL(entry.id))
   }
 
+  /// Empties the queue: every entry's .json, .bin and .lock, and anything left
+  /// that no entry reads any more. A sender holding a lock keeps its open
+  /// file, and then finds its entry gone.
   static func clear() {
-    pending().forEach(remove)
+    let files =
+      (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil))
+      ?? []
+    for file in files { try? FileManager.default.removeItem(at: file) }
+  }
+
+  /// Drops what another account queued: a session that ended (refused, or the
+  /// account deleted elsewhere) leaves its shares waiting, and they must never
+  /// reach whoever signs in next. Ones queued while signed out stay.
+  static func keepOnly(_ user: UUID) {
+    for entry in pending() where entry.owner != nil && entry.owner != user { remove(entry) }
+  }
+
+  /// Where the share extension copies a shared file before it is queued.
+  static var inbox: URL { AppGroup.directory("Inbox") }
+
+  /// Removes what an extension that stopped mid-share left in the inbox.
+  static func clearInbox() {
+    let folders =
+      (try? FileManager.default.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil)) ?? []
+    for folder in folders { try? FileManager.default.removeItem(at: folder) }
   }
 
   /// Sends one entry, and takes it off the queue unless it has to wait. One

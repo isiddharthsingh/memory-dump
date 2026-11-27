@@ -2,10 +2,31 @@ import AVFoundation
 import Speech
 
 /// Speech to text for the Ask box: en-US, partial results, stops at the end of
-/// the utterance. The same settings as the Expo app's speech module.
+/// the utterance. The same settings as the Expo app's speech module. On the
+/// iPhone whenever the recognizer can; otherwise Apple's servers hear it.
 @Observable
 final class VoiceInput {
+  /// Why listening didn't start, for the Ask screen to say.
+  enum Problem {
+    /// The microphone or speech recognition was turned down, in Settings.
+    case denied
+    /// Recognition or the microphone can't run now (no network for a
+    /// recognizer that needs it, or another app holding the audio).
+    case unavailable
+
+    var message: String {
+      switch self {
+      case .denied:
+        "To ask by voice, allow Memory Dump to use the microphone and speech recognition in Settings."
+      case .unavailable:
+        "Voice input isn’t available right now. Try again in a moment, or type your question."
+      }
+    }
+  }
+
   private(set) var isListening = false
+  /// Set when a start fails; the Ask screen shows it and clears it.
+  var problem: Problem?
   var onText: ((String) -> Void)?
 
   private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -18,16 +39,26 @@ final class VoiceInput {
   }
 
   func start() async {
-    guard await Self.authorized(), let recognizer, recognizer.isAvailable else { return }
+    guard await Self.authorized() else {
+      problem = .denied
+      return
+    }
+    guard let recognizer, recognizer.isAvailable else {
+      problem = .unavailable
+      return
+    }
     do {
       let session = AVAudioSession.sharedInstance()
       try session.setCategory(.record, mode: .measurement, options: .duckOthers)
       try session.setActive(true, options: .notifyOthersOnDeactivation)
     } catch {
+      problem = .unavailable
       return
     }
     let request = SFSpeechAudioBufferRecognitionRequest()
     request.shouldReportPartialResults = true
+    // Keeps the audio on the phone wherever the language's model is on it.
+    if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
     self.request = request
 
     let input = engine.inputNode
@@ -37,6 +68,7 @@ final class VoiceInput {
       try engine.start()
     } catch {
       stop()
+      problem = .unavailable
       return
     }
     isListening = true

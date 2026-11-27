@@ -14,12 +14,13 @@ from voyageai import error as voyage_error
 
 from app import kv, logging_setup  # noqa: F401  — configures stdlib + structlog
 from app.ai.wire import ProviderError
-from app.api import ai, ask, auth, chats, devices, export, ingest, items, search, wiki
+from app.api import ai, ask, auth, chats, devices, export, ingest, items, legal, search, wiki
 from app.auth.rate_limit import AuthRateLimit
 from app.auth.supertokens import init_supertokens
 from app.config import get_settings
 from app.db.session import get_engine, get_sessionmaker
 from app.errors import (
+    ConsentRequired,
     ProviderUnavailable,
     SpendLimitReached,
     is_transient,
@@ -125,6 +126,12 @@ async def _limit_reached(request: Request, exc: Exception) -> Response:
     return JSONResponse({"detail": user_message(exc)}, status_code=402)
 
 
+async def _consent_required(request: Request, exc: Exception) -> Response:
+    """The user hasn't agreed to their content going to the AI services, so
+    the request would need a call it may not make. The app asks first."""
+    return JSONResponse({"detail": user_message(exc)}, status_code=403)
+
+
 async def _own_key_failed(request: Request, exc: Exception) -> Response:
     """The provider of the user's own key failed under a request. One a
     later try can get past is answered like any provider's; the rest are the
@@ -141,6 +148,7 @@ for error in (ProviderUnavailable, anthropic.APIError, voyage_error.VoyageError)
     app.add_exception_handler(error, _upstream_failed)
 app.add_exception_handler(ProviderError, _own_key_failed)
 app.add_exception_handler(SpendLimitReached, _limit_reached)
+app.add_exception_handler(ConsentRequired, _consent_required)
 
 for router in (
     auth.router,
@@ -157,3 +165,5 @@ for router in (
     app.include_router(router, prefix="/v1")
     # The same routes unversioned, for app builds from before /v1.
     app.include_router(router, include_in_schema=False)
+# The privacy policy, terms and support page, for browsers: no /v1, no sign-in.
+app.include_router(legal.router)

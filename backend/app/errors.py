@@ -58,7 +58,26 @@ class Refused(Exception):
         self.by = by
 
 
-class SpendLimitReached(Exception):
+class AccountRefusal(Exception):
+    """Work this account may not have done now, for a reason that is the
+    user's to change. Its text is written for them; the app shows it as it
+    is. Not transient: retrying won't help until they act."""
+
+
+class ConsentRequired(AccountRefusal):
+    """The user hasn't agreed (or no longer agrees) to their content going to
+    the AI services, so nothing of theirs is sent to one."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            # Not "in Settings": while it's off the app shows only the screen
+            # that asks for it, and Settings can only withdraw it.
+            "AI processing is off, so Memory Dump can't read this or answer. "
+            "Allow AI processing in Memory Dump, then try again."
+        )
+
+
+class SpendLimitReached(AccountRefusal):
     """The user's spend this month has reached its limit: the free allowance
     on the server's keys, (`own`) the limit they set for their own keys, or
     (`voyage`) what an account on its own model key may use of the server's
@@ -129,7 +148,7 @@ def retry_after(exc: BaseException) -> float | None:
 
 def user_message(exc: BaseException) -> str:
     """What a client may see of a failure: nothing of its internals."""
-    if isinstance(exc, SpendLimitReached):
+    if isinstance(exc, AccountRefusal):
         return str(exc)
     if isinstance(exc, ProviderError):
         return _own_key_message(exc)

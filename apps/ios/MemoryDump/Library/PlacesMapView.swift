@@ -23,23 +23,36 @@ enum PlaceLocator {
     return spot.count == 2 ? .found(.init(latitude: spot[0], longitude: spot[1])) : .unknown
   }
 
+  /// Bumped by `forget`, so a search that was under way then isn't remembered.
+  private static var generation = 0
+
   static func locate(_ query: String) async -> Answer {
     if let answer = remembered(query) { return answer }
     let request = MKLocalSearch.Request()
     request.naturalLanguageQuery = query
+    let asked = generation
     do {
       let found = try await MKLocalSearch(request: request).start().mapItems.first?.location.coordinate
-      remember(query, found.map { [$0.latitude, $0.longitude] } ?? [])
+      remember(query, found.map { [$0.latitude, $0.longitude] } ?? [], asked: asked)
       return found.map(Answer.found) ?? .unknown
     } catch let error as MKError where error.code == .placemarkNotFound {
-      remember(query, [])
+      remember(query, [], asked: asked)
       return .unknown
     } catch {
       return .later
     }
   }
 
-  private static func remember(_ query: String, _ spot: [Double]) {
+  /// Drops every remembered place, on disk and here: the queries are the
+  /// names and addresses of what the account saved. At sign-out.
+  static func forget() {
+    generation += 1
+    known = [:]
+    try? FileManager.default.removeItem(at: file)
+  }
+
+  private static func remember(_ query: String, _ spot: [Double], asked: Int) {
+    guard asked == generation else { return }
     known[query] = spot
     try? JSONEncoder().encode(known).write(to: file, options: .atomic)
   }
